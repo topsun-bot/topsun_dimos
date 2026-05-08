@@ -49,6 +49,7 @@ all_blueprints = {
     "deeprobotics-m20-kronknav-control": "dimos.robot.deeprobotics.m20.blueprints.m20_kronknav:deeprobotics_m20_kronknav_control",
     "demo-agent": "dimos.agents.demo_agent:demo_agent",
     "demo-agent-camera": "dimos.agents.demo_agent:demo_agent_camera",
+    "demo-borrow-climb-mcp": "dimos.agents.skills.demo_borrow_climb_mcp:demo_borrow_climb_mcp",
     "demo-camera": "dimos.hardware.sensors.camera.module:demo_camera",
     "demo-capabilities": "dimos.agents.demos.demo_capabilities:demo_capabilities",
     "demo-dim-slam-realsense": "dimos.mapping.dim_slam.demo_dim_slam_realsense:demo_dim_slam_realsense",
@@ -169,6 +170,9 @@ all_blueprints = {
     "unitree-go2-nav-3d": "dimos.robot.unitree.go2.blueprints.navigation.unitree_go2_nav_3d:unitree_go2_nav_3d",
     "unitree-go2-qwen-follow": "dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_qwen_follow:unitree_go2_qwen_follow",
     "unitree-go2-relocalization": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2:unitree_go2_relocalization",
+    "unitree-go2-patrol": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_patrol:unitree_go2_patrol",
+    "unitree-go2-patrol-mcp": "dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_patrol_mcp:unitree_go2_patrol_mcp",
+
     "unitree-go2-ros": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_ros:unitree_go2_ros",
     "unitree-go2-rpp-benchmark": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_rpp_benchmark:unitree_go2_rpp_benchmark",
     "unitree-go2-rpp-controller": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_rpp_controller:unitree_go2_rpp_controller",
@@ -307,6 +311,10 @@ all_modules = {
     "path-follower": "dimos.navigation.nav_stack.modules.path_follower.path_follower.PathFollower",
     "path-following-coordinator": "dimos.control.path_following_coordinator.PathFollowingCoordinator",
     "patrolling-module": "dimos.navigation.patrolling.module.PatrollingModule",
+    "patrol-executor": "dimos.navigation.patrol.patrol_executor",
+    "patrol-map-manager": "dimos.mapping.patrol_map_manager",
+    "patrol-system-prompt": "dimos.agents.skills.patrol_system_prompt",
+    "patrol-vis": "dimos.navigation.patrol.patrol_vis",
     "perceive-loop-skill": "dimos.perception.experimental.perceive_loop_skill.PerceiveLoopSkill",
     "person-follow-skill-container": "dimos.agents.skills.person_follow.PersonFollowSkillContainer",
     "person-tracker": "dimos.perception.detection.person_tracker.PersonTracker",
@@ -335,6 +343,7 @@ all_modules = {
     "semantic-search": "dimos.memory.module.SemanticSearch",
     "simple-phone-teleop": "dimos.teleop.phone.phone_extensions.SimplePhoneTeleop",
     "simple-planner": "dimos.navigation.nav_stack.modules.simple_planner.simple_planner.SimplePlanner",
+    "slam-module": "dimos.slam.lidar_slam",
     "spatial-landmark-memory-module": "dimos.perception.detection.door.door_spatial_memory_module.SpatialLandmarkMemoryModule",
     "spatial-memory": "dimos.perception.experimental.spatial_perception.SpatialMemory",
     "speak-skill": "dimos.agents.skills.speak_skill.SpeakSkill",
@@ -365,4 +374,5 @@ all_modules = {
     "world-belief-recorder": "dimos.experimental.world_belief.worldbelief_recorder.WorldBeliefRecorder",
     "wrist-camera": "dimos.teleop.hosted.blueprints.cloudflare.WristCamera",
     "zed-camera": "dimos.hardware.sensors.camera.zed.camera.ZEDCamera",
+
 }
