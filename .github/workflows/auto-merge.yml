@@ -2,7 +2,7 @@ name: Auto Merge
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: write
@@ -14,12 +14,7 @@ concurrency:
 
 jobs:
   auto-merge:
-    if: >
-      !github.event.pull_request.draft &&
-      (
-        (github.event.action == 'labeled' && github.event.label.name == 'automerge') ||
-        (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'automerge'))
-      )
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
