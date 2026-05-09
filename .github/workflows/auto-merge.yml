@@ -37,7 +37,7 @@ jobs:
       github.event_name == 'pull_request' ||
       github.event_name == 'pull_request_review'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 35
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
@@ -63,50 +63,76 @@ jobs:
           echo "state=$(echo "$PR_JSON" | jq -r .state)"   >> "$GITHUB_OUTPUT"
           echo "url=$(echo   "$PR_JSON" | jq -r .html_url)" >> "$GITHUB_OUTPUT"
 
-      - name: Check Codex Cloud 👍 reaction
+      - name: Poll for Codex Cloud 👍 reaction (max 30 min)
         if: steps.meta.outputs.draft == 'false' && steps.meta.outputs.state == 'open'
         id: check
         run: |
           set -euo pipefail
           PR=${{ steps.pr.outputs.number }}
 
-          # 1) Reactions on the PR description itself
-          PR_THUMBS=$(gh api -H "Accept: application/vnd.github+json" \
-            "repos/$REPO/issues/$PR/reactions" \
-            --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
-          echo "PR-level 👍 from $CODEX_BOT: $PR_THUMBS"
-
-          # 2) Reactions on each PR comment (issue comments)
-          COMMENT_THUMBS=0
-          for CID in $(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[].id'); do
-            N=$(gh api "repos/$REPO/issues/comments/$CID/reactions" \
+          count_thumbs() {
+            # 1) Reactions on the PR description itself
+            local PR_T COMMENT_T REVIEW_T CID
+            PR_T=$(gh api -H "Accept: application/vnd.github+json" \
+              "repos/$REPO/issues/$PR/reactions" \
               --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
-            COMMENT_THUMBS=$((COMMENT_THUMBS + N))
-          done
-          echo "Comment-level 👍 from $CODEX_BOT: $COMMENT_THUMBS"
 
-          # 3) Reactions on each review comment (inline code reviews)
-          REVIEW_THUMBS=0
-          for CID in $(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq '.[].id'); do
-            N=$(gh api "repos/$REPO/pulls/comments/$CID/reactions" \
-              --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
-            REVIEW_THUMBS=$((REVIEW_THUMBS + N))
-          done
-          echo "Review-comment-level 👍 from $CODEX_BOT: $REVIEW_THUMBS"
+            # 2) Reactions on each PR comment (issue comments)
+            COMMENT_T=0
+            for CID in $(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[].id'); do
+              N=$(gh api "repos/$REPO/issues/comments/$CID/reactions" \
+                --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
+              COMMENT_T=$((COMMENT_T + N))
+            done
 
-          TOTAL=$((PR_THUMBS + COMMENT_THUMBS + REVIEW_THUMBS))
-          echo "Total 👍 from $CODEX_BOT: $TOTAL"
-          if [ "$TOTAL" -ge 1 ]; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          fi
+            # 3) Reactions on each review comment (inline code reviews)
+            REVIEW_T=0
+            for CID in $(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq '.[].id'); do
+              N=$(gh api "repos/$REPO/pulls/comments/$CID/reactions" \
+                --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
+              REVIEW_T=$((REVIEW_T + N))
+            done
+
+            echo $((PR_T + COMMENT_T + REVIEW_T))
+          }
+
+          # 60 iterations * 30s = 30 min total budget.
+          # Bail early as soon as a single 👍 from CODEX_BOT is found.
+          MAX_ITERATIONS=60
+          INTERVAL=30
+          for i in $(seq 1 $MAX_ITERATIONS); do
+            # Re-check PR state in case it was closed externally
+            STATE=$(gh api "repos/$REPO/pulls/$PR" --jq .state)
+            if [ "$STATE" != "open" ]; then
+              echo "PR #$PR no longer open (state=$STATE); aborting poll."
+              echo "ok=false" >> "$GITHUB_OUTPUT"
+              echo "reason=pr_closed" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            TOTAL=$(count_thumbs)
+            echo "[$(date -u +%H:%M:%S)] iteration $i/$MAX_ITERATIONS — 👍 from $CODEX_BOT: $TOTAL"
+
+            if [ "$TOTAL" -ge 1 ]; then
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              echo "reason=found" >> "$GITHUB_OUTPUT"
+              echo "Codex 👍 detected on iteration $i; proceeding to enable auto-merge."
+              exit 0
+            fi
+
+            if [ "$i" -lt "$MAX_ITERATIONS" ]; then
+              sleep $INTERVAL
+            fi
+          done
+
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "reason=timeout" >> "$GITHUB_OUTPUT"
 
       - name: Enable GitHub auto-merge
         if: steps.check.outputs.ok == 'true'
         run: gh pr merge "${{ steps.meta.outputs.url }}" --auto --squash --delete-branch
 
-      - name: Gated — waiting for Codex Cloud
-        if: steps.check.outputs.ok != 'true' && steps.meta.outputs.draft == 'false' && steps.meta.outputs.state == 'open'
+      - name: Timed out waiting for Codex
+        if: steps.check.outputs.ok != 'true' && steps.check.outputs.reason == 'timeout'
         run: |
-          echo "::notice title=Auto-merge gated::PR #${{ steps.pr.outputs.number }}: still waiting for $CODEX_BOT[bot] to add a 👍 reaction. Trigger Codex Cloud review, or re-run this workflow manually via Actions tab → 'Auto Merge' → Run workflow → pr_number=${{ steps.pr.outputs.number }}."
+          echo "::notice title=Auto-merge gated (timeout)::PR #${{ steps.pr.outputs.number }} polled for 30 min and saw no 👍 from $CODEX_BOT[bot]. Trigger Codex Cloud review, then re-run this workflow manually: Actions tab → 'Auto Merge' → Run workflow → pr_number=${{ steps.pr.outputs.number }}."
