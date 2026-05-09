@@ -70,18 +70,20 @@ jobs:
           set -euo pipefail
           PR=${{ steps.pr.outputs.number }}
 
+          # NOTE: GitHub Apps appear in the API as "<slug>[bot]" — match with startswith
+          # so we tolerate both "chatgpt-codex-connector" and "chatgpt-codex-connector[bot]".
           count_thumbs() {
-            # 1) Reactions on the PR description itself
             local PR_T COMMENT_T REVIEW_T CID
+            # 1) Reactions on the PR description itself
             PR_T=$(gh api -H "Accept: application/vnd.github+json" \
               "repos/$REPO/issues/$PR/reactions" \
-              --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
+              --jq "[.[] | select(.content == \"+1\" and ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")))] | length")
 
             # 2) Reactions on each PR comment (issue comments)
             COMMENT_T=0
             for CID in $(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[].id'); do
               N=$(gh api "repos/$REPO/issues/comments/$CID/reactions" \
-                --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
+                --jq "[.[] | select(.content == \"+1\" and ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")))] | length")
               COMMENT_T=$((COMMENT_T + N))
             done
 
@@ -89,7 +91,7 @@ jobs:
             REVIEW_T=0
             for CID in $(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq '.[].id'); do
               N=$(gh api "repos/$REPO/pulls/comments/$CID/reactions" \
-                --jq "[.[] | select(.content == \"+1\" and (.user.login | ascii_downcase) == \"$CODEX_BOT\")] | length")
+                --jq "[.[] | select(.content == \"+1\" and ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")))] | length")
               REVIEW_T=$((REVIEW_T + N))
             done
 
