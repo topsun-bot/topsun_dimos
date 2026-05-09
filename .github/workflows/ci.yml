@@ -5,7 +5,7 @@ on:
     paths-ignore:
       - '**.md'
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths-ignore:
       - '**.md'
 
@@ -16,7 +16,15 @@ permissions:
 
 jobs:
   ci-complete:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: >
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.draft == false &&
+        (
+          github.event.action != 'labeled' ||
+          github.event.label.name == 'automerge'
+        )
+      )
     timeout-minutes: 60
     runs-on: [self-hosted, Linux]
     container:
