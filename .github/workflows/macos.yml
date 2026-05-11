@@ -43,7 +43,10 @@ jobs:
   checks:
     needs: [check-changes]
     if: needs.check-changes.outputs.should-run == 'true'
-    runs-on: [self-hosted, macos, arm64]
+    # macos-14 is GitHub-hosted Apple Silicon (arm64). Switched from
+    # [self-hosted, macos, arm64] because this fork has no self-hosted
+    # runners registered, so the job would queue forever.
+    runs-on: macos-14
     timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
