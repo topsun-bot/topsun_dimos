@@ -26,7 +26,7 @@ don't depend on any running daemon or registry state.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import requests
@@ -177,9 +177,9 @@ class TestMcpCall:
         self, runner: CliRunner, requests_mock: requests_mock_pkg.Mocker
     ) -> None:
         """`--arg key=value` should be parsed and forwarded as the tool args."""
-        captured: list[dict] = []
+        captured: list[dict[str, Any]] = []
 
-        def _handler(request, context):
+        def _handler(request: Any, context: Any) -> dict[str, object]:
             captured.append(request.json())
             return _jsonrpc_ok(_text_content("ok"))
 
@@ -199,9 +199,9 @@ class TestMcpCall:
         self, runner: CliRunner, requests_mock: requests_mock_pkg.Mocker
     ) -> None:
         """`--json-args` should take precedence over `--arg` and parse the JSON."""
-        captured: list[dict] = []
+        captured: list[dict[str, Any]] = []
 
-        def _handler(request, context):
+        def _handler(request: Any, context: Any) -> dict[str, object]:
             captured.append(request.json())
             return _jsonrpc_ok(_text_content("done"))
 
@@ -316,9 +316,9 @@ class TestAgentSend:
         self, runner: CliRunner, requests_mock: requests_mock_pkg.Mocker
     ) -> None:
         """The CLI argument should be forwarded as the ``message`` tool arg."""
-        captured: list[dict] = []
+        captured: list[dict[str, Any]] = []
 
-        def _handler(request, context):
+        def _handler(request: Any, context: Any) -> dict[str, object]:
             captured.append(request.json())
             return _jsonrpc_ok(_text_content("queued"))
 
