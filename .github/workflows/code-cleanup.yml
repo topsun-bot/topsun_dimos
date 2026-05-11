@@ -12,6 +12,8 @@ jobs:
   pre-commit:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: [self-hosted, Linux]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
     - name: Fix permissions
       run: |
