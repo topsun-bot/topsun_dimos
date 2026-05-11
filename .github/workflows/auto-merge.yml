@@ -3,10 +3,10 @@ name: Auto Merge
 # Auto-enable GitHub auto-merge once Codex Cloud (chatgpt-codex-connector[bot])
 # has reviewed the PR and left no P0 or P1 inline comments on the current HEAD.
 #
-# Codex signals approval via a text comment ("Didn't find any major issues…"),
-# NOT a 👍 reaction. This workflow therefore checks:
-#   1. Has Codex posted at least one issue comment on this PR?  → review received
-#   2. Are there zero P0/P1 inline review comments for HEAD?   → no blocking issues
+# Codex signals a review via a formal PR review on the HEAD commit
+# (pulls/<n>/reviews endpoint, commit_id == HEAD SHA). This workflow checks:
+#   1. Has Codex posted a formal review for the current HEAD?  → review received
+#   2. Are there zero P0/P1 inline review comments for HEAD?  → no blocking issues
 # Both conditions true → enable GitHub auto-merge (squash).
 
 on:
@@ -79,16 +79,19 @@ jobs:
 
           # Returns: "pending" | "clean" | "issues:<count>"
           codex_status() {
-            # 1) Has Codex posted any issue comment on this PR?
-            COMMENT_COUNT=$(gh api "repos/$REPO/issues/$PR/comments" --jq \
-              "[.[] | select((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\"))] | length")
-            if [ "$COMMENT_COUNT" -eq 0 ]; then
+            # 1) Has Codex posted a formal PR review for the current HEAD commit?
+            REVIEW_COUNT=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq \
+              "[.[] | select(
+                ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")) and
+                .commit_id == \"$HEAD_SHA\"
+              )] | length")
+            if [ "$REVIEW_COUNT" -eq 0 ]; then
               echo "pending"
               return
             fi
 
             # 2) Count P0/P1 inline review comments on the current HEAD commit
-            P1_COUNT=$(gh api "repos/$REPO/pulls/$PR/comments" --jq \
+            P1_COUNT=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq \
               "[.[] | select(
                 ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")) and
                 .commit_id == \"$HEAD_SHA\" and
@@ -149,6 +152,7 @@ jobs:
         if: steps.check.outputs.ok == 'false' && steps.check.outputs.reason == 'issues'
         run: |
           echo "::error title=Auto-merge blocked::PR #${{ steps.pr.outputs.number }} has ${{ steps.check.outputs.p1_count }} P0/P1 Codex finding(s) on HEAD. Fix the issues and push a new commit to re-trigger the review."
+          exit 1
 
       - name: Timed out waiting for Codex
         if: steps.check.outputs.ok == 'false' && steps.check.outputs.reason == 'timeout'
