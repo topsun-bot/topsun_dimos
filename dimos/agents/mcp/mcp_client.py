@@ -44,6 +44,8 @@ logger = setup_logger()
 class McpClientConfig(ModuleConfig):
     system_prompt: str | None = SYSTEM_PROMPT
     model: str = "gpt-4o"
+    model_provider: str | None = None
+    model_kwargs: dict[str, Any] | None = None
     model_fixture: str | None = None
     mcp_server_url: str = "http://localhost:9990/mcp"
 
@@ -217,6 +219,14 @@ class McpClient(Module):
             from dimos.agents.testing import MockModel
 
             model = MockModel(json_path=self.config.model_fixture)
+        elif self.config.model_provider is not None:
+            from langchain.chat_models import init_chat_model
+
+            model = init_chat_model(
+                self.config.model,
+                model_provider=self.config.model_provider,
+                **(self.config.model_kwargs or {}),
+            )
 
         with self._lock:
             self._state_graph = create_agent(

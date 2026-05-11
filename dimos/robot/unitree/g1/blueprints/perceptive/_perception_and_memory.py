@@ -16,11 +16,13 @@
 """Perception and memory modules used by higher-level G1 blueprints."""
 
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.perception.detection.door.door_spatial_memory_module import DoorSpatialMemoryModule
 from dimos.perception.object_tracker import ObjectTracking
 from dimos.perception.spatial_perception import SpatialMemory
 
 _perception_and_memory = autoconnect(
     SpatialMemory.blueprint(),
+    DoorSpatialMemoryModule.blueprint(),
     ObjectTracking.blueprint(frame_id="camera_link"),
 )
 

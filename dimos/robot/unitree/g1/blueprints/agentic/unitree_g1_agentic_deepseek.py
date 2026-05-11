@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025-2026 Dimensional Inc.
+# Copyright 2026 Dimensional Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,24 +13,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Agentic skills used by higher-level G1 blueprints."""
+"""
+G1 humanoid agentic blueprint using DeepSeek V4 Pro.
+
+Usage::
+
+    export OPENAI_API_KEY="sk-fb774f182a3c4c28aaa8b6878ee32b60"
+    export OPENAI_BASE_URL="https://api.deepseek.com"
+    dimos run unitree-g1-agentic-deepseek
+"""
 
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
-from dimos.agents.skills.door_navigation import DoorNavigationSkill
-from dimos.agents.skills.navigation import NavigationSkillContainer
-from dimos.agents.skills.speak_skill import SpeakSkill
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.robot.unitree.g1.skill_container import UnitreeG1SkillContainer
+from dimos.robot.unitree.g1.blueprints.agentic._agentic_skills import _agentic_skills
+from dimos.robot.unitree.g1.blueprints.perceptive.unitree_g1 import unitree_g1
 from dimos.robot.unitree.g1.system_prompt import G1_SYSTEM_PROMPT
 
-_agentic_skills = autoconnect(
+unitree_g1_agentic_deepseek = autoconnect(
+    unitree_g1,
     McpServer.blueprint(),
-    McpClient.blueprint(system_prompt=G1_SYSTEM_PROMPT),
-    NavigationSkillContainer.blueprint(),
-    DoorNavigationSkill.blueprint(),
-    SpeakSkill.blueprint(),
-    UnitreeG1SkillContainer.blueprint(),
+    McpClient.blueprint(
+        system_prompt=G1_SYSTEM_PROMPT,
+        model="deepseek-v4-pro",
+        model_provider="openai",
+        model_kwargs={"model_kwargs": {"extra_body": {"thinking": {"type": "none"}}}},
+    ),
+    _agentic_skills,
 )
 
-__all__ = ["_agentic_skills"]
+__all__ = ["unitree_g1_agentic_deepseek"]
