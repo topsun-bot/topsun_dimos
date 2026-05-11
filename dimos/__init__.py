@@ -14,6 +14,7 @@
 
 # zhenhao: harmless marker to opt this PR out of `paths-ignore: '**.md'` so
 # the `ci-complete` required check actually runs (end-to-end flow test).
+# Re-trigger after self-hosted runner came back online.
 
 
 def __getattr__(name: str) -> object:
