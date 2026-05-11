@@ -1,0 +1,10 @@
+{
+  "max_retries": 3,
+  "models": {
+    "planner": "opus",
+    "developer": "sonnet",
+    "tester": "opus"
+  },
+  "permission_mode": "auto",
+  "effort": "high"
+}

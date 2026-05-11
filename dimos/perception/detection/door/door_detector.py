@@ -202,24 +202,31 @@ class DoorDetector:
         Returns:
             List of newly created or updated SpatialRecords.
         """
+        import math as _math
+
         detections = self.detect(frame, frame_id)
         records: list[SpatialRecord] = []
 
         for det in detections:
+            # Offset door position ~2m in the robot's facing direction
+            yaw = robot_rotation[2]
+            door_x = robot_position[0] + 2.0 * _math.cos(yaw)
+            door_y = robot_position[1] + 2.0 * _math.sin(yaw)
+
             rec = SpatialRecord(
                 name="",
                 record_type=RecordType.DOOR,
-                position=robot_position,
+                position=(door_x, door_y, robot_position[2]),
                 rotation=robot_rotation,
                 state=det["door_state"],
                 confidence=det["confidence"],
                 timestamp=time.time(),
                 last_seen=time.time(),
             )
-            memory.record_door(rec)
+            stored_id = memory.record_door(rec)
 
             if det["cropped_bytes"]:
-                path = memory.save_snapshot(rec.record_id, det["cropped_bytes"])
+                path = memory.save_snapshot(stored_id, det["cropped_bytes"])
                 if path:
                     rec.image_snapshot_path = path
 

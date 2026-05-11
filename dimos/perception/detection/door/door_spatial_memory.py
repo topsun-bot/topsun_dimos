@@ -73,7 +73,7 @@ class DoorSpatialMemory:
 
         Returns the ``record_id`` of the stored (possibly existing) record.
         """
-        existing = self._find_by_position(door.position[:2], radius=0.5)
+        existing = self._find_by_position(door.position[:2], radius=0.5, record_type=door.record_type)
         if existing is not None:
             existing.observation_count += 1
             existing.last_seen = time.time()
@@ -203,12 +203,17 @@ class DoorSpatialMemory:
     # Internal
     # ------------------------------------------------------------------
 
-    def _find_by_position(self, xy: tuple[float, float], radius: float) -> SpatialRecord | None:
-        """Check if any existing door is within *radius* of xy."""
+    def _find_by_position(self, xy: tuple[float, float], radius: float, record_type: RecordType | None = None) -> SpatialRecord | None:
+        """Check if any existing record is within *radius* of xy.
+
+        If *record_type* is given, only match records of the same type.
+        """
         x, y = xy
-        for door in self._doors.values():
-            dx = door.position[0] - x
-            dy = door.position[1] - y
+        for rec in self._doors.values():
+            if record_type is not None and rec.record_type != record_type:
+                continue
+            dx = rec.position[0] - x
+            dy = rec.position[1] - y
             if dx * dx + dy * dy <= radius * radius:
-                return door
+                return rec
         return None
