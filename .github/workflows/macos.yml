@@ -17,6 +17,9 @@ on:
 
 permissions:
   contents: read
+  # Required by dorny/paths-filter@v4 to fetch the list of changed files
+  # via the GitHub API on pull_request events. Without this, check-changes
+  # fails with "Resource not accessible by integration".
   pull-requests: read
 
 jobs:
