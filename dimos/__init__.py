@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# zhenhao: harmless marker to opt this PR out of `paths-ignore: '**.md'` so
+# the `ci-complete` required check actually runs (end-to-end flow test).
+
 
 def __getattr__(name: str) -> object:
     if name == "Dimos":
