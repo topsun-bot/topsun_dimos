@@ -113,7 +113,7 @@ class DoorNavigationSkill(Module):
         from dimos.types.spatial_record import SpatialRecord
 
         pos = self._latest_odom.position
-        rot = self._latest_odom.orientation
+        rot = self._latest_odom.orientation.to_euler()
 
         rec = SpatialRecord(
             name=name,
@@ -165,29 +165,44 @@ class DoorNavigationSkill(Module):
             topo.add_record(r)
 
         # If we have odometry, plan a topological path
-        waypoints: list[TopologyNode] = []
+        all_waypoints: list[TopologyNode] = []
         if self._latest_odom is not None:
             pos = self._latest_odom.position
-            waypoints = topo.shortest_path(float(pos.x), float(pos.y), target.position[0], target.position[1])
+            all_waypoints = topo.shortest_path(
+                float(pos.x), float(pos.y), target.position[0], target.position[1]
+            )
 
-        # If topology found useful waypoints (more than just the target),
-        # navigate to the first one as an intermediate goal
-        if waypoints and waypoints[-1].record_id != target.record_id:
-            # Navigate to first topological waypoint
-            wp = waypoints[0]
-            logger.info("Topological path: navigating via waypoint '%s'", wp.name)
-            return self._set_goal(wp.x, wp.y, f"Navigating toward {label} via {wp.name}")
+        # Navigate through waypoints sequentially
+        for wp in all_waypoints:
+            logger.info("Topological waypoint: '%s' at (%.2f, %.2f)", wp.name, wp.x, wp.y)
+            self._navigation.set_goal(
+                PoseStamped(
+                    position=make_vector3(wp.x, wp.y, 0.0),
+                    orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+                    frame_id="map",
+                )
+            )
 
-        # Otherwise navigate directly to the target
+        # Finally navigate to the target with approach offset
         yaw = target.rotation[2]
         offset_x = 1.5 * __import__("math").cos(yaw)
         offset_y = 1.5 * __import__("math").sin(yaw)
 
-        return self._set_goal(
-            target.position[0] + offset_x,
-            target.position[1] + offset_y,
-            f"Navigating to {label} (state: {target.state})",
-            yaw,
+        goal_pose = PoseStamped(
+            position=make_vector3(
+                target.position[0] + offset_x,
+                target.position[1] + offset_y,
+                target.position[2],
+            ),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
+            frame_id="map",
+        )
+        self._navigation.set_goal(goal_pose)
+
+        via = f" via {len(all_waypoints)} waypoints" if all_waypoints else ""
+        return (
+            f"Navigating to {label}{via} (state: {target.state}). "
+            f"To cancel call stop_navigation."
         )
 
     def _set_goal(self, x: float, y: float, message: str, yaw: float = 0.0) -> str:

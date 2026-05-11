@@ -102,14 +102,12 @@ class DoorSpatialMemoryModule(Module):
             state=state,
             confidence=confidence,
         )
-        self._memory.record_door(rec)
-        return rec.record_id
+        return self._memory.record_door(rec)
 
     @rpc
     def record_door(self, door: SpatialRecord) -> str:
         """Record a spatial record. Returns record_id."""
-        self._memory.record_door(door)
-        return door.record_id
+        return self._memory.record_door(door)
 
     @rpc
     def get_all_doors(self) -> list[SpatialRecord]:

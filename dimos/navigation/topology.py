@@ -69,6 +69,9 @@ class TopologyGraph:
 
     def add_record(self, record: SpatialRecord) -> None:
         """Add or update a node in the graph."""
+        # Remove existing node first to clear stale neighbor links
+        if record.record_id in self._nodes:
+            self.remove_record(record.record_id)
         node = TopologyNode(record)
         # Recompute edges to all existing nodes
         for existing in self._nodes.values():

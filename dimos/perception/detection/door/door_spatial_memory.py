@@ -65,11 +65,13 @@ class DoorSpatialMemory:
     # Public API
     # ------------------------------------------------------------------
 
-    def record_door(self, door: SpatialRecord) -> bool:
+    def record_door(self, door: SpatialRecord) -> str:
         """Record or update a door.
 
         If a door already exists at a nearby position (within *dedup_radius*),
         the existing record is updated and ``observation_count`` is incremented.
+
+        Returns the ``record_id`` of the stored (possibly existing) record.
         """
         existing = self._find_by_position(door.position[:2], radius=0.5)
         if existing is not None:
@@ -83,11 +85,11 @@ class DoorSpatialMemory:
             if door.image_snapshot_path:
                 existing.image_snapshot_path = door.image_snapshot_path
             self._dirty = True
-            return True
+            return existing.record_id
 
         self._doors[door.record_id] = door
         self._dirty = True
-        return True
+        return door.record_id
 
     def get_all_doors(self) -> list[SpatialRecord]:
         return list(self._doors.values())
@@ -165,7 +167,7 @@ class DoorSpatialMemory:
             shutil.move(str(tmp), str(self._db_path))
             self._dirty = False
             return True
-        except (OSError, json.JSONEncodeError) as e:
+        except (OSError, TypeError) as e:
             return False
 
     def load(self) -> bool:
