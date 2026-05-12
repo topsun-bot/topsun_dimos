@@ -1,0 +1,53 @@
+---
+description: Repository-wide workflow rules for Cursor agent (topsun_dimos / DimOS fork)
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Cursor 在本仓库的硬性行为约束
+
+> 这是 alwaysApply 规则，优先级高于 chat 里的临时指令。  
+> 若用户请求与本规则冲突，**先说明冲突并暂停**，等用户明确放行再继续。
+
+## 必须做
+
+1. **改代码前**阅读 `AGENTS.md`（含末尾 **Cursor agent pipeline & verification** 一节），确认范围与分支策略。
+2. **改代码后**至少执行一次 `bash scripts/verify.sh`；失败则进入调试循环，修到通过或向用户说明阻塞原因。
+3. 合并路径：**不要直推**共享长期分支；使用 **feature/fix 分支 + PR**：
+   - 从 **`feat/dingyi`**（本 fork 约定集成分支）或团队指定的 `dev` 更新后切分支：`git fetch origin && git checkout feat/dingyi && git pull --ff-only`（或等价操作）。
+   - `git checkout -b feat/<topic>` / `fix/<topic>` / `chore/<topic>` 等。
+   - `git add` 仅限本次相关文件 → `git commit`（Conventional Commits：`feat:` / `fix:` / `chore:` …）。
+   - `git push -u origin <branch>` → `gh pr create`（`--base` 选 `feat/dingyi` 或团队要求的 `dev` / `main`）。
+   - PR 正文按 `.github/pull_request_template.md` 填写 Summary / Test plan / Risk / Related。
+4. GitHub **网页**配置（branch protection、Allow auto-merge、Codex）**不能由 agent 代点**；须输出**人工待办清单**。
+
+## 严格禁止
+
+1. **禁止** `git push` **直接**推到受保护的集成分支（如 `main`、`dev`、**`feat/dingyi`**），除非用户与仓库策略明确允许。
+2. **禁止** `git push --force` 到他人可能基于其工作的分支（含已开 PR 的 head 分支）。
+3. **禁止** 修改或删除 **`~/.ssh/config` 里已有非本任务条目**；不得把私钥、token 写入仓库。
+4. **禁止** `git add` 明显不该入库的内容：`.env`、含 `ghp_` 的 remote、私钥、`*.log`、大块未审查二进制、`.venv/` 等（见 `.gitignore` 与 `AGENTS.md`）。
+5. **禁止** 为让 verify / CI 变绿而注释测试、删断言、弱化 `scripts/verify.sh`。
+6. **禁止** 无用户明确要求时做大规模重构、批量改名、无关格式化。
+
+## DimOS / 本仓库特定约束
+
+- **`dimos/robot/all_blueprints.py` 为自动生成**：勿手改；按 `AGENTS.md` 用 pytest 生成。
+- **`@skill`**：须 docstring、参数类型注解、返回 `str`（见 `AGENTS.md` Agents 章节）。
+- **依赖与验证**：Python 栈以 **`uv`** 为准；本地/流水线统一入口为 **`bash scripts/verify.sh`**（脚本内会跳过 LFS pull；全量 LFS 测试见 `AGENTS.md` / `docs/development/large_file_management.md`）。
+- **机器人 / 安全相关改动**（控制环、限幅、外参、安全策略）：PR 中须写明 **是否需要硬件或仿真回归**，由人类决定合并。
+
+## 工具与 Git
+
+- 优先使用 Cursor 的 Read / Write / StrReplace / Glob / Grep，避免无必要的 `cat | grep`。
+- 长耗时命令（全量 `pytest` 等）使用合理超时，避免无限挂起。
+- **`gh`**：使用 PATH 中的 `gh`（建议 `~/.local/bin/gh`）；**remote 使用 SSH** `git@github.com:...`，避免在 URL 中嵌入 PAT。
+- **推送频率**：上游 CI 较重，`AGENTS.md` 建议本地多 commit、**少次 push**。
+
+## 任务收尾必须输出
+
+1. 改动文件摘要（如 `git diff --stat`）。
+2. 运行了哪些验证命令及结果（至少是否执行了 `bash scripts/verify.sh`）。
+3. PR 链接（若已创建）。
+4. 仍需人类在 GitHub / ChatGPT Codex 上完成的事项清单。

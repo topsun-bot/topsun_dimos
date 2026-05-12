@@ -1,14 +1,23 @@
+## Summary
 
-## Description
-<!-- Keep it high-signal; deep planning belongs in the issue. -->
+<!-- What changed and why (1–3 bullets). -->
 
-## How to Test
+## Test plan
 
-<!-- oneliner required to run the actual feature -->
-<!-- blueprint for robot changes, benchmarks for transport changes etc -->
+<!-- e.g. `bash scripts/verify.sh`, targeted `uv run pytest …`, sim/hardware if relevant. -->
+
+## Risk
+
+<!-- Rollout, compat, perf, safety — or "Low / none". -->
+
+## Related
+
+<!-- Issue / design links, or "N/A". -->
+
+---
 
 ## Contributor License Agreement
 
 - [ ] I have read and approved the [CLA](https://github.com/dimensionalOS/dimos/blob/main/CLA.md).
 
-Closes DIM-XXX
+<!-- Optional: Closes DIM-XXX -->

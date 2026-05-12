@@ -389,3 +389,60 @@ CI asserts the file is current — if it's stale, CI fails.
 - CLI / dimos run: `docs/development/dimos_run.md`
 - LFS data: `docs/development/large_file_management.md`
 - Agent system: `docs/agents/`
+
+---
+
+## Cursor agent pipeline & verification (topsun fork)
+
+This section augments the DimOS guide above for **human + Cursor agent + optional Codex** workflow on `topsun-bot/topsun_dimos`. **Do not remove or rewrite** the upstream sections; extend here when the fork’s process changes.
+
+### Definition of Done (fork)
+
+- **Install / toolchain**: `uv sync --all-extras --no-extra dds` (see Quick Start and `docs/development/testing.md`).
+- **Single verify command (local + intended CI entrypoint)**:
+
+  ```bash
+  bash scripts/verify.sh
+  ```
+
+  The script sets **`DIMOS_SKIP_LFS_PULL=1`** and **`GIT_LFS_SKIP_SMUDGE=1`** so verification **does not run `git lfs pull`**. Tests that need real LFS objects are **skipped** until you materialize data (`git lfs pull`) and unset `DIMOS_SKIP_LFS_PULL` for a full data-dependent run.
+- **GitHub-hosted `verify` workflow** (`.github/workflows/verify.yml`) runs the same script with **`VERIFY_SKIP_MYPY=1`** because `ubuntu-latest` has no ROS; run **`uv run mypy dimos/`** locally or rely on self-hosted **`ci.yml`** for full mypy in a ROS image.
+- **Types**: `uv run mypy dimos/` (as in `verify.sh` when `VERIFY_SKIP_MYPY` is unset; ROS Humble `MYPYPATH` is applied when `/opt/ros/humble/...` exists).
+- **Default integration branch for this fork**: push feature work toward **`feat/dingyi`** (or the branch your team names for shared integration), not direct commits to `main` unless policy explicitly allows.
+
+### Mandatory rules
+
+- **Do not** `git push --force` to `main`, `dev`, or any shared long-lived branch.
+- **Do not** commit secrets: `.env`, tokens, SSH private keys, API keys, or embedded `ghp_` URLs in remotes.
+- **Do not** weaken `scripts/verify.sh` or CI to “paper over” failures; fix code or tests.
+- **Do not** skip reading existing `AGENTS.md` / `docs/` before large changes; prefer small, reviewable PRs.
+
+### PR rules
+
+Use `.github/pull_request_template.md` when opening PRs. At minimum include:
+
+1. **Summary** — what changed and why.
+2. **Test plan** — e.g. `bash scripts/verify.sh`, targeted `uv run pytest path/to/test.py`, hardware/sim note if relevant.
+3. **Risk** — rollout, compat, perf, or safety impact.
+4. **Related** — issue / design link if any.
+
+Title: prefer conventional prefixes (`feat:`, `fix:`, `chore:`, `docs:`, …).
+
+### Roles
+
+| Who | Responsibility |
+|-----|----------------|
+| **You** | Branch protection, auto-merge, Codex/GitHub settings in the browser; final merge approval per org rules; real-robot / LFS-full validation when needed. |
+| **Cursor agent** | Code + `verify.sh` + docs in-repo; git operations you authorize; never click GitHub settings pages for you. |
+| **Codex (GitHub App)** | Optional automated PR review (comment / emoji); not a substitute for human judgment on robotics safety. |
+
+### Codex review severity (for humans + Codex)
+
+Use this scale when triaging review comments:
+
+- **P0 (block)** — Secrets or credentials in repo; unauthorized force-push; unbounded real-time control without limits/safety; remote code execution; anything that can brick hardware or violate isolation.
+- **P1 (fix before merge)** — Breaking public API without migration; large behavior change to motion / torque / safety limits without tests; disabling tests to go green; >~30% change to safety-critical parameters without justification.
+- **P2 (follow-up OK)** — Refactors, duplication, logging clarity, minor perf when correctness is unchanged.
+- **P3 (ignore for merge)** — Typos, style-only nits, subjective naming — **do not** treat as merge blockers unless they harm clarity of safety-critical code.
+
+When you need **full LFS-backed tests**, run `git lfs pull`, then run `uv run pytest` / `./bin/pytest-slow` as in `docs/development/testing.md` with **`DIMOS_SKIP_LFS_PULL` unset**.

@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unittest
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.utils.logging_config import setup_logger
@@ -116,6 +117,11 @@ def _get_lfs_dir() -> Path:
     return get_data_dir() / ".lfs"
 
 
+def _lfs_pull_disabled() -> bool:
+    """When true, never run ``git lfs pull`` (used by ``scripts/verify.sh`` / CI smoke)."""
+    return os.environ.get("DIMOS_SKIP_LFS_PULL", "").strip().lower() in {"1", "true", "yes"}
+
+
 def _check_git_lfs_available() -> bool:
     missing = []
 
@@ -155,6 +161,9 @@ def _is_lfs_pointer_file(file_path: Path) -> bool:
 
 
 def _lfs_pull(file_path: Path, repo_root: Path) -> None:
+    if _lfs_pull_disabled():
+        logger.warning("Skipping git lfs pull for %s (DIMOS_SKIP_LFS_PULL is set)", file_path)
+        return
     try:
         relative_path = file_path.relative_to(repo_root)
 
@@ -182,9 +191,6 @@ def _decompress_archive(filename: str | Path) -> Path:
 
 
 def _pull_lfs_archive(filename: str | Path) -> Path:
-    # Check Git LFS availability first
-    _check_git_lfs_available()
-
     # Find repository root
     repo_root = get_project_root()
 
@@ -200,6 +206,14 @@ def _pull_lfs_archive(filename: str | Path) -> Path:
 
     # If it's an LFS pointer file, ensure LFS is set up and pull the file
     if _is_lfs_pointer_file(file_path):
+        if _lfs_pull_disabled():
+            raise unittest.SkipTest(
+                "Git LFS pulls disabled (DIMOS_SKIP_LFS_PULL=1); "
+                f"real objects not fetched for archive {filename!r}. "
+                "Unset DIMOS_SKIP_LFS_PULL and run `git lfs pull`, or use a checkout with smudged LFS files."
+            )
+        # Check Git LFS availability only when we may pull
+        _check_git_lfs_available()
         _lfs_pull(file_path, repo_root)
 
         # Verify the file was actually downloaded
@@ -216,11 +230,11 @@ def get_data(name: str | Path) -> Path:
     Get the path to a test data, downloading from LFS if needed.
 
     This function will:
-    1. Check that Git LFS is available
-    2. Locate the file in the tests/data directory
-    3. Initialize Git LFS if needed
-    4. Download the file from LFS if it's a pointer file
-    5. Return the Path object to the actual file or dir
+    1. Locate the file in the tests/data directory
+    2. If ``DIMOS_SKIP_LFS_PULL`` is set and the archive is still an LFS pointer,
+       raise ``unittest.SkipTest`` (pytest records the test as skipped).
+    3. Otherwise, if needed: check Git LFS, run ``git lfs pull`` for pointer files,
+       decompress archives, and return the path to the file or directory.
 
     Supports nested paths like "dataset/subdir/file.jpg" - will download and
     decompress "dataset" archive but return the full nested path.
@@ -235,6 +249,7 @@ def get_data(name: str | Path) -> Path:
     Raises:
         RuntimeError: If Git LFS is not available or LFS operations fail
         FileNotFoundError: If the test file doesn't exist
+        unittest.SkipTest: If ``DIMOS_SKIP_LFS_PULL=1`` and real LFS objects are required
 
     Usage:
         # Simple file/dir

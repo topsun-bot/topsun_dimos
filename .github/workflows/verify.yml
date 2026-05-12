@@ -1,0 +1,32 @@
+# GitHub-hosted runner: single entrypoint matches local `scripts/verify.sh`.
+# Self-hosted `ci.yml` remains the full ros-dev + coverage path.
+name: verify
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - dev
+      - "feat/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Run verify.sh
+        env:
+          CI: true
+          VERIFY_SKIP_MYPY: "1"
+        run: bash ./scripts/verify.sh
