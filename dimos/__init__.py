@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Intentionally non-.md touch: PRs that only change markdown are ignored by
+# `.github/workflows/ci.yml` `paths-ignore: '**.md'`; this line validates the
+# full self-hosted CI path when needed. Safe to remove after confirmation.
 
 def __getattr__(name: str) -> object:
     if name == "Dimos":
