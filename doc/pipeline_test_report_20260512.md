@@ -20,7 +20,7 @@ End-to-end check for **Cursor agent bootstrap + GitHub Actions verify + PR flow*
 
 - **Branch**: `chore/pipeline-demo-phase14`
 - **Base**: `feat/dingyi`
-- **PR**: *(fill in after `gh pr create`)*
+- **PR**: https://github.com/topsun-bot/topsun_dimos/pull/19
 
 ## CI / Codex expectations
 
