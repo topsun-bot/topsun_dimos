@@ -161,101 +161,99 @@ PRBODY
 fi
 
 echo "PR_NUMBER=$PR_NUMBER" > "$STATE_DIR/pr_info.txt"
-echo "PR_URL=https://github.com/$GITHUB_REPO/pull/$PR_NUMBER" >> "$STATE_DIR/pr_info.txt"
+REPO="${GITHUB_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)}"
+echo "PR_URL=https://github.com/$REPO/pull/$PR_NUMBER" >> "$STATE_DIR/pr_info.txt"
 
-# ── 3. Poll for ALL Codex review comments (batch collection) ────────
+# ── 3. Check Codex review status (续期模式 — 不设超时) ──────────────
 
-info "Step 3: Waiting for Codex review to complete..."
+info "Step 3: Checking Codex review status (PR #$PR_NUMBER)"
 
 write_pipeline_state "running" "codex_review"
 
-MAX_ITERATIONS=$(( CODEX_POLL_MINUTES * 2 ))  # 30s intervals
-INTERVAL=30
 CODEX_BOT="chatgpt-codex-connector"
-REPO="${GITHUB_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)}"
-
 if [[ -z "$REPO" ]]; then
   die "Cannot determine GitHub repo. Set GITHUB_REPO in config.env"
 fi
 
-# Track whether Codex has reviewed the latest commit
-latest_commit_reviewed() {
-  local LATEST_SHA
-  LATEST_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha' 2>/dev/null || echo "")
-  [[ -z "$LATEST_SHA" ]] && return 1
+# Check PR state
+PR_STATE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .state 2>/dev/null || echo "unknown")
+if [[ "$PR_STATE" != "open" ]]; then
+  die "PR #$PR_NUMBER is $PR_STATE (not open). Cannot continue."
+fi
 
-  # Check if Codex has submitted any review on this commit
-  local REVIEW_COUNT
-  REVIEW_COUNT=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq "[.[] | select(.user.login | ascii_downcase | startswith(\"$CODEX_BOT\"))] | length" 2>/dev/null || echo 0)
-  [[ "$REVIEW_COUNT" -gt 0 ]]
-}
+# Save latest PR info for resume
+echo "LAST_CHECK=$(date -Iseconds)" >> "$STATE_DIR/pr_info.txt"
 
-# Wait for Codex to submit its review (max timeout)
-for i in $(seq 1 $MAX_ITERATIONS); do
-  STATE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .state 2>/dev/null || echo "unknown")
-  [[ "$STATE" != "open" ]] && break
-
-  if latest_commit_reviewed; then
-    REVIEW_COUNT=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq "[.[] | select(.user.login | ascii_downcase | startswith(\"$CODEX_BOT\"))] | length" 2>/dev/null || echo 0)
-    info "[$i/$MAX_ITERATIONS] Codex reviewed. Reviews: $REVIEW_COUNT"
-    sleep 10  # brief pause to ensure all comments are submitted
-    break
-  fi
-
-  info "[$i/$MAX_ITERATIONS] Waiting for Codex review..."
-  sleep $INTERVAL
-done
-
-# ── 4. Collect ALL comments & check for 👍 ───────────────────────────
-
-info "Step 4: Collecting all Codex comments and checking for approval"
-
-# Save ALL review comments for batch fixing
+# Collect all Codex comments (if any)
 gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --jq '.[].body' > "$STATE_DIR/codex_comments.txt" 2>/dev/null || true
 gh api "repos/$REPO/issues/$PR_NUMBER/comments" --jq '.[].body' >> "$STATE_DIR/codex_comments.txt" 2>/dev/null || true
 gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq '.[].body' >> "$STATE_DIR/codex_comments.txt" 2>/dev/null || true
 
 COMMENT_COUNT=$(wc -l < "$STATE_DIR/codex_comments.txt" 2>/dev/null || echo 0)
-info "Collected $COMMENT_COUNT lines of review comments."
 
-# Check for 👍 approval (in any review or reaction)
+# Check for Codex 👍 approval
 count_thumbs() {
-  local PR_T COMMENT_T REVIEW_T CID N TOTAL=0
-  PR_T=$(gh api -H "Accept: application/vnd.github+json" "repos/$REPO/issues/$PR_NUMBER/reactions" --jq "[.[] | select(.content == \"+1\" and ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")))] | length" 2>/dev/null || echo 0)
+  local TOTAL=0 PR_T COMMENT_T REVIEW_T CID N
+  PR_T=$(gh api -H "Accept: application/vnd.github+json" "repos/$REPO/issues/$PR_NUMBER/reactions" --jq "[.[] | select(.content == \"+1\" and (.user.login | test(\"$CODEX_BOT\")))] | length" 2>/dev/null || echo 0)
   COMMENT_T=0
   for CID in $(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" --jq '.[].id' 2>/dev/null); do
-    N=$(gh api "repos/$REPO/issues/comments/$CID/reactions" --jq "[.[] | select(.content == \"+1\" and ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")))] | length" 2>/dev/null || echo 0)
+    N=$(gh api "repos/$REPO/issues/comments/$CID/reactions" --jq "[.[] | select(.content == \"+1\" and (.user.login | test(\"$CODEX_BOT\")))] | length" 2>/dev/null || echo 0)
     COMMENT_T=$((COMMENT_T + N))
   done
   REVIEW_T=0
   for CID in $(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/comments" --jq '.[].id' 2>/dev/null); do
-    N=$(gh api "repos/$REPO/pulls/comments/$CID/reactions" --jq "[.[] | select(.content == \"+1\" and ((.user.login | ascii_downcase) | startswith(\"$CODEX_BOT\")))] | length" 2>/dev/null || echo 0)
+    N=$(gh api "repos/$REPO/pulls/comments/$CID/reactions" --jq "[.[] | select(.content == \"+1\" and (.user.login | test(\"$CODEX_BOT\")))] | length" 2>/dev/null || echo 0)
     REVIEW_T=$((REVIEW_T + N))
   done
   echo $((PR_T + COMMENT_T + REVIEW_T))
 }
 
 THUMBS=$(count_thumbs)
-info "Codex 👍 count: $THUMBS"
+
+# Check if Codex reviewed the latest commit
+LATEST_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha' 2>/dev/null || echo "")
+CODEX_REVIEWED=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq "[.[] | select(.user.login | test(\"$CODEX_BOT\") and .commit.oid == \"$LATEST_SHA\")] | length" 2>/dev/null || echo 0)
+
+# ── 4. Decide next action based on Codex state ──────────────────────
 
 if [[ "$THUMBS" -ge 1 ]]; then
+  # Codex approved
   info "Codex approved! Enabling auto-merge."
   PR_URL=$(gh pr view "$PR_NUMBER" --json url --jq .url 2>/dev/null || echo "https://github.com/$REPO/pull/$PR_NUMBER")
   gh pr merge "$PR_URL" --auto --squash --delete-branch 2>&1 || true
   write_pipeline_state "completed" "merged"
   info "Pipeline complete. PR will merge once CI passes."
   exit 0
+
+elif [[ "$CODEX_REVIEWED" -gt 0 ]] && [[ "$COMMENT_COUNT" -gt 5 ]]; then
+  # Codex reviewed latest commit and left comments → need fixes
+  info "Codex reviewed commit ${LATEST_SHA:0:8} and left comments."
+  info "Comments saved to $STATE_DIR/codex_comments.txt"
+  info "---"
+  info "Fix ALL P0/P1 blocking issues, then re-run this script to push and re-trigger."
+
+  write_pipeline_state "paused" "codex_rejected"
+  exit 1
+
+elif [[ "$CODEX_REVIEWED" -gt 0 ]] && [[ "$COMMENT_COUNT" -le 5 ]]; then
+  # Codex reviewed but no comments and no 👍 — might be informational review
+  # Trigger @codex review to get a definitive answer
+  info "Codex reviewed but no clear signal. Triggering explicit review."
+  gh pr comment "$PR_NUMBER" --repo "$REPO" --body "@codex review" 2>/dev/null || true
+  info "Re-run this script later to check results."
+  write_pipeline_state "paused" "waiting_codex"
+  exit 0
+
+else
+  # Codex hasn't reviewed latest commit yet
+  info "Codex has not yet reviewed commit ${LATEST_SHA:0:8}."
+  info "The GitHub Auto Merge workflow will poll for results automatically."
+  info "Check back later or re-run this script to check status."
+  info "PR: https://github.com/$REPO/pull/$PR_NUMBER"
+
+  write_pipeline_state "paused" "waiting_codex"
+  exit 0
 fi
-
-# ── 5. Batch fix loop ─────────────────────────────────────────────
-
-# Codex didn't approve. Save comments and return for batch fixing.
-info "Codex review comments saved to $STATE_DIR/codex_comments.txt"
-info "Fix ALL issues locally, then re-run this script to push all fixes at once."
-info "Strategy: batch all fixes → push once → re-trigger Codex."
-
-write_pipeline_state "paused" "codex_rejected"
-exit 1
 
 # ── 4. Enable auto-merge ─────────────────────────────────────────────
 
