@@ -172,7 +172,9 @@ class DoorNavigationSkill(Module):
                 float(pos.x), float(pos.y), target.position[0], target.position[1]
             )
 
-        # Navigate through waypoints sequentially
+        # Navigate through waypoints sequentially, waiting for each to complete
+        import time as _time
+
         for wp in all_waypoints:
             logger.info("Topological waypoint: '%s' at (%.2f, %.2f)", wp.name, wp.x, wp.y)
             self._navigation.set_goal(
@@ -182,6 +184,12 @@ class DoorNavigationSkill(Module):
                     frame_id="map",
                 )
             )
+            # Wait for waypoint to be reached (up to 120s per waypoint)
+            deadline = _time.time() + 120.0
+            while _time.time() < deadline:
+                if self._navigation.is_goal_reached():
+                    break
+                _time.sleep(1.0)
 
         # Finally navigate to the target with approach offset
         yaw = target.rotation[2]
