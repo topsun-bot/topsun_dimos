@@ -16,7 +16,6 @@
 """Unitree Go2 自主探索与地图绘制 - 主Blueprint.
 
 这个blueprint组装了完整的自主探索系统，包括：
-- 感知模块：空间记忆和感知技能
 - 地图模块：体素地图和代价地图
 - 导航模块：路径规划和前沿探索
 - 地图保存：自动保存和手动保存
@@ -37,8 +36,6 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
 )
 from dimos.navigation.patrolling.module import PatrollingModule
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
-from dimos.perception.perceive_loop_skill import PerceiveLoopSkill
-from dimos.perception.spatial_perception import SpatialMemory
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
 
 # 导入地图保存模块
@@ -58,17 +55,14 @@ def create_exploration_blueprint(robot_ip: str = None):
         autoconnect(
             # 1. Go2基础连接（传感器和控制）
             unitree_go2_basic,
-            # 2. 感知模块
-            SpatialMemory.blueprint(),  # 空间记忆（物体跟踪和定位）
-            PerceiveLoopSkill.blueprint(),  # 感知循环技能
-            # 3. 地图构建模块
+            # 2. 地图构建模块
             VoxelGridMapper.blueprint(),  # 体素地图（点云->3D地图）
             CostMapper.blueprint(),  # 代价地图（用于路径规划）
-            # 4. 导航模块
+            # 3. 导航模块
             ReplanningAStarPlanner.blueprint(),  # A*路径规划器
             WavefrontFrontierExplorer.blueprint(),  # 前沿探索（自动选择探索目标）
             PatrollingModule.blueprint(),  # 巡逻模块（管理探索目标）
-            # 5. 地图保存模块
+            # 4. 地图保存模块
             MapSaverModule.blueprint(
                 save_dir="maps",  # 保存目录
                 auto_save_interval=60.0,  # 每60秒自动保存
@@ -76,7 +70,7 @@ def create_exploration_blueprint(robot_ip: str = None):
             ),
         )
         .global_config(
-            n_workers=8,  # 使用8个worker进程
+            n_workers=6,  # 使用6个worker进程
             robot_model="unitree_go2",
             robot_ip=robot_ip,  # 设置机器人IP
         )
@@ -116,10 +110,6 @@ def main() -> None:
     print()
     print("系统架构：")
     print()
-    print("  【感知层】")
-    print("  - SpatialMemory: 空间记忆（物体跟踪）")
-    print("  - PerceiveLoopSkill: 感知循环技能")
-    print()
     print("  【地图层】")
     print("  - VoxelGridMapper: 点云->3D体素地图")
     print("  - CostMapper: 生成导航代价地图")
@@ -139,7 +129,7 @@ def main() -> None:
     print("  • 格式: PGM + YAML (ROS标准格式)")
     print()
     print("📊 可视化：")
-    print("  • Rerun: 实时3D可视化（地图、路径、前沿点、物体）")
+    print("  • Rerun: 实时3D可视化（地图、路径、前沿点）")
     print("  • 启动: 添加 --viewer rerun 参数")
     print()
     print("🛑 紧急停止：")
