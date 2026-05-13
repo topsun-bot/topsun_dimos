@@ -129,7 +129,7 @@ class MapSaverModule(Module):
             # 转换地图数据为图像格式
             width = map_data.info.width
             height = map_data.info.height
-            data = np.array(map_data.data).reshape((height, width))
+            data = map_data.grid.reshape((height, width))
 
             # 转换为0-255范围（PGM格式）
             # -1 (未知) -> 205
