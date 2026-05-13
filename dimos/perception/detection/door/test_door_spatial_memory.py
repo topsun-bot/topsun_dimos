@@ -126,3 +126,74 @@ class TestDoorSpatialMemory:
 
     def test_load_nonexistent(self, memory: DoorSpatialMemory) -> None:
         assert not memory.load()
+
+    def test_clear_doors_and_rooms_preserves_landmarks(self, memory: DoorSpatialMemory) -> None:
+        """Test that clear_doors_and_rooms only removes DOOR and ROOM records."""
+        # Add different types of records
+        memory.record_door(SpatialRecord(name="front_door", record_type=RecordType.DOOR, position=(1.0, 0.0, 0.0)))
+        memory.record_door(SpatialRecord(name="kitchen", record_type=RecordType.ROOM, position=(2.0, 0.0, 0.0)))
+        memory.record_door(SpatialRecord(name="landmark_a", record_type=RecordType.LANDMARK, position=(3.0, 0.0, 0.0)))
+        memory.record_door(SpatialRecord(name="landmark_b", record_type=RecordType.LANDMARK, position=(4.0, 0.0, 0.0)))
+
+        assert memory.count() == 4
+
+        # Clear only doors and rooms
+        removed = memory.clear_doors_and_rooms()
+        assert removed == 2
+        assert memory.count() == 2
+
+        # Verify landmarks are preserved
+        remaining = memory.get_all_doors()
+        assert len(remaining) == 2
+        assert all(r.record_type == RecordType.LANDMARK for r in remaining)
+        assert {r.name for r in remaining} == {"landmark_a", "landmark_b"}
+
+    def test_clear_doors_and_rooms_empty_memory(self, memory: DoorSpatialMemory) -> None:
+        """Test clearing when memory is empty."""
+        removed = memory.clear_doors_and_rooms()
+        assert removed == 0
+        assert memory.count() == 0
+
+    def test_clear_doors_and_rooms_only_landmarks(self, memory: DoorSpatialMemory) -> None:
+        """Test clearing when only landmarks exist."""
+        memory.record_door(SpatialRecord(name="landmark", record_type=RecordType.LANDMARK, position=(1.0, 0.0, 0.0)))
+        removed = memory.clear_doors_and_rooms()
+        assert removed == 0
+        assert memory.count() == 1
+
+    def test_clear_persistent_doors_and_rooms(self, memory: DoorSpatialMemory) -> None:
+        """Test that snapshot images for doors/rooms are deleted."""
+        # Create records
+        door = SpatialRecord(name="door", record_type=RecordType.DOOR, position=(1.0, 0.0, 0.0))
+        room = SpatialRecord(name="room", record_type=RecordType.ROOM, position=(2.0, 0.0, 0.0))
+        landmark = SpatialRecord(name="landmark", record_type=RecordType.LANDMARK, position=(3.0, 0.0, 0.0))
+
+        memory.record_door(door)
+        memory.record_door(room)
+        memory.record_door(landmark)
+
+        # Save snapshots
+        memory.save_snapshot(door.record_id, b"door_image")
+        memory.save_snapshot(room.record_id, b"room_image")
+        memory.save_snapshot(landmark.record_id, b"landmark_image")
+
+        # Verify all snapshots exist
+        snapshots_dir = Path(memory._snapshots_dir)
+        assert (snapshots_dir / f"{door.record_id}.jpg").exists()
+        assert (snapshots_dir / f"{room.record_id}.jpg").exists()
+        assert (snapshots_dir / f"{landmark.record_id}.jpg").exists()
+
+        # Clear door/room snapshots
+        deleted = memory.clear_persistent_doors_and_rooms()
+        assert deleted == 2
+
+        # Verify only door/room snapshots are deleted
+        assert not (snapshots_dir / f"{door.record_id}.jpg").exists()
+        assert not (snapshots_dir / f"{room.record_id}.jpg").exists()
+        assert (snapshots_dir / f"{landmark.record_id}.jpg").exists()
+
+    def test_clear_persistent_no_snapshots_dir(self, tmp_path: Path) -> None:
+        """Test clearing when snapshots directory doesn't exist."""
+        mem = DoorSpatialMemory(db_path=tmp_path / "doors.json", snapshots_dir=tmp_path / "nonexistent")
+        deleted = mem.clear_persistent_doors_and_rooms()
+        assert deleted == 0

@@ -200,6 +200,51 @@ class DoorSpatialMemory:
             return None
 
     # ------------------------------------------------------------------
+    # Selective clearing (doors and rooms only)
+    # ------------------------------------------------------------------
+
+    def clear_doors_and_rooms(self) -> int:
+        """Clear only DOOR and ROOM records, preserving LANDMARKs and other types.
+
+        Returns the number of records removed.
+        """
+        to_remove = [
+            record_id
+            for record_id, record in self._doors.items()
+            if record.record_type in (RecordType.DOOR, RecordType.ROOM)
+        ]
+        for record_id in to_remove:
+            del self._doors[record_id]
+        self._dirty = True
+        return len(to_remove)
+
+    def clear_persistent_doors_and_rooms(self) -> int:
+        """Delete snapshot images for DOOR and ROOM records only.
+
+        Returns the number of snapshot files deleted.
+        """
+        if not self._snapshots_dir.exists():
+            return 0
+
+        deleted_count = 0
+        door_and_room_ids = {
+            record.record_id
+            for record in self._doors.values()
+            if record.record_type in (RecordType.DOOR, RecordType.ROOM)
+        }
+
+        for snapshot_file in self._snapshots_dir.glob("*.jpg"):
+            record_id = snapshot_file.stem
+            if record_id in door_and_room_ids:
+                try:
+                    snapshot_file.unlink()
+                    deleted_count += 1
+                except OSError:
+                    pass
+
+        return deleted_count
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 

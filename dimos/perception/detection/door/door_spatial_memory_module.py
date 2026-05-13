@@ -24,6 +24,7 @@ from typing import Any
 
 from dimos.constants import STATE_DIR
 from dimos.core.core import rpc
+from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.perception.detection.door.door_spatial_memory import DoorSpatialMemory
 from dimos.types.spatial_record import SpatialRecord, RecordType
@@ -60,11 +61,35 @@ class DoorSpatialMemoryModule(Module):
     def start(self) -> None:
         """Start the module and load persisted doors."""
         super().start()
-        loaded = self._memory.load()
-        if loaded:
-            logger.info("Loaded %d door(s) from %s", self._memory.count(), self.config.db_path)
+
+        # Check if selective clearing is requested
+        if global_config.new_memory:
+            logger.info("new_memory=True: clearing doors and rooms (preserving landmarks)")
+
+            # Load existing data first
+            loaded = self._memory.load()
+            if loaded:
+                # Clear only doors and rooms
+                removed_count = self._memory.clear_doors_and_rooms()
+                snapshot_count = self._memory.clear_persistent_doors_and_rooms()
+                logger.info(
+                    "Cleared %d door/room record(s) and %d snapshot(s). "
+                    "Landmarks preserved: %d",
+                    removed_count,
+                    snapshot_count,
+                    self._memory.count(),
+                )
+                # Save the updated state (landmarks only)
+                self._memory.save()
+            else:
+                logger.info("No existing memory to clear")
         else:
-            logger.info("Starting with empty door memory")
+            # Normal startup: load existing data
+            loaded = self._memory.load()
+            if loaded:
+                logger.info("Loaded %d door(s) from %s", self._memory.count(), self.config.db_path)
+            else:
+                logger.info("Starting with empty door memory")
 
     @rpc
     def stop(self) -> None:
@@ -168,3 +193,19 @@ class DoorSpatialMemoryModule(Module):
     @rpc
     def load(self) -> bool:
         return self._memory.load()
+
+    @rpc
+    def clear_doors_and_rooms(self) -> int:
+        """Clear only DOOR and ROOM records, preserving LANDMARKs.
+
+        Returns the number of records removed.
+        """
+        return self._memory.clear_doors_and_rooms()
+
+    @rpc
+    def clear_persistent_doors_and_rooms(self) -> int:
+        """Delete snapshot images for DOOR and ROOM records only.
+
+        Returns the number of snapshot files deleted.
+        """
+        return self._memory.clear_persistent_doors_and_rooms()

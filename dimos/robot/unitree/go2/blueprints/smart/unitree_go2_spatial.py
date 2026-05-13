@@ -14,16 +14,17 @@
 # limitations under the License.
 
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.global_config import global_config
 from dimos.experimental.security_demo.security_module import SecurityModule
 from dimos.perception.detection.door.door_spatial_memory_module import DoorSpatialMemoryModule
 from dimos.perception.perceive_loop_skill import PerceiveLoopSkill
-from dimos.perception.spatial_perception import SpatialMemory
+from dimos.perception.spatial_perception import SpatialMemory, SpatialConfig
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 from dimos.robot.unitree.go2.connection import GO2Connection
 
 unitree_go2_spatial = autoconnect(
     unitree_go2,
-    SpatialMemory.blueprint(),
+    SpatialMemory.blueprint(config=SpatialConfig(new_memory=global_config.new_memory)),
     DoorSpatialMemoryModule.blueprint(),
     PerceiveLoopSkill.blueprint(),
     SecurityModule.blueprint(camera_info=GO2Connection.camera_info_static),
