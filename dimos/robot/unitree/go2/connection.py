@@ -200,6 +200,7 @@ class GO2Connection(Module, Camera, Pointcloud):
     lidar: Out[PointCloud2]
     color_image: Out[Image]
     camera_info: Out[CameraInfo]
+    go2_conn: Out[UnitreeWebRTCConnection]
 
     connection: Go2ConnectionProtocol
     camera_info_static: CameraInfo = _camera_info_static()
@@ -259,6 +260,7 @@ class GO2Connection(Module, Camera, Pointcloud):
         self.standup()
         time.sleep(3)
         self.connection.balance_stand()
+        self.go2_conn.publish(self.connection)
 
         if self.config.mode == Go2Mode.RAGE:
             self.connection.enable_rage_mode()

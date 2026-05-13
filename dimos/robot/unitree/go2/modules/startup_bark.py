@@ -27,18 +27,22 @@ import time
 from typing import Any
 
 import numpy as np
-from openai import OpenAI
+import requests
 import soundfile as sf
 from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module
+from dimos.core.stream import In
 from dimos.stream.audio.node_output import SounddeviceAudioOutput
-from dimos.stream.audio.tts.node_openai import OpenAITTSNode, Voice
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+# MiniMax TTS constants
+MINIMAX_TTS_URL = "https://api.minimaxi.com/v1/t2a_v2"
+BARK_TEXT = "汪汪 汪汪 汪汪 汪汪汪"
 
 # Audio API constants (from go2_webrtc_driver)
 AUDIO_API = {
@@ -56,43 +60,40 @@ PLAY_MODES = {"NO_CYCLE": "no_cycle", "SINGLE_CYCLE": "single_cycle", "LIST_LOOP
 class StartupBarkModule(Module):
     """Plays a bark sound on Go2 robot startup.
 
-    In real mode (--robot-ip): generates audio via OpenAI TTS and uploads
-    to the robot via WebRTC AUDIO_HUB API for playback on the robot speaker.
+    In real mode (--robot-ip): generates audio via MiniMax TTS and uploads
+    to the robot via the shared GO2Connection WebRTC session for playback on the robot speaker.
 
     In replay/simulation mode: plays audio locally via sounddevice or logs
     a message.
     """
 
-    _tts_node: OpenAITTSNode | None = None
+    go2_conn: In[Any]  # Receives the shared UnitreeWebRTCConnection from GO2Connection
     _audio_output: SounddeviceAudioOutput | None = None
-    _openai_client: OpenAI | None = None
-    _webrtc_connection: Any | None = None
     _timer: threading.Timer | None = None
+    _go2_connection: Any | None = None
 
     @rpc
     def start(self) -> None:
         super().start()
+        self.go2_conn.subscribe(self._on_go2_conn)
         logger.info("StartupBarkModule starting, scheduling bark in 2 seconds")
         self._timer = threading.Timer(2.0, self._bark)
         self._timer.start()
+
+    def _on_go2_conn(self, conn: Any) -> None:
+        """Called when GO2Connection publishes its LegionConnection."""
+        self._go2_connection = conn
 
     @rpc
     def stop(self) -> None:
         if self._timer:
             self._timer.cancel()
             self._timer = None
-        if self._tts_node:
-            self._tts_node.dispose()
-            self._tts_node = None
         if self._audio_output:
             self._audio_output.stop()
             self._audio_output = None
-        if self._webrtc_connection:
-            try:
-                self._webrtc_connection.close()
-            except Exception:
-                pass
-            self._webrtc_connection = None
+        # Note: do NOT close _go2_connection — it belongs to GO2Connection and is closed by it
+        self._go2_connection = None
         super().stop()
 
     def _bark(self) -> None:
@@ -110,19 +111,26 @@ class StartupBarkModule(Module):
         logger.info("Playing bark sound locally (replay/simulation mode)")
 
         try:
-            if self._tts_node is None:
-                self._tts_node = OpenAITTSNode(speed=1.3, voice=Voice.ONYX)
+            # Generate audio via MiniMax API
+            audio_bytes = self._generate_audio(BARK_TEXT)
+
+            # Read MP3 bytes as numpy array via soundfile
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_mp3:
+                tmp_mp3.write(audio_bytes)
+                tmp_mp3_path = tmp_mp3.name
+
+            try:
+                audio_array, sample_rate = sf.read(tmp_mp3_path)
+            finally:
+                os.unlink(tmp_mp3_path)
+
+            if audio_array.ndim > 1:
+                audio_array = np.mean(audio_array, axis=1)
+
+            # Play via sounddevice at native sample rate (32000 Hz from MiniMax)
             if self._audio_output is None:
-                self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
-
-            self._audio_output.consume_audio(self._tts_node.emit_audio())
-
-            from reactivex import Subject
-
-            text_subject: Subject[str] = Subject()
-            self._tts_node.consume_text(text_subject)
-            text_subject.on_next("汪汪 汪汪")
-            text_subject.on_completed()
+                self._audio_output = SounddeviceAudioOutput(sample_rate=sample_rate)
+            self._audio_output.consume_audio(audio_array)
 
             time.sleep(1.5)
             logger.info("Local bark playback completed")
@@ -140,11 +148,7 @@ class StartupBarkModule(Module):
         logger.info(f"Playing bark sound on robot at {robot_ip}")
 
         try:
-            # Lazily create OpenAI client and WebRTC connection
-            if self._openai_client is None:
-                self._openai_client = OpenAI()
-
-            audio_data = self._generate_audio("汪汪 汪汪")
+            audio_data = self._generate_audio(BARK_TEXT)
             uuid = self._upload_audio_to_robot(audio_data, filename="bark.wav")
             self._play_audio_on_robot(uuid)
             logger.info("Robot bark playback triggered successfully")
@@ -153,48 +157,55 @@ class StartupBarkModule(Module):
             logger.error(f"Failed to play bark on robot: {e}")
 
     def _generate_audio(self, text: str) -> bytes:
-        """Generate audio via OpenAI TTS."""
-        if self._openai_client is None:
-            self._openai_client = OpenAI()
+        """Generate audio via MiniMax TTS API (hex-encoded MP3 response)."""
+        api_key = os.environ["MINIMAX_API_KEY"]
 
-        response = self._openai_client.audio.speech.create(
-            model="tts-1",
-            voice="echo",
-            input=text,
-            speed=1.3,
-            response_format="mp3",
+        payload = {
+            "model": "speech-2.8-hd",
+            "text": text,
+            "stream": False,
+            "voice_setting": {
+                "voice_id": "female-tianmei",
+                "speed": 1.0,
+                "vol": 1.0,
+                "pitch": 0,
+                "text_normalization": True,
+            },
+            "audio_setting": {
+                "sample_rate": 32000,
+                "bitrate": 256000,
+                "format": "mp3",
+                "channel": 1,
+            },
+            "language_boost": "Chinese",
+        }
+
+        response = requests.post(
+            MINIMAX_TTS_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=60,
         )
-        return response.content
+        response.raise_for_status()
 
-    def _get_webrtc_connection(self) -> Any:
-        """Lazily create and return a UnitreeWebRTCConnection."""
-        if self._webrtc_connection is None:
-            from unitree_webrtc_connect.webrtc_driver import (
-                UnitreeWebRTCConnection as LegionConnection,
-                WebRTCConnectionMethod,
-            )
+        data = response.json()
+        base = data.get("base_resp") or {}
+        if base.get("status_code") != 0:
+            raise RuntimeError(f"MiniMax error: {base}")
 
-            robot_ip = global_config.robot_ip
-            self._webrtc_connection = LegionConnection(
-                method=WebRTCConnectionMethod.IP,
-                ip=robot_ip,
-            )
-            self._webrtc_connection.start()
-
-            # Wait for connection to establish
-            timeout = 5.0
-            start = time.time()
-            while not self._webrtc_connection.is_connected and (time.time() - start) < timeout:
-                time.sleep(0.1)
-
-            if not self._webrtc_connection.is_connected:
-                raise RuntimeError("Failed to establish WebRTC connection to robot")
-
-        return self._webrtc_connection
+        audio_hex = data["data"]["audio"].strip().replace(" ", "")
+        return bytes.fromhex(audio_hex)
 
     def _webrtc_request(self, api_id: int, parameter: dict | None = None) -> Any:
-        """Send a WebRTC request to the robot."""
-        conn = self._get_webrtc_connection()
+        """Send a WebRTC request to the robot via the shared GO2Connection session."""
+        if self._go2_connection is None:
+            raise RuntimeError(
+                "GO2Connection not available — bark may have fired before connection was established"
+            )
+        conn = self._go2_connection
         request_data = {
             "api_id": api_id,
             "parameter": json.dumps(parameter) if parameter else "{}",
