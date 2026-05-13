@@ -140,19 +140,24 @@ python -c "from dimos.robot.unitree.go2.connection import GO2Connection; import 
 ### 运行示例
 
 ```bash
-# 1. 回放模式（使用录制数据，无需硬件）
-dimos --replay run go2-autonomous-exploration
+# 激活虚拟环境
+source .venv/bin/activate
 
-# 2. 仿真模式（MuJoCo仿真）
-dimos --simulation run go2-autonomous-exploration
-
-# 3. 真实硬件
+# 1. 真实硬件（需要连接Go2机器人）
 export ROBOT_IP=192.168.123.161
 python examples/mapping-go2/go2_autonomous_exploration.py
 
-# 4. 带可视化
+# 2. 带可视化运行
 python examples/mapping-go2/go2_autonomous_exploration.py --viewer rerun
+
+# 3. 查看帮助信息
+python examples/mapping-go2/go2_autonomous_exploration.py --help
 ```
+
+**注意**：
+- 回放模式和仿真模式需要先注册blueprint到DimOS系统
+- 推荐直接使用Python运行脚本
+- 真实硬件测试前，请确保已阅读"紧急停止方法"部分
 
 ### 与系统交互
 
