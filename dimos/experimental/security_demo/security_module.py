@@ -16,6 +16,7 @@ from __future__ import annotations  # noqa: I001
 
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 
@@ -44,6 +45,7 @@ from dimos.agents.skills.speak_skill_spec import SpeakSkillSpec
 from dimos.navigation.replanning_a_star.module_spec import ReplanningAStarPlannerSpec
 from dimos.navigation.visual_servoing.visual_servoing_2d import VisualServoing2D
 from dimos.perception.common.utils import draw_bounding_box
+from dimos.utils.feishu_webhook import send_feishu_text
 from dimos.utils.logging_config import setup_logger
 from dimos.navigation.patrolling.constants import EXTRA_CLEARANCE
 
@@ -74,6 +76,10 @@ _SKELETON_CONNECTIONS = [
 
 _KP_CONF_THRESHOLD = 0.3
 _ANTI_BUSY_LOOP_TIMEOUT = 0.01
+
+_SPEAK_PERSON_DETECTED = "检测到人员\uff0c请注意"
+_SPEAK_LOST_RESUME_PATROL = "已丢失目标\uff0c恢复巡逻"
+_FEISHU_PERSON_DETECTED = "【巡检告警】摄像头视野内检测到人员\uff0c请关注。"
 
 
 def _draw_skeleton(
@@ -168,6 +174,33 @@ class SecurityModule(Module):
         self._latest_pose: PoseStamped | None = None
         self._latest_image: Image | None = None
         self._has_active_goal = False
+        self._feishu_lock = threading.Lock()
+        self._last_feishu_success_ts: float = 0.0
+
+    def _spawn_background(self, fn: Callable[[], None]) -> None:
+        threading.Thread(target=fn, daemon=True, name="SecurityModule-notify").start()
+
+    def _schedule_feishu_person_detected(self) -> None:
+        g = self.config.g
+        url = g.feishu_webhook_url
+        if not url:
+            return
+
+        def _send() -> None:
+            with self._feishu_lock:
+                now = time.time()
+                if now - self._last_feishu_success_ts < g.feishu_min_interval_s:
+                    return
+            ok = send_feishu_text(
+                url,
+                _FEISHU_PERSON_DETECTED,
+                secret=g.feishu_webhook_secret,
+            )
+            if ok:
+                with self._feishu_lock:
+                    self._last_feishu_success_ts = time.time()
+
+        self._spawn_background(_send)
 
     @rpc
     def start(self) -> None:
@@ -311,7 +344,8 @@ class SecurityModule(Module):
 
         self._cancel_current_goal()
         self._has_active_goal = False
-        self._speak_skill.speak("Intruder detected", blocking=False)
+        self._speak_skill.speak(_SPEAK_PERSON_DETECTED, blocking=False)
+        self._schedule_feishu_person_detected()
         self._transition_to("FOLLOWING")
 
     def _follow_step(self) -> None:
@@ -327,7 +361,7 @@ class SecurityModule(Module):
 
         if len(detections) == 0:
             self.cmd_vel.publish(Twist.zero())
-            self._speak_skill.speak("Lost sight of intruder, resuming patrol", blocking=False)
+            self._speak_skill.speak(_SPEAK_LOST_RESUME_PATROL, blocking=False)
             self._router.reset()
             self._has_active_goal = False
             self._transition_to("PATROLLING")

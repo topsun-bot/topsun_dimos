@@ -5,7 +5,7 @@ on:
     paths-ignore:
       - '**.md'
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths-ignore:
       - '**.md'
 
@@ -16,12 +16,23 @@ permissions:
 
 jobs:
   ci-complete:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: >
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.draft == false &&
+        (
+          github.event.action != 'labeled' ||
+          github.event.label.name == 'automerge'
+        )
+      )
     timeout-minutes: 60
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/dimensionalos/ros-dev:dev
+      # Public ROS 2 Humble image — ghcr.io/dimensionalos/ros-dev is private and
+      # this repo's GITHUB_TOKEN cannot pull it without extra registry credentials.
+      image: docker.io/osrf/ros:humble-desktop-full-jammy
       env:
+        ROS_DISTRO: humble
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         ALIBABA_API_KEY: ${{ secrets.ALIBABA_API_KEY }}
@@ -36,6 +47,16 @@ jobs:
           git config --global --add safe.directory '*'
           git clean -ffdx -e .venv
 
+      - name: Install system packages for native wheels
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            portaudio19-dev \
+            pkg-config \
+            build-essential
+
+      - uses: astral-sh/setup-uv@v4
+
       - name: Install Python dependencies
         run: uv sync --extra all --frozen
 
@@ -45,12 +66,12 @@ jobs:
 
       - name: Run tests
         run: |
-          /entrypoint.sh bash -c "source .venv/bin/activate && _DIMOS_COV=1 coverage run -m pytest --junitxml=junit.xml --durations=0 -m 'not (tool or mujoco)' && coverage combine && coverage xml"
+          bash -lc "source /opt/ros/humble/setup.bash && source .venv/bin/activate && _DIMOS_COV=1 coverage run -m pytest --junitxml=junit.xml --durations=0 -m 'not (tool or mujoco)' && coverage combine && coverage xml"
 
       - name: Run mypy
         if: ${{ !cancelled() }}
         run: |
-          /entrypoint.sh bash -c "source .venv/bin/activate && MYPYPATH=/opt/ros/humble/lib/python3.10/site-packages mypy dimos"
+          bash -lc "source /opt/ros/humble/setup.bash && source .venv/bin/activate && MYPYPATH=/opt/ros/humble/lib/python3.10/site-packages mypy dimos"
 
       - name: Upload coverage
         uses: codecov/codecov-action@v6

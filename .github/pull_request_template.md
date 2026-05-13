@@ -16,6 +16,18 @@ Closes DIM-XXX
 <!-- oneliner required to run the actual feature -->
 <!-- blueprint for robot changes, benchmarks for transport changes etc -->
 
+## Test plan
+
+<!-- Commands you ran (e.g. `bash scripts/verify.sh`, specific `pytest` paths). -->
+
+## Risk
+
+<!-- User-visible behavior, performance, compatibility, rollout notes. -->
+
+## Related
+
+<!-- Links: issues, ADRs, prior PRs. -->
+
 ## Contributor License Agreement
 
 - [ ] I have read and approved the [CLA](https://github.com/dimensionalOS/dimos/blob/main/CLA.md).

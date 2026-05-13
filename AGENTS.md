@@ -188,7 +188,7 @@ Expose as a module-level variable for `dimos run` to find it. Add to the registr
 
 ### GlobalConfig
 
-Singleton config. Values cascade: defaults → `.env` → env vars → blueprint → CLI flags. Env vars prefixed `DIMOS_`. Key fields: `robot_ip`, `simulation`, `replay`, `viewer`, `n_workers`, `mcp_port`.
+Singleton config. Values cascade: field defaults → ``.env`` (cwd) → ``dimos.local.toml`` ``[feishu]`` (optional; see ``dimos.local.example.toml``) → environment variables → blueprint / ``global_config.update`` → CLI flags on ``dimos run`` / ``dimos show-config``. Env vars for non-Feishu fields are prefixed ``DIMOS_``. Feishu webhook env names include ``FEISHU_WEBHOOK_URL`` / ``DIMOS_FEISHU_WEBHOOK_URL`` (see ``GlobalConfig``). Key fields: ``robot_ip``, ``simulation``, ``replay``, ``viewer``, ``n_workers``, ``mcp_port``.
 
 ### Transports
 
@@ -341,6 +341,18 @@ uv run mypy dimos/
 
 `uv run pytest` excludes `slow`, `tool`, and `mujoco` markers. CI (`./bin/pytest-slow`) includes slow, excludes tool and mujoco. See `docs/development/testing.md`.
 
+### PyPI timeouts and smaller test loops
+
+Core `dimos` depends on `open3d` (see `pyproject.toml`); a fresh `uv sync` may download large wheels such as `matplotlib` as transitive deps. There is no supported “slim” install that omits `open3d` while keeping the normal package layout—CI and `scripts/verify.sh` stay on the same dependency set.
+
+If PyPI is slow or times out: set `UV_INDEX_URL` (e.g. Tsinghua mirror) and/or `UV_HTTP_TIMEOUT`, and use `bash scripts/verify.sh` (it retries `uv sync` with backoff; see the script header). GitHub Actions still runs `uv sync` from `.github/workflows/ci.yml` directly (frozen lock), unchanged by this script.
+
+After dependencies are installed once, you can iterate without re-running the full gate:
+
+```bash
+uv run pytest dimos/utils/test_feishu_webhook.py dimos/experimental/security_demo/test_security_module.py -q
+```
+
 ---
 
 ## Pre-commit & Code Style
@@ -376,6 +388,34 @@ CI asserts the file is current — if it's stale, CI fails.
 - **PRs target `dev`** — never push to `main` or `dev` directly
 - **Don't force-push** unless after a rebase with conflicts
 - **Minimize pushes** — every push triggers CI (~1 hour on self-hosted runners). Batch commits locally, push once.
+
+### Cursor agent pipeline (local)
+
+- **Local verify (run before push):** `bash scripts/verify.sh` — installs deps with `uv sync` (same exclusions as Quick Start / CI: no `dds`, no `unitree-dds`), then `ruff format --check`, `ruff check`, and default **fast** `pytest`. This is the shared local gate; it does **not** replace self-hosted CI (coverage, mypy with ROS `MYPYPATH`, Codecov), which remains authoritative in `.github/workflows/ci.yml`. If you add **required status checks** on GitHub, use the real job name from that workflow (here: **`ci-complete`**), not a placeholder like `build`.
+- **Cursor rules:** `.cursor/rules/00-workflow.mdc` (always-on agent discipline: no secrets, no weakening verify, PR to `dev`).
+- **Ship command:** `.cursor/commands/ship.md` — use `/ship <one-line request>` in Cursor chat for the scripted flow (branch → implement → `verify.sh` → commit → PR to **`dev`**).
+
+### Headless agents (fewer “please confirm” interruptions)
+
+- **New machine / agent host:** run **`bash scripts/setup_agent_host.sh`** once to check `gh` / `uv`, optional global `git credential.helper` (cache, not store), and SSH to GitHub; keep tokens in **`GH_TOKEN` / `GITHUB_TOKEN`** (or interactive `gh auth login`) — never commit them.
+- **`verify.sh`** exports **`GIT_TERMINAL_PROMPT=0`** so `git` will not block on credential prompts in non-TTY shells (configure SSH agent or HTTPS credential helper on the runner first).
+- **Cursor Task tools**: request **`all`** (or combined `git_write` + `network`) in **one** automation run when doing `git push` + `gh` + installs, so the IDE does not prompt per step; avoid aborting background agents mid-flight.
+- **`gh`**: run with **`GH_PROMPT_DISABLED=1`** and always pass **`--title`** / **`--body`** (or **`--body-file`**) plus **`--base dev`** for `gh pr create` — never rely on opening `$EDITOR` in agent sessions.
+
+### PR description (Codex / review alignment)
+
+PRs use `.github/pull_request_template.md`. Prefer a short **Summary**, concrete **Test plan** (commands or blueprints), **Risk** (behavior, perf, compat), and **Related** links/issues. Keep the CLA line as required by that template.
+
+### Review severity (P0–P3)
+
+Use this language in reviews (human or automated) so noise stays low:
+
+| Level | Examples |
+|-------|----------|
+| **P0** | Secrets or credentials in repo; `--force` push to shared default branches; safety-critical control without limits; obvious injection / arbitrary command execution from untrusted input |
+| **P1** | Large breaking public API without migration; tests disabled or skipped to green CI; ≥~30% change to safety-critical tuning without justification |
+| **P2** | Readability, duplication, optional optimizations |
+| **P3** | Typos, style-only — **do not** treat as merge blockers by themselves |
 
 ---
 

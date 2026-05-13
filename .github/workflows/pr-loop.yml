@@ -1,0 +1,201 @@
+name: PR Loop
+
+# Full automated loop:
+#   push → (ci 快测) ‖ (@codex review)   # 并行触发
+#                   ↓               ↓
+#                CI 完成        Codex 审查
+#                   └──────┬──────┘
+#                          ▼
+#               P0/P1 issues → @claude fix → push → (repeat)
+#               clean + CI ✅ → squash merge
+#
+# Requires secret PAT_TOKEN (repo scope) so the @claude comment actually
+# triggers claude-code.yml — GITHUB_TOKEN-authored comments are suppressed.
+
+on:
+  # PR opened/updated — request Codex review in parallel with CI
+  pull_request:
+    types: [opened, reopened, synchronize]
+  # Codex submits a review verdict
+  pull_request_review:
+    types: [submitted]
+  # CI completes — re-evaluate merge eligibility
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+
+jobs:
+  pr-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Run PR loop
+        uses: actions/github-script@v7
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+          script: |
+            // ── Helpers ────────────────────────────────────────────────────
+
+            async function ciConclusion(headSha) {
+              const { data } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                ref:   headSha,
+              });
+              const job = data.check_runs.find(r => r.name === 'ci-complete');
+              return job ? job.conclusion : null;   // null = not finished yet
+            }
+
+            async function latestCodexReview(prNumber, headSha) {
+              const { data: reviews } = await github.rest.pulls.listReviews({
+                owner:       context.repo.owner,
+                repo:        context.repo.repo,
+                pull_number: prNumber,
+              });
+              return reviews
+                .filter(r => r.user.login === 'chatgpt-codex-connector[bot]' && r.commit_id === headSha)
+                .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))[0] || null;
+            }
+
+            async function codexP0P1Count(prNumber, headSha) {
+              const { data: allComments } = await github.rest.pulls.listReviewComments({
+                owner:       context.repo.owner,
+                repo:        context.repo.repo,
+                pull_number: prNumber,
+              });
+              const codex   = allComments.filter(c => c.user.login === 'chatgpt-codex-connector[bot]');
+              const current = codex.filter(
+                c => c.commit_id === headSha && (c.body.includes('[P0') || c.body.includes('[P1'))
+              );
+              // Skip comments whose body prefix matches a comment from an older commit —
+              // those are template refires that a newer push already addressed.
+              const novel = current.filter(cur =>
+                !codex.some(
+                  prev => prev.commit_id !== headSha &&
+                          prev.path === cur.path &&
+                          prev.body.substring(0, 120) === cur.body.substring(0, 120)
+                )
+              );
+              return novel.length;
+            }
+
+            async function postComment(prNumber, body) {
+              // Use PAT when available so the comment triggers claude-code.yml.
+              // GITHUB_TOKEN-authored comments are suppressed by GitHub and
+              // would not fire the issue_comment workflow trigger.
+              const token = process.env.PAT_TOKEN;
+              const client = token ? require('@actions/github').getOctokit(token) : github;
+              await client.rest.issues.createComment({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+            async function requestCodexReview(prNumber) {
+              await postComment(prNumber, '@codex review');
+              core.info(`Posted @codex review on PR #${prNumber}.`);
+            }
+
+            async function requestClaudeFix(prNumber) {
+              await postComment(
+                prNumber,
+                '@claude Please fix the P0 and P1 issues raised in the Codex review above. ' +
+                'Make minimal changes, do not modify unrelated files.'
+              );
+              core.info(`Posted @claude fix request on PR #${prNumber}.`);
+            }
+
+            async function mergePR(pr, headSha) {
+              await github.rest.pulls.merge({
+                owner:               context.repo.owner,
+                repo:                context.repo.repo,
+                pull_number:         pr.number,
+                merge_method:        'squash',
+                commit_title:        `${pr.title} (#${pr.number})`,
+                commit_message:      'Auto-merged: CI ✅ + Codex review clean.',
+                sha:                 headSha,
+              });
+              core.info(`PR #${pr.number} merged at ${headSha}.`);
+            }
+
+            // ── Main decision logic (shared by all triggers) ──────────────
+            // Loop until clean: no retry cap, no auto-merge label gate.
+
+            async function handlePR(pr, headSha) {
+              const review = await latestCodexReview(pr.number, headSha);
+              const ci     = await ciConclusion(headSha);
+
+              // CI failed — nothing to do (Claude can fix on next push from human)
+              if (ci === 'failure' || ci === 'cancelled') {
+                core.info('CI failed — waiting for developer to fix.'); return;
+              }
+
+              // No Codex review for this commit yet — request one
+              if (!review) {
+                await requestCodexReview(pr.number); return;
+              }
+
+              // Count only P0/P1 blocking issues on this exact commit
+              const blocking = await codexP0P1Count(pr.number, headSha);
+              core.info(`PR #${pr.number} | CI: ${ci} | Codex: review exists, P0/P1 blocking: ${blocking}`);
+
+              // P0/P1 issues found — ask Claude to fix (loop until clean)
+              if (blocking > 0) {
+                await requestClaudeFix(pr.number); return;
+              }
+
+              // No P0/P1 issues — need CI to also be clean
+              if (ci !== 'success') {
+                core.info('Codex clean but CI not yet passed — will re-evaluate on CI completion.'); return;
+              }
+
+              // CI ✅ + Codex ✅ → merge
+              await mergePR(pr, headSha);
+            }
+
+            // ── Trigger: pull_request opened/reopened/synchronize ────────
+            if (context.eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              await handlePR(pr, pr.head.sha);
+              return;
+            }
+
+            // ── Trigger: pull_request_review (Codex verdict) ─────────────
+            if (context.eventName === 'pull_request_review') {
+              const review = context.payload.review;
+              const pr     = context.payload.pull_request;
+
+              if (review.user.login !== 'chatgpt-codex-connector[bot]') {
+                core.info('Not a Codex review — skip.'); return;
+              }
+              await handlePR(pr, pr.head.sha);
+              return;
+            }
+
+            // ── Trigger: workflow_run (CI completed) ──────────────────────
+            if (context.eventName === 'workflow_run') {
+              const run = context.payload.workflow_run;
+
+              // Find the open PR for this branch
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                state: 'open',
+                head:  `${context.repo.owner}:${run.head_branch}`,
+              });
+              if (!prs.length) {
+                core.info('No open PR for this CI run — skip.'); return;
+              }
+              await handlePR(prs[0], run.head_sha);
+              return;
+            }

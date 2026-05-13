@@ -1,0 +1,41 @@
+---
+description: Agent pipeline — verify before push, PR to dev, no secrets
+alwaysApply: true
+---
+
+# Cursor agent workflow (topsun_dimos / DimOS)
+
+## Before you push
+
+- Run **`bash scripts/verify.sh`** from the repo root after substantive changes. Do not weaken this script to make failures pass.
+- **Do not** commit secrets (tokens, API keys, private keys, `.env`). Follow `.gitignore` and `GlobalConfig` for configuration.
+- **Do not** `git push --force` to shared default branches. This repo expects work on **`feat/`**, **`fix/`**, **`refactor/`**, **`docs/`**, **`test/`**, **`chore/`**, **`perf/`** branches.
+- **Do not** push directly to **`main`** or **`dev`**. Open a PR targeting **`dev`** (see `AGENTS.md` Git Workflow).
+- **Minimize pushes**: each push can trigger long self-hosted CI; batch commits and push once when reasonable.
+
+## Workspace hygiene
+
+- If `git status` shows changes you did not make for the current task, **do not** `git add -A`. Confirm with the user or isolate your edits on a fresh branch from `origin/dev` (or `origin/main` as appropriate).
+
+## PRs
+
+- Use the repository PR template (`.github/pull_request_template.md`): include clear **Summary**, **How to test** / test plan, and **Risk** when relevant.
+- Keep each PR focused on one logical change; avoid unrelated refactors.
+
+## Review severity (for human or Codex-style review)
+
+- **P0**: secrets in repo; force-push to protected history; safety-critical unbounded control or injection; data loss risks.
+- **P1**: large breaking API or behavior change without migration; disabling or skipping tests to green CI; major config changes without review.
+- **P2**: readability, duplication, minor performance.
+- **P3**: typos and style-only nits — do not block merge on these alone.
+
+## CI truth
+
+- Full CI (coverage, mypy with ROS paths, etc.) runs in **GitHub Actions** (`.github/workflows/ci.yml`). Local `verify.sh` is the fast local gate; if CI disagrees, fix the code or document the gap in the PR.
+
+## Non-interactive automation (agents / Task tools)
+
+- Prefer a **single** Cursor Task (or terminal invocation) with **`all`** permissions when the same run needs `git`, `gh`, and network, so the IDE does not show separate approval dialogs per permission.
+- **Do not** abort background agents mid-run; that cancels push/PR work and looks like a “stuck” pipeline.
+- **`git`**: `scripts/verify.sh` sets **`GIT_TERMINAL_PROMPT=0`** — configure SSH or a credential helper so push does not fail in headless shells.
+- **`gh`**: set **`GH_PROMPT_DISABLED=1`** and always pass **`--base`**, **`--head`**, **`--title`**, and **`--body`** or **`--body-file`** for `gh pr create` so no editor opens. Ensure **`gh auth login`** (or `GH_TOKEN`) is done once on the machine.

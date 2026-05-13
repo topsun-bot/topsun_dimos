@@ -1,0 +1,12 @@
+# Copy to dimos.local.toml (gitignored at repo root) and adjust.
+# See docs/usage/configuration.md and AGENTS.md (GlobalConfig cascade).
+
+[feishu]
+# Feishu (Lark) custom bot webhook URL (optional).
+webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME"
+
+# Signing secret when the bot enables signature verification (optional).
+webhook_secret = ""
+
+# Minimum seconds between successful detection alerts (optional).
+min_interval_s = 60.0

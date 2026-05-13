@@ -48,6 +48,16 @@ def test_patrol_step_transitions_to_following_on_detection(
     module._latest_image = person_image
     module._latest_pose = PoseStamped(position=[1, 2, 0], orientation=[0, 0, 0, 1])
 
+    mocker.patch.object(
+        module.config.g, "feishu_webhook_url", "https://open.feishu.cn/open-apis/bot/v2/hook/test"
+    )
+    mocker.patch.object(module.config.g, "feishu_min_interval_s", 0.0)
+    mock_send = mocker.patch(
+        "dimos.experimental.security_demo.security_module.send_feishu_text",
+        return_value=True,
+    )
+    mocker.patch.object(module, "_spawn_background", side_effect=lambda fn: fn())
+
     det = make_detection()
     module._detector.process_image.return_value = ImageDetections2D(
         image=person_image, detections=[det]
@@ -63,12 +73,44 @@ def test_patrol_step_transitions_to_following_on_detection(
     assert module._state == "FOLLOWING"
     last_state = module.security_state.publish.call_args[0][0]
     assert last_state.data == "FOLLOWING"
-    module._speak_skill.speak.assert_called_with("Intruder detected", blocking=False)
+    module._speak_skill.speak.assert_called_with("检测到人员\uff0c请注意", blocking=False)
+    mock_send.assert_called_once()
+    assert mock_send.call_args[0][0] == "https://open.feishu.cn/open-apis/bot/v2/hook/test"
+    assert mock_send.call_args[0][1] == "【巡检告警】摄像头视野内检测到人员\uff0c请关注。"
     module.goal_request.publish.assert_called()  # goal cancellation
     module.detection.publish.assert_called()
     assert module._has_active_goal is False
     assert module._tracker is not None
     module._tracker.init_track.assert_called_once()
+
+
+def test_patrol_step_does_not_call_feishu_without_webhook(
+    security_module, person_image, make_detection, mocker
+):
+    module = security_module
+    module._state = "PATROLLING"
+    module._has_active_goal = True
+    module._latest_image = person_image
+    module._latest_pose = PoseStamped(position=[1, 2, 0], orientation=[0, 0, 0, 1])
+
+    mocker.patch.object(module.config.g, "feishu_webhook_url", None)
+    mock_send = mocker.patch(
+        "dimos.experimental.security_demo.security_module.send_feishu_text",
+        return_value=True,
+    )
+
+    det = make_detection()
+    module._detector.process_image.return_value = ImageDetections2D(
+        image=person_image, detections=[det]
+    )
+    mocker.patch(
+        "dimos.experimental.security_demo.security_module.draw_bounding_box",
+        return_value=person_image.data.copy(),
+    )
+
+    module._patrol_step()
+
+    mock_send.assert_not_called()
 
 
 def test_patrol_step_requests_goal_when_no_active_goal(security_module):
@@ -126,9 +168,7 @@ def test_follow_step_transitions_to_patrolling_on_person_lost(security_module, p
     published_twist = module.cmd_vel.publish.call_args[0][0]
     assert published_twist.is_zero()
 
-    module._speak_skill.speak.assert_called_with(
-        "Lost sight of intruder, resuming patrol", blocking=False
-    )
+    module._speak_skill.speak.assert_called_with("已丢失目标\uff0c恢复巡逻", blocking=False)
     module._router.reset.assert_called_once()
     assert module._state == "PATROLLING"
     assert module._has_active_goal is False
