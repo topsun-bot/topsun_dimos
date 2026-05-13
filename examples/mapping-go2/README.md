@@ -267,22 +267,42 @@ ReplanningAStarPlanner.blueprint(
 
 ## 可视化
 
-系统集成了Rerun可视化，实时显示：
+### 启动可视化
 
-- **3D体素地图**: 环境的3D重建
-- **代价地图**: 导航代价分布
-- **规划路径**: A*规划的路径
-- **前沿点**: 未探索区域的边界
-- **机器人位姿**: 当前位置和朝向
-- **点云数据**: 激光雷达扫描
+系统集成了Rerun可视化，**实时显示**探索过程：
 
 ```bash
-# 启动Rerun可视化
+# 使用Rerun可视化（推荐）
 python examples/mapping-go2/go2_autonomous_exploration.py --viewer rerun
 
-# 或在浏览器中查看
+# 使用Rerun Web版本（浏览器中查看）
 python examples/mapping-go2/go2_autonomous_exploration.py --viewer rerun-web
+
+# 使用Foxglove
+python examples/mapping-go2/go2_autonomous_exploration.py --viewer foxglove
 ```
+
+### 可视化内容
+
+**实时更新的内容**：
+
+- **3D体素地图**: 环境的3D重建（VoxelGridMapper输出）
+- **代价地图**: 导航代价分布，彩色热力图（CostMapper输出）
+- **点云数据**: 激光雷达扫描的原始点云
+- **相机图像**: RGB相机视图（左侧窗口）
+- **机器人位姿**: 当前位置和朝向（实时更新）
+- **规划路径**: A*规划的路径（绿色线条）
+- **前沿点**: 未探索区域的边界（红色标记）
+- **检测物体**: 识别到的物体（通过SpatialMemory，带标签）
+
+### 可视化布局
+
+Rerun使用分屏布局：
+- **左侧**: 相机视图（2D图像）
+- **右侧**: 3D世界视图（地图、路径、机器人、前沿点）
+- **底部**: 时间轴（可回放历史数据）
+
+所有数据都是**实时更新**的，可以看到机器人探索的全过程！
 
 ## 工作流程
 
