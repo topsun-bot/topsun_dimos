@@ -146,7 +146,83 @@ dimos mcp call get_navigation_state
   - 例如: "where is the chair?"
   - 返回物体的位置信息
 
-## 配置参数
+### 地图保存技能 (MapSaverModule)
+
+- **save_map_now(name: str)**: 立即保存当前地图
+  - name: 文件名前缀（可选）
+  - 返回保存的文件路径
+
+- **get_save_status()**: 获取地图保存状态
+  - 返回自动保存配置和保存历史
+
+- **set_auto_save(enabled: bool)**: 启用/禁用自动保存
+  - enabled: True启用，False禁用
+
+## 地图保存
+
+### 自动保存
+
+系统会**自动保存地图**：
+
+- **保存间隔**: 每60秒自动保存一次
+- **保存目录**: `maps/` 目录
+- **保存格式**: PGM + YAML（ROS标准格式）
+- **文件命名**: `auto_YYYYMMDD_HHMMSS.pgm`
+- **停止时保存**: 系统停止时自动保存最终地图为 `final_YYYYMMDD_HHMMSS.pgm`
+
+### 手动保存
+
+通过MCP技能手动保存地图：
+
+```bash
+# 立即保存地图
+dimos mcp call save_map_now
+
+# 保存并指定名称
+dimos mcp call save_map_now --arg name="my_exploration"
+
+# 查看保存状态
+dimos mcp call get_save_status
+
+# 启用/禁用自动保存
+dimos mcp call set_auto_save --arg enabled=false
+```
+
+### 地图文件格式
+
+保存的地图包含两个文件：
+
+1. **PGM文件** (`map_name.pgm`): 灰度图像
+   - 0 (黑色): 障碍物
+   - 254 (白色): 自由空间
+   - 205 (灰色): 未探索区域
+
+2. **YAML文件** (`map_name.yaml`): 元数据
+   ```yaml
+   image: map_name.pgm
+   resolution: 0.05  # 米/像素
+   origin: [0.0, 0.0, 0.0]  # 地图原点
+   negate: 0
+   occupied_thresh: 0.65
+   free_thresh: 0.196
+   ```
+
+### 使用保存的地图
+
+保存的地图可以用于：
+
+- **ROS导航**: 直接加载到ROS Navigation Stack
+- **路径规划**: 离线路径规划
+- **地图分析**: 分析探索覆盖率
+- **可视化**: 使用图像查看器查看
+
+```bash
+# 查看地图
+eog maps/auto_20260513_160000.pgm
+
+# 在ROS中加载
+rosrun map_server map_server maps/auto_20260513_160000.yaml
+```
 
 ### 前沿探索参数
 
