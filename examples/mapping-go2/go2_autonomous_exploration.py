@@ -19,8 +19,11 @@
 - 感知模块：空间记忆和感知技能
 - 地图模块：体素地图和代价地图
 - 导航模块：路径规划和前沿探索
+- 地图保存：自动保存和手动保存
 - MCP集成：LLM控制接口
 """
+
+from pathlib import Path
 
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
@@ -43,6 +46,11 @@ from dimos.agents.skills.navigation import NavigationSkillContainer
 # 导入系统提示词
 from dimos.agents.system_prompt import SYSTEM_PROMPT
 
+# 导入地图保存模块
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from map_saver_module import MapSaverModule
+
 
 # 组装完整的自主探索blueprint
 go2_autonomous_exploration = (
@@ -59,15 +67,21 @@ go2_autonomous_exploration = (
         ReplanningAStarPlanner.blueprint(),  # A*路径规划器
         WavefrontFrontierExplorer.blueprint(),  # 前沿探索
         PatrollingModule.blueprint(),  # 巡逻模块（管理探索目标）
-        # 5. 技能容器（为LLM提供导航技能）
+        # 5. 地图保存模块
+        MapSaverModule.blueprint(
+            save_dir="maps",  # 保存目录
+            auto_save_interval=60.0,  # 每60秒自动保存
+            enable_auto_save=True,  # 启用自动保存
+        ),
+        # 6. 技能容器（为LLM提供导航技能）
         NavigationSkillContainer.blueprint(),
-        # 6. MCP Server（暴露技能为MCP工具）
+        # 7. MCP Server（暴露技能为MCP工具）
         McpServer.blueprint(),
-        # 7. MCP Client（LLM Agent）
+        # 8. MCP Client（LLM Agent）
         McpClient.blueprint(system_prompt=SYSTEM_PROMPT),
     )
     .global_config(
-        n_workers=10,  # 使用10个worker进程（增加了感知模块）
+        n_workers=11,  # 使用11个worker进程（增加了地图保存模块）
         robot_model="unitree_go2",
     )
 )
@@ -95,11 +109,19 @@ def main() -> None:
     print()
     print("  【技能层】")
     print("  - NavigationSkillContainer: 导航技能接口")
+    print("  - MapSaverModule: 地图保存（自动+手动）")
     print("  - MCP Server/Client: LLM集成")
     print()
     print("可用技能：")
     print("  导航: set_goal, cancel_goal, get_navigation_state")
     print("  感知: perceive_objects, query_spatial_memory")
+    print("  地图: save_map_now, get_save_status, set_auto_save")
+    print()
+    print("地图保存：")
+    print("  - 自动保存: 每60秒自动保存到 maps/ 目录")
+    print("  - 手动保存: dimos mcp call save_map_now --arg name='my_map'")
+    print("  - 停止时保存: 系统停止时自动保存最终地图")
+    print("  - 格式: PGM + YAML (ROS标准格式)")
     print()
     print("启动方式：")
     print("  1. 回放模式: dimos --replay run go2-autonomous-exploration")
