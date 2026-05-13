@@ -1,8 +1,22 @@
-# Unitree Go2 自主探索与地图绘制 - Claude 配置文件
+# Unitree Go2 自主探索与栅格地图保存 - Claude 配置文件
 
 ## 项目概述
 
-为Unitree Go2机器狗实现自主探索功能，能够在未知环境中自主导航并绘制栅格地图（occupancy grid map）。采用多Agent架构，包括感知Agent、规划控制Agent、地图构建Agent和审查Agent。
+为Unitree Go2机器狗实现**自主探索与栅格地图保存**功能，能够在未知环境中自主导航、实时构建栅格地图，并自动保存为ROS标准格式（PGM+YAML）。
+
+### 核心目标
+
+1. **自主探索**: 自动检测未探索区域（前沿点），智能选择探索目标，A*路径规划 + 动态避障
+2. **栅格地图保存**: 实时构建栅格地图，自动保存（定时）+ 手动保存（MCP技能），ROS标准格式
+
+### 实现方式
+
+使用DimOS内置模块组装完整系统，包括：
+- **感知层**: SpatialMemory + PerceiveLoopSkill
+- **地图层**: VoxelGridMapper + CostMapper
+- **导航层**: ReplanningAStarPlanner + WavefrontFrontierExplorer + PatrollingModule
+- **保存层**: MapSaverModule（自动保存 + 手动保存）
+- **技能层**: NavigationSkillContainer + MCP Server/Client
 
 ## 技术栈
 
@@ -12,11 +26,12 @@
 - **核心依赖**: 
   - dimos核心模块 (Module, Blueprint, Stream)
   - LCM/SHM传输层
-  - 现有的导航、感知、地图模块
+  - DimOS内置的导航、感知、地图模块
+  - MapSaverModule（地图保存模块）
 
-## 架构设计
+## 系统架构
 
-### 多Agent架构
+### 完整系统架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -27,380 +42,328 @@
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
 ┌───────▼────────┐  ┌────────▼────────┐  ┌────────▼────────┐
-│ Perception     │  │ Planning &      │  │ Mapping         │
-│ Agent          │  │ Control Agent   │  │ Agent           │
+│ Spatial        │  │ VoxelGrid       │  │ Replanning      │
+│ Memory         │  │ Mapper          │  │ A* Planner      │
 │                │  │                 │  │                 │
-│ - 环境感知     │  │ - 路径规划      │  │ - SLAM          │
-│ - 障碍物检测   │  │ - 前沿探索      │  │ - 栅格地图构建  │
-│ - 目标识别     │  │ - 运动控制      │  │ - 地图更新      │
+│ - 物体跟踪     │  │ - 点云->3D地图  │  │ - A*路径规划    │
+│ - 空间记忆     │  │ - 体素网格      │  │ - 动态重规划    │
+│ - 物体定位     │  │ - 障碍物检测    │  │ - 避障控制      │
+└────────────────┘  └─────────────────┘  └─────────────────┘
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+┌───────▼────────┐  ┌────────▼────────┐  ┌────────▼────────┐
+│ Perceive       │  │ CostMapper      │  │ Wavefront       │
+│ Loop Skill     │  │                 │  │ Frontier        │
+│                │  │                 │  │ Explorer        │
+│ - 感知循环     │  │ - 代价地图生成  │  │ - 前沿检测      │
+│ - 物体识别     │  │ - 障碍物膨胀    │  │ - 目标选择      │
 └────────────────┘  └─────────────────┘  └─────────────────┘
         │                     │                     │
         └─────────────────────┼─────────────────────┘
                               │
                     ┌─────────▼─────────┐
-                    │  Review Agent     │
+                    │  MapSaverModule   │
                     │                   │
-                    │  - 任务监控       │
-                    │  - 性能评估       │
-                    │  - 异常检测       │
-                    └───────────────────┘
-                              │
-                    ┌─────────▼─────────┐
-                    │  Go2 Connection   │
-                    │  (硬件接口层)      │
+                    │  - 自动保存       │
+                    │  - 手动保存       │
+                    │  - PGM+YAML格式   │
                     └───────────────────┘
 ```
 
 ### 模块组织结构
 
-**重要**: 所有代码放在 `examples/mapping-go2/` 目录下，作为独立示例项目。
+**实际实现**: 所有代码放在 `examples/mapping-go2/` 目录下，作为独立示例项目。
 
 ```
 examples/mapping-go2/
 ├── README.md                              # 项目说明文档
 ├── go2_autonomous_exploration.py          # 主Blueprint入口
-├── modules/                               # Agent模块
-│   ├── __init__.py
-│   ├── perception_agent_module.py         # 感知Agent模块
-│   ├── planning_control_agent_module.py   # 规控Agent模块
-│   ├── mapping_agent_module.py            # 地图Agent模块
-│   └── review_agent_module.py             # 审查Agent模块
-├── skills/                                # 技能容器
-│   ├── __init__.py
-│   ├── exploration_skill_container.py     # 探索技能容器
-│   ├── perception_skill_container.py      # 感知技能容器
-│   └── mapping_skill_container.py         # 地图技能容器
-└── system_prompts/                        # 系统提示词
-    ├── __init__.py
-    └── exploration_system_prompt.py       # 探索任务系统提示词
+└── map_saver_module.py                    # 地图保存模块
 ```
+
+**使用的DimOS内置模块**:
+- `dimos.perception.spatial_perception.SpatialMemory` - 空间记忆
+- `dimos.perception.perceive_loop_skill.PerceiveLoopSkill` - 感知循环技能
+- `dimos.mapping.voxels.VoxelGridMapper` - 体素地图
+- `dimos.mapping.costmapper.CostMapper` - 代价地图
+- `dimos.navigation.replanning_a_star.ReplanningAStarPlanner` - A*规划器
+- `dimos.navigation.frontier_exploration.WavefrontFrontierExplorer` - 前沿探索
+- `dimos.navigation.patrolling.PatrollingModule` - 巡逻模块
+- `dimos.agents.skills.navigation.NavigationSkillContainer` - 导航技能容器
+- `dimos.agents.mcp.McpServer` - MCP服务器
+- `dimos.agents.mcp.McpClient` - MCP客户端
 
 ## 核心模块设计
 
-### 1. Perception Agent (感知Agent)
+### 1. SpatialMemory (空间记忆)
+- 跟踪环境中的物体
+- 维护物体的空间位置
+- 提供物体查询接口
+- 支持物体持久化记忆
 
-**职责**:
-- 处理相机、激光雷达数据流
-- 实时障碍物检测与跟踪
-- 环境特征提取
-- 可通行区域识别
+### 2. PerceiveLoopSkill (感知循环技能)
+- 持续感知环境
+- 物体识别和分类
+- 为LLM提供感知技能接口
+- 支持查询"看到了什么"
 
-**输入流**:
-- `color_image: In[Image]` - RGB相机图像
-- `depth_image: In[Image]` - 深度图像
-- `point_cloud: In[PointCloud2]` - 点云数据
-- `imu: In[Imu]` - IMU数据
+### 3. VoxelGridMapper (体素地图)
+- 将点云数据转换为3D体素网格
+- 实时更新地图
+- 障碍物检测
 
-**输出流**:
-- `obstacles: Out[ObstacleArray]` - 检测到的障碍物
-- `traversable_area: Out[OccupancyGrid]` - 可通行区域
-- `perception_status: Out[PerceptionStatus]` - 感知状态
+### 4. CostMapper (代价地图)
+- 生成导航代价地图
+- 障碍物膨胀（安全距离）
+- 为路径规划提供代价信息
 
-**关键技能**:
-- `detect_obstacles() -> str` - 检测当前视野内的障碍物
-- `identify_traversable_area() -> str` - 识别可通行区域
-- `get_perception_quality() -> str` - 获取感知质量评估
+### 5. ReplanningAStarPlanner (A*规划器)
+- A*算法路径规划
+- 动态重规划（环境变化时）
+- 平滑路径跟踪
+- 避障控制
 
-### 2. Planning & Control Agent (规划控制Agent)
+### 6. WavefrontFrontierExplorer (前沿探索)
+- Wavefront算法检测前沿点
+- 自动选择最优探索目标
+- 信息增益评估
+- 探索完成判断
 
-**职责**:
-- 前沿探索（Frontier Exploration）
-- 路径规划（A* / RRT）
-- 运动控制与避障
-- 探索策略决策
+### 7. PatrollingModule (巡逻模块)
+- 管理探索目标队列
+- 目标切换逻辑
+- 探索进度跟踪
 
-**输入流**:
-- `current_pose: In[PoseStamped]` - 当前位姿
-- `occupancy_grid: In[OccupancyGrid]` - 占据栅格地图
-- `obstacles: In[ObstacleArray]` - 障碍物信息
-- `frontiers: In[FrontierArray]` - 前沿点集合
+### 8. MapSaverModule (地图保存模块) ⭐ 核心新增
 
-**输出流**:
-- `cmd_vel: Out[Twist]` - 速度控制指令
-- `goal_pose: Out[PoseStamped]` - 目标位姿
-- `path: Out[Path]` - 规划路径
-- `exploration_status: Out[ExplorationStatus]` - 探索状态
+**职责**: 自动和手动保存栅格地图
 
-**关键技能**:
-- `start_exploration() -> str` - 开始自主探索
-- `pause_exploration() -> str` - 暂停探索
-- `select_next_frontier(strategy: str) -> str` - 选择下一个探索目标
-- `navigate_to_goal(x: float, y: float) -> str` - 导航到指定位置
-- `emergency_stop() -> str` - 紧急停止
-
-**依赖模块**:
-- 使用现有的 `dimos/navigation/frontier_exploration/wavefront_frontier_goal_selector.py`
-- 使用现有的 `dimos/navigation/replanning_a_star/` 路径规划器
-
-### 3. Mapping Agent (地图构建Agent)
-
-**职责**:
-- SLAM（同步定位与地图构建）
-- 栅格地图维护与更新
-- 地图保存与加载
-- 探索覆盖率统计
+**功能**:
+- **自动保存**: 每60秒自动保存地图到 `maps/` 目录
+- **停止保存**: 系统停止时自动保存最终地图
+- **手动保存**: 通过MCP技能随时保存地图
+- **格式转换**: 将CostMapper的代价地图转换为PGM+YAML格式
 
 **输入流**:
-- `point_cloud: In[PointCloud2]` - 点云数据
-- `current_pose: In[PoseStamped]` - 当前位姿
-- `odom: In[Odometry]` - 里程计数据
+- `cost_map: In[OccupancyGrid]` - 代价地图
 
-**输出流**:
-- `occupancy_grid: Out[OccupancyGrid]` - 占据栅格地图
-- `frontiers: Out[FrontierArray]` - 前沿点
-- `map_metadata: Out[MapMetadata]` - 地图元数据
-- `coverage_rate: Out[Float32]` - 探索覆盖率
+**MCP技能**:
+- `save_map_now(name: str) -> str` - 立即保存地图
+- `get_save_status() -> str` - 获取保存状态
+- `set_auto_save(enabled: bool) -> str` - 启用/禁用自动保存
 
-**关键技能**:
-- `get_current_map() -> str` - 获取当前地图状态
-- `save_map(filename: str) -> str` - 保存地图到文件
-- `get_coverage_rate() -> str` - 获取探索覆盖率
-- `reset_map() -> str` - 重置地图
+**保存格式**:
+- **PGM文件**: 灰度图像（0=障碍，254=自由，205=未知）
+- **YAML文件**: 元数据（分辨率、原点、阈值等）
+- **兼容性**: ROS Navigation Stack标准格式
 
-**依赖模块**:
-- 使用现有的 `dimos/mapping/occupancy/` 占据栅格地图
-- 使用现有的 `dimos/mapping/voxels.py` 体素地图
-- 集成 `dimos/mapping/costmapper.py` 代价地图
-
-### 4. Review Agent (审查Agent)
-
-**职责**:
-- 监控各Agent运行状态
-- 性能指标统计与分析
-- 异常检测与告警
-- 探索任务进度跟踪
-
-**输入流**:
-- `perception_status: In[PerceptionStatus]`
-- `exploration_status: In[ExplorationStatus]`
-- `map_metadata: In[MapMetadata]`
-- `system_health: In[SystemHealth]`
-
-**输出流**:
-- `review_report: Out[ReviewReport]` - 审查报告
-- `alerts: Out[AlertArray]` - 告警信息
-
-**关键技能**:
-- `get_exploration_progress() -> str` - 获取探索进度
-- `get_system_health() -> str` - 获取系统健康状态
-- `generate_report() -> str` - 生成探索报告
-- `check_anomalies() -> str` - 检查异常情况
+### 9. NavigationSkillContainer (导航技能容器)
+- 为LLM提供导航技能接口
+- 支持目标设置、取消、状态查询
+- 集成到MCP协议
 
 ## 数据流设计
 
-### 核心数据流
+### 感知流
+```
+相机 + 点云 → SpatialMemory → 物体跟踪
+                    ↓
+            PerceiveLoopSkill → 物体识别
+```
 
-1. **感知流**: 相机/激光雷达 → Perception Agent → 障碍物/可通行区域
-2. **地图流**: 点云/位姿 → Mapping Agent → 占据栅格/前沿点
-3. **控制流**: 地图/障碍物 → Planning Agent → 速度指令 → Go2硬件
-4. **监控流**: 各Agent状态 → Review Agent → 报告/告警
+### 地图流
+```
+点云传感器 → VoxelGridMapper → 3D体素地图
+                    ↓
+              CostMapper → 代价地图
+                    ↓
+            MapSaverModule → PGM+YAML文件
+```
 
-### 传输层选择
+### 导航流
+```
+代价地图 → WavefrontFrontierExplorer → 前沿点
+                    ↓
+           PatrollingModule → 探索目标
+                    ↓
+       ReplanningAStarPlanner → 路径 + 控制指令
+                    ↓
+                Go2机器人
+```
 
-- **图像数据**: 使用 `SHMTransport` (共享内存，高效)
-- **点云数据**: 使用 `pSHMTransport` (压缩共享内存)
-- **控制指令**: 使用 `LCMTransport` (低延迟)
-- **状态信息**: 使用 `LCMTransport`
+### 地图保存流 ⭐
+```
+CostMapper → 代价地图 → MapSaverModule
+                              ↓
+                    ┌─────────┴─────────┐
+                    │                   │
+              自动保存定时器        MCP技能调用
+                    │                   │
+                    └─────────┬─────────┘
+                              ↓
+                    保存为PGM+YAML文件
+                    (maps/目录)
+```
 
-## 实现步骤
+## 可用技能
 
-### Phase 1: 基础模块实现
-1. 创建Perception Agent模块，集成现有感知能力
-2. 创建Mapping Agent模块，集成SLAM和栅格地图
-3. 创建Planning & Control Agent模块，集成前沿探索
-4. 创建Review Agent模块，实现基础监控
+### 导航技能 (NavigationSkillContainer)
 
-### Phase 2: 技能容器实现
-1. 实现ExplorationSkillContainer，定义探索相关@skill方法
-2. 实现PerceptionSkillContainer，定义感知相关@skill方法
-3. 实现MappingSkillContainer，定义地图相关@skill方法
-4. 为每个技能编写完整的docstring和类型注解
+- **set_goal(x: float, y: float, theta: float)**: 设置导航目标
+- **cancel_goal()**: 取消当前导航目标
+- **get_navigation_state()**: 获取当前导航状态
 
-### Phase 3: Blueprint组装
-1. 创建go2_autonomous_exploration blueprint
-2. 使用autoconnect()连接所有模块
-3. 配置合适的Transport（SHM for images, LCM for control）
-4. 集成McpServer和McpClient
+### 感知技能 (PerceiveLoopSkill)
 
-### Phase 4: 系统提示词
-1. 编写exploration_system_prompt.py
-2. 定义探索任务的目标和约束
-3. 列出所有可用技能及其使用场景
-4. 添加安全规则和异常处理指导
+- **perceive_objects()**: 感知当前环境中的物体
+- **query_spatial_memory(query: str)**: 查询空间记忆
 
-### Phase 5: 测试与优化
-1. 使用--replay模式测试（无需真实硬件）
-2. 使用--simulation模式在MuJoCo中测试
-3. 在真实Go2硬件上测试
-4. 性能优化和参数调优
+### 地图保存技能 (MapSaverModule) ⭐
+
+- **save_map_now(name: str)**: 立即保存当前地图
+- **get_save_status()**: 获取地图保存状态
+- **set_auto_save(enabled: bool)**: 启用/禁用自动保存
+
+## 运行方式
+
+```bash
+# 激活虚拟环境
+source .venv/bin/activate
+
+# 1. 真实硬件（需要连接Go2机器人）
+export ROBOT_IP=192.168.123.161
+python examples/mapping-go2/go2_autonomous_exploration.py
+
+# 2. 带可视化运行
+python examples/mapping-go2/go2_autonomous_exploration.py --viewer rerun
+
+# 3. 查看帮助信息
+python examples/mapping-go2/go2_autonomous_exploration.py --help
+```
+
+## 紧急停止方法
+
+### 方法1: 键盘中断（最快）
+```bash
+Ctrl + C
+```
+
+### 方法2: MCP命令停止导航
+```bash
+dimos mcp call cancel_goal
+```
+
+### 方法3: Go2遥控器（硬件级别）
+- 按下遥控器的紧急停止按钮（L2+R2同时按下）
 
 ## 配置参数
 
-### GlobalConfig扩展
-
+### 地图保存配置
 ```python
-# 探索相关配置
-exploration_strategy: str = "wavefront"  # wavefront | random | greedy
-frontier_min_size: int = 10              # 最小前沿点数量
-exploration_radius: float = 10.0         # 探索半径（米）
-map_resolution: float = 0.05             # 地图分辨率（米/像素）
-map_size: tuple[int, int] = (400, 400)   # 地图尺寸（像素）
-coverage_threshold: float = 0.85         # 探索完成阈值
+MapSaverModule.blueprint(
+    save_dir="maps",              # 保存目录
+    auto_save_interval=60.0,      # 自动保存间隔（秒）
+    enable_auto_save=True,        # 启用自动保存
+)
 ```
 
-### 运行配置
-
-```bash
-# 回放模式（使用录制数据）
-dimos --replay run go2-autonomous-exploration
-
-# 仿真模式
-dimos --simulation run go2-autonomous-exploration
-
-# 真实硬件
-export ROBOT_IP=192.168.123.161
-dimos run go2-autonomous-exploration --daemon
-
-# 查看探索状态
-dimos agent-send "get exploration progress"
-dimos mcp call get_current_map
-dimos mcp call get_coverage_rate
+### 前沿探索配置
+```python
+WavefrontFrontierExplorer.blueprint(
+    min_frontier_perimeter=0.5,      # 最小前沿周长（米）
+    safe_distance=3.0,                # 安全距离（米）
+    lookahead_distance=5.0,           # 前瞻距离（米）
+    max_explored_distance=10.0,       # 最大探索距离（米）
+    info_gain_threshold=0.03,         # 信息增益阈值
+    goal_timeout=15.0,                # 目标超时（秒）
+)
 ```
 
-## 关键技术点
+### 地图配置
+```python
+# VoxelGridMapper配置
+VoxelGridMapper.blueprint(
+    voxel_size=0.05,                  # 体素尺寸（米）
+    max_range=10.0,                   # 最大检测范围（米）
+)
 
-### 1. 前沿探索算法
-- 使用现有的 `WavefrontFrontierGoalSelector`
-- 实现前沿点评分机制（距离、信息增益、可达性）
-- 动态更新前沿点集合
+# CostMapper配置
+CostMapper.blueprint(
+    inflation_radius=0.3,             # 障碍物膨胀半径（米）
+    cost_scaling_factor=10.0,         # 代价缩放因子
+)
+```
 
-### 2. SLAM集成
-- 集成现有的点云处理模块
-- 实现增量式地图更新
-- 处理闭环检测（可选）
-
-### 3. 避障策略
-- 实时障碍物检测
-- 动态窗口法（DWA）或时间弹性带（TEB）
-- 紧急避障机制
-
-### 4. 多Agent协调
-- 使用RPC进行Agent间通信
-- 定义清晰的Spec接口
-- 避免循环依赖
-
-### 5. 可视化
-- 集成Rerun可视化
-- 实时显示地图、路径、前沿点
-- 显示探索覆盖率热力图
-
-## 安全考虑
-
-1. **运动安全**:
-   - 速度限制（线速度 < 0.5 m/s，角速度 < 1.0 rad/s）
-   - 最小障碍物距离（> 0.3m）
-   - 紧急停止机制
-
-2. **系统安全**:
-   - 看门狗定时器（超时自动停止）
-   - 传感器故障检测
-   - 电池电量监控
-
-3. **探索边界**:
-   - 定义探索区域边界
-   - 防止机器人走失
-   - 返回起点功能
-
-## 测试策略
-
-### 单元测试
-- 每个模块的独立测试
-- 技能方法的功能测试
-- 边界条件测试
-
-### 集成测试
-- Blueprint构建测试
-- 数据流连接测试
-- Agent间通信测试
-
-### 系统测试
-- 回放模式端到端测试
-- 仿真环境测试
-- 真实硬件测试
-
-## 性能指标
-
-- **探索效率**: 单位时间覆盖面积
-- **地图质量**: 地图准确度、一致性
-- **实时性**: 控制循环频率（目标 > 10Hz）
-- **资源占用**: CPU、内存使用率
-- **探索完成时间**: 达到覆盖率阈值的时间
-
-## 参考资料
-
-### DimOS文档
-- [Modules](docs/usage/modules.md)
-- [Blueprints](docs/usage/blueprints.md)
-- [Agent System](docs/agents/)
-- [Navigation](docs/capabilities/navigation/native/index.md)
-
-### 现有实现参考
-- `dimos/robot/unitree/go2/blueprints/agentic/unitree_go2_agentic.py`
-- `dimos/navigation/frontier_exploration/wavefront_frontier_goal_selector.py`
-- `dimos/agents/skills/navigation.py`
-- `dimos/mapping/occupancy/`
-
-### 相关论文
-- Frontier-Based Exploration
-- Occupancy Grid Mapping
-- SLAM算法（ORB-SLAM, Cartographer等）
+### 导航配置
+```python
+# ReplanningAStarPlanner配置
+ReplanningAStarPlanner.blueprint(
+    max_speed=0.5,                    # 最大速度（m/s）
+    goal_tolerance=0.3,               # 目标容差（米）
+    replan_frequency=2.0,             # 重规划频率（Hz）
+)
+```
 
 ## 开发规范
 
-### 代码风格
-- 遵循DimOS代码规范
-- 使用类型注解（mypy strict mode）
-- 完整的docstring（Google风格）
-- 运行pre-commit hooks
+### 代码组织
+- 所有代码放在 `examples/mapping-go2/` 目录
+- 使用DimOS内置模块，不重复造轮子
+- 新增模块（如MapSaverModule）放在同目录下
 
-### Git工作流
-- 分支命名: `feat/go2-autonomous-exploration`
-- PR目标分支: `dev`
-- 提交信息: 清晰描述变更内容
-- 避免force-push
+### 命名规范
+- 模块类名: PascalCase (如 `MapSaverModule`)
+- 函数名: snake_case (如 `save_map_now`)
+- 常量: UPPER_CASE (如 `DEFAULT_SAVE_DIR`)
 
-### 文档要求
-- 每个模块添加README.md
-- 技能方法必须有完整docstring
-- 更新AGENTS.md中的blueprint列表
-- 添加使用示例
+### 文档规范
+- 每个模块都有docstring说明
+- README.md包含完整的使用说明
+- 代码注释简洁明了
 
-## 下一步行动
+## 测试与验证
 
-1. **创建项目结构**: 建立上述目录和文件框架
-2. **实现Perception Agent**: 从感知模块开始，因为它是数据源
-3. **实现Mapping Agent**: 地图是探索的基础
-4. **实现Planning Agent**: 核心探索逻辑
-5. **实现Review Agent**: 监控和评估
-6. **组装Blueprint**: 连接所有模块
-7. **编写系统提示词**: 指导LLM使用技能
-8. **测试验证**: 从回放到仿真到真机
+### 功能测试
+1. **自主探索**: 机器人能否自动检测前沿点并导航
+2. **地图构建**: 地图是否实时更新，障碍物是否正确标记
+3. **地图保存**: 自动保存和手动保存是否正常工作
+4. **可视化**: Rerun是否正确显示地图、路径、前沿点
+5. **紧急停止**: 各种停止方法是否有效
 
-## 注意事项
+### 性能指标
+- 探索覆盖率 > 90%
+- 地图更新频率 > 1Hz
+- 路径规划时间 < 1秒
+- 地图保存时间 < 2秒
 
-- **不要重复造轮子**: 优先使用dimos现有模块
-- **保持模块独立**: 每个Agent应该是独立的Module
-- **清晰的接口**: 使用Spec定义模块间依赖
-- **完整的类型注解**: 所有In/Out流和方法参数
-- **技能返回字符串**: @skill方法必须返回描述性字符串
-- **避免阻塞**: 长时间任务使用异步或线程
-- **日志记录**: 使用dimos.utils.logging记录关键事件
-- **错误处理**: 优雅处理传感器故障、通信中断等异常
+## 故障排查
 
----
+### 地图未保存
+1. 检查 `maps/` 目录是否存在
+2. 查看MapSaverModule日志
+3. 确认auto_save_interval配置正确
 
-**版本**: v1.0  
-**创建日期**: 2026-05-13  
-**作者**: Claude (Opus 4.7)  
-**适用平台**: Unitree Go2 (Pro/Air)  
-**DimOS版本**: dev branch
+### 探索停滞
+1. 检查是否还有可达的前沿点
+2. 查看WavefrontFrontierExplorer日志
+3. 调整前沿检测参数
+
+### 导航失败
+1. 检查代价地图是否生成
+2. 查看路径规划器状态
+3. 确认目标点可达
+
+## 版本信息
+
+- **版本**: v2.0
+- **创建日期**: 2026-05-13
+- **维护者**: sguanke
+- **适用平台**: Unitree Go2 (Pro/Air)
+- **DimOS版本**: dev branch
+
+## 许可证
+
+Apache License 2.0
