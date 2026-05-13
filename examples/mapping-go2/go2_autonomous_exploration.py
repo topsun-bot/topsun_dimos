@@ -20,15 +20,20 @@
 - 导航模块：路径规划和前沿探索
 - 地图保存：自动保存和手动保存
 
-纯自主模式：无需LLM，机器人自动探索并保存地图。
+纯自主模式：无需 LLM；通过本地 MCP HTTP 调用 ``begin_exploration`` 启动探索。
+也可在运行后用 ``dimos mcp call begin_exploration`` / ``end_exploration`` 手动控制。
 """
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
+from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
+from dimos.agents.mcp.mcp_server import McpServer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
+from dimos.core.global_config import global_config
 from dimos.mapping.costmapper import CostMapper
 from dimos.mapping.voxels import VoxelGridMapper
 from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector import (
@@ -39,9 +44,21 @@ from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
 
 # 导入地图保存模块
-import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from map_saver_module import MapSaverModule
+
+
+def _start_exploration_via_mcp() -> str:
+    """在 MCP 就绪后调用 ``begin_exploration``（不经过 LLM）。"""
+    adapter = McpAdapter()
+    if not adapter.wait_for_ready(timeout=60.0):
+        raise RuntimeError(
+            f"MCP 在 60s 内未就绪（{adapter.url}）。请确认 McpServer 已随蓝图启动。"
+        )
+    try:
+        return adapter.call_tool_text("begin_exploration")
+    except McpError as e:
+        raise RuntimeError(f"MCP 调用 begin_exploration 失败: {e}") from e
 
 
 # 组装完整的自主探索blueprint
@@ -68,6 +85,8 @@ def create_exploration_blueprint(robot_ip: str = None):
                 auto_save_interval=60.0,  # 每60秒自动保存
                 enable_auto_save=True,  # 启用自动保存
             ),
+            # 暴露各模块 @skill（含 WavefrontFrontierExplorer.begin_exploration）
+            McpServer.blueprint(),
         )
         .global_config(
             n_workers=6,  # 使用6个worker进程
@@ -84,6 +103,11 @@ def main() -> None:
     parser.add_argument("--simulation", action="store_true", help="使用MuJoCo仿真模式")
     parser.add_argument("--replay", action="store_true", help="使用回放模式")
     parser.add_argument("--viewer", type=str, choices=["rerun", "rerun-web", "foxglove"], help="启用可视化")
+    parser.add_argument(
+        "--no-mcp-auto-explore",
+        action="store_true",
+        help="不自动 MCP 调用 begin_exploration（可自行 dimos mcp call 或 Web 控制台启动）",
+    )
     args = parser.parse_args()
 
     # 根据参数确定robot_ip
@@ -122,6 +146,10 @@ def main() -> None:
     print("  【地图保存】")
     print("  - MapSaverModule: 自动保存（每60秒）+ 停止时保存")
     print()
+    print("  【MCP】")
+    print(f"  - McpServer: http://127.0.0.1:{global_config.mcp_port}/mcp")
+    print("  - 启动后自动 tools/call begin_exploration（可用 --no-mcp-auto-explore 关闭）")
+    print()
     print("🎯 功能：")
     print("  • 完全自主探索未知区域（无需人工干预）")
     print("  • 实时构建3D体素地图和2D代价地图")
@@ -143,7 +171,18 @@ def main() -> None:
 
     # 创建并运行blueprint
     blueprint = create_exploration_blueprint(robot_ip=robot_ip)
-    ModuleCoordinator.build(blueprint).loop()
+    coordinator = ModuleCoordinator.build(blueprint)
+
+    if not args.no_mcp_auto_explore:
+        try:
+            msg = _start_exploration_via_mcp()
+            print(f"MCP begin_exploration: {msg}")
+        except RuntimeError as e:
+            print(f"错误: {e}")
+            coordinator.stop()
+            raise SystemExit(1) from e
+
+    coordinator.loop()
 
 
 if __name__ == "__main__":
