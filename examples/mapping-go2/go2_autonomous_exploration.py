@@ -56,38 +56,45 @@ from map_saver_module import MapSaverModule
 
 
 # 组装完整的自主探索blueprint
-go2_autonomous_exploration = (
-    autoconnect(
-        # 1. Go2基础连接（传感器和控制）
-        unitree_go2_basic,
-        # 2. 感知模块
-        SpatialMemory.blueprint(),  # 空间记忆（物体跟踪和定位）
-        PerceiveLoopSkill.blueprint(),  # 感知循环技能
-        # 3. 地图构建模块
-        VoxelGridMapper.blueprint(),  # 体素地图（点云->3D地图）
-        CostMapper.blueprint(),  # 代价地图（用于路径规划）
-        # 4. 导航模块
-        ReplanningAStarPlanner.blueprint(),  # A*路径规划器
-        WavefrontFrontierExplorer.blueprint(),  # 前沿探索
-        PatrollingModule.blueprint(),  # 巡逻模块（管理探索目标）
-        # 5. 地图保存模块
-        MapSaverModule.blueprint(
-            save_dir="maps",  # 保存目录
-            auto_save_interval=60.0,  # 每60秒自动保存
-            enable_auto_save=True,  # 启用自动保存
-        ),
-        # 6. 技能容器（为LLM提供导航技能）
-        NavigationSkillContainer.blueprint(),
-        # 7. MCP Server（暴露技能为MCP工具）
-        McpServer.blueprint(),
-        # 8. MCP Client（LLM Agent）
-        McpClient.blueprint(system_prompt=SYSTEM_PROMPT),
+def create_exploration_blueprint(robot_ip: str = None):
+    """创建探索blueprint.
+
+    Args:
+        robot_ip: 机器人IP地址，或 "mujoco"/"replay" 用于仿真/回放模式
+    """
+    return (
+        autoconnect(
+            # 1. Go2基础连接（传感器和控制）
+            unitree_go2_basic,
+            # 2. 感知模块
+            SpatialMemory.blueprint(),  # 空间记忆（物体跟踪和定位）
+            PerceiveLoopSkill.blueprint(),  # 感知循环技能
+            # 3. 地图构建模块
+            VoxelGridMapper.blueprint(),  # 体素地图（点云->3D地图）
+            CostMapper.blueprint(),  # 代价地图（用于路径规划）
+            # 4. 导航模块
+            ReplanningAStarPlanner.blueprint(),  # A*路径规划器
+            WavefrontFrontierExplorer.blueprint(),  # 前沿探索
+            PatrollingModule.blueprint(),  # 巡逻模块（管理探索目标）
+            # 5. 地图保存模块
+            MapSaverModule.blueprint(
+                save_dir="maps",  # 保存目录
+                auto_save_interval=60.0,  # 每60秒自动保存
+                enable_auto_save=True,  # 启用自动保存
+            ),
+            # 6. 技能容器（为LLM提供导航技能）
+            NavigationSkillContainer.blueprint(),
+            # 7. MCP Server（暴露技能为MCP工具）
+            McpServer.blueprint(),
+            # 8. MCP Client（LLM Agent）
+            McpClient.blueprint(system_prompt=SYSTEM_PROMPT),
+        )
+        .global_config(
+            n_workers=11,  # 使用11个worker进程（增加了地图保存模块）
+            robot_model="unitree_go2",
+            robot_ip=robot_ip,  # 设置机器人IP
+        )
     )
-    .global_config(
-        n_workers=11,  # 使用11个worker进程（增加了地图保存模块）
-        robot_model="unitree_go2",
-    )
-)
 
 
 def main() -> None:
@@ -99,14 +106,17 @@ def main() -> None:
     parser.add_argument("--viewer", type=str, choices=["rerun", "rerun-web", "foxglove"], help="启用可视化")
     args = parser.parse_args()
 
-    # 根据参数设置IP
+    # 根据参数确定robot_ip
     if args.simulation:
-        os.environ["ROBOT_IP"] = "mujoco"
+        robot_ip = "mujoco"
         print("🎮 使用MuJoCo仿真模式\n")
     elif args.replay:
-        os.environ["ROBOT_IP"] = "replay"
+        robot_ip = "replay"
         print("📼 使用回放模式\n")
-    elif "ROBOT_IP" not in os.environ:
+    elif "ROBOT_IP" in os.environ:
+        robot_ip = os.environ["ROBOT_IP"]
+        print(f"🤖 连接到真实硬件: {robot_ip}\n")
+    else:
         print("⚠️  警告: 未设置ROBOT_IP环境变量")
         print("   请使用以下方式之一:")
         print("   1. export ROBOT_IP=192.168.123.161  # 真实硬件")
@@ -169,8 +179,9 @@ def main() -> None:
     print("正在启动系统...")
     print()
 
-    # 构建并运行blueprint
-    ModuleCoordinator.build(go2_autonomous_exploration).loop()
+    # 创建并运行blueprint
+    blueprint = create_exploration_blueprint(robot_ip=robot_ip)
+    ModuleCoordinator.build(blueprint).loop()
 
 
 if __name__ == "__main__":
