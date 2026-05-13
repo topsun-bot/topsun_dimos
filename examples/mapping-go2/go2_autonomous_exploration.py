@@ -20,15 +20,14 @@
 - 地图模块：体素地图和代价地图
 - 导航模块：路径规划和前沿探索
 - 地图保存：自动保存和手动保存
-- MCP集成：LLM控制接口
+
+纯自主模式：无需LLM，机器人自动探索并保存地图。
 """
 
 import argparse
 import os
 from pathlib import Path
 
-from dimos.agents.mcp.mcp_client import McpClient
-from dimos.agents.mcp.mcp_server import McpServer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.mapping.costmapper import CostMapper
@@ -41,13 +40,6 @@ from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.perception.perceive_loop_skill import PerceiveLoopSkill
 from dimos.perception.spatial_perception import SpatialMemory
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
-from dimos.robot.unitree.go2.connection import GO2Connection
-
-# 导入技能容器
-from dimos.agents.skills.navigation import NavigationSkillContainer
-
-# 导入系统提示词
-from dimos.agents.system_prompt import SYSTEM_PROMPT
 
 # 导入地图保存模块
 import sys
@@ -57,7 +49,7 @@ from map_saver_module import MapSaverModule
 
 # 组装完整的自主探索blueprint
 def create_exploration_blueprint(robot_ip: str = None):
-    """创建探索blueprint.
+    """创建纯自主探索blueprint（无需LLM）.
 
     Args:
         robot_ip: 机器人IP地址，或 "mujoco"/"replay" 用于仿真/回放模式
@@ -74,7 +66,7 @@ def create_exploration_blueprint(robot_ip: str = None):
             CostMapper.blueprint(),  # 代价地图（用于路径规划）
             # 4. 导航模块
             ReplanningAStarPlanner.blueprint(),  # A*路径规划器
-            WavefrontFrontierExplorer.blueprint(),  # 前沿探索
+            WavefrontFrontierExplorer.blueprint(),  # 前沿探索（自动选择探索目标）
             PatrollingModule.blueprint(),  # 巡逻模块（管理探索目标）
             # 5. 地图保存模块
             MapSaverModule.blueprint(
@@ -82,15 +74,9 @@ def create_exploration_blueprint(robot_ip: str = None):
                 auto_save_interval=60.0,  # 每60秒自动保存
                 enable_auto_save=True,  # 启用自动保存
             ),
-            # 6. 技能容器（为LLM提供导航技能）
-            NavigationSkillContainer.blueprint(),
-            # 7. MCP Server（暴露技能为MCP工具）
-            McpServer.blueprint(),
-            # 8. MCP Client（LLM Agent）
-            McpClient.blueprint(system_prompt=SYSTEM_PROMPT),
         )
         .global_config(
-            n_workers=11,  # 使用11个worker进程（增加了地图保存模块）
+            n_workers=8,  # 使用8个worker进程
             robot_model="unitree_go2",
             robot_ip=robot_ip,  # 设置机器人IP
         )
