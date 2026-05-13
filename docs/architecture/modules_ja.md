@@ -2,7 +2,7 @@
 
 > `dimos/` 配下の 28 個のトップレベルモジュールのセマンティックマップ。`dev` ブランチに対する import グラフとソースコード解析から自動生成。**公開インターフェース**(public surface)のリストは、ソースを掘らずに依存できる最小の安定契約として扱ってください。
 >
-> *英語の原文は:[`modules.md`](./modules.md)、中国語訳は:[`modules_cn.md`](./modules_cn.md)*
+> *英語の原文は:[`docs/architecture/modules.md`](/docs/architecture/modules.md)、中国語訳は:[`docs/architecture/modules_cn.md`](/docs/architecture/modules_cn.md)*
 
 `dimos/__init__.py` は `dimos.porcelain.dimos` から **`Dimos`** だけを遅延ロードします。ほとんどのサブパッケージは `__init__.py` での **export 整理を行っていません**(名前空間スタイルの構成)— 明示的な re-export が追加されない限り、**具体的なモジュール**を公開 API として扱ってください。
 
