@@ -1,0 +1,53 @@
+name: PR Gate
+
+# Lightweight PR gate that runs on GitHub-hosted runners.
+# Purpose: a fast signal for the pr-loop automation, decoupled from the
+# heavy self-hosted ci.yml (ROS Docker, uv sync, mypy, coverage upload).
+#
+# pr-loop.yml watches the `pr-gate` job below via check_runs lookup.
+
+on:
+  push:
+    branches: [main, dev]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-gate:
+    name: pr-gate
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install fast-path test deps
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-timeout
+
+      - name: Syntax check
+        run: |
+          python3 -m compileall -q dimos/
+
+      - name: Fast tests
+        run: |
+          python3 -m pytest dimos/core/tests/test_pr_loop_smoke.py \
+            -v --tb=short -m "not slow" --timeout=30

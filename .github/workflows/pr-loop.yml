@@ -19,9 +19,9 @@ on:
   # Codex submits a review verdict
   pull_request_review:
     types: [submitted]
-  # CI completes — re-evaluate merge eligibility
+  # PR Gate completes — re-evaluate merge eligibility
   workflow_run:
-    workflows: ["ci"]
+    workflows: ["PR Gate"]
     types: [completed]
 
 permissions:
@@ -50,7 +50,7 @@ jobs:
                 repo:  context.repo.repo,
                 ref:   headSha,
               });
-              const job = data.check_runs.find(r => r.name === 'ci-complete');
+              const job = data.check_runs.find(r => r.name === 'pr-gate');
               return job ? job.conclusion : null;   // null = not finished yet
             }
 
