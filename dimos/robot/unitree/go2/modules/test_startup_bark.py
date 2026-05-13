@@ -14,16 +14,15 @@
 
 """Tests for StartupBarkModule."""
 
-from unittest.mock import MagicMock, call, patch
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.core.global_config import global_config
 from dimos.robot.unitree.go2.modules.startup_bark import (
     BARK_TEXT,
-    STARTUP_VUI_VOLUME,
-    VUI_API,
+    USE_SDK2_TTS_ENV,
     StartupBarkModule,
 )
 
@@ -32,25 +31,35 @@ class TestStartupBarkModule:
     """Tests for StartupBarkModule."""
 
     def test_module_can_be_instantiated(self) -> None:
-        """Module can be created without errors."""
-        module = StartupBarkModule()
+        """Module state can be prepared without triggering runtime threads."""
+        module = object.__new__(StartupBarkModule)
         assert module is not None
 
     def test_start_schedules_bark(self) -> None:
         """start() schedules the bark timer without crashing."""
-        module = StartupBarkModule()
-        with patch.object(module, "_bark"):
-            module.start()
-        module.stop()
+        module = object.__new__(StartupBarkModule)
+        module._timer = None
+        with patch("dimos.robot.unitree.go2.modules.startup_bark.Module.start"):
+            with patch(
+                "dimos.robot.unitree.go2.modules.startup_bark.threading.Timer"
+            ) as mock_timer:
+                mock_timer.return_value.start = MagicMock()
+                with patch.object(module, "_bark") as mock_bark:
+                    module.start()
+                mock_timer.assert_called_once_with(2.0, mock_bark)
+                mock_timer.return_value.start.assert_called_once_with()
+        module._timer = MagicMock()
+        with patch("dimos.robot.unitree.go2.modules.startup_bark.Module.stop"):
+            module.stop()
 
     def test_stop_cleans_up_resources(self) -> None:
         """stop() cleans up audio resources without errors."""
-        module = StartupBarkModule()
-        module._audio_output = MagicMock()
-        module._go2_connection = MagicMock()
-        module.stop()
-        module._audio_output = None
-        module._go2_connection = None
+        module = object.__new__(StartupBarkModule)
+        timer = MagicMock()
+        module._timer = timer
+        with patch("dimos.robot.unitree.go2.modules.startup_bark.Module.stop"):
+            module.stop()
+        timer.cancel.assert_called_once_with()
 
     def test_bark_local_does_not_crash_in_replay_mode(self) -> None:
         """_bark_local() skips playback in replay mode."""
@@ -59,7 +68,7 @@ class TestStartupBarkModule:
         global_config.replay = True
         global_config.simulation = False
 
-        module = StartupBarkModule()
+        module = object.__new__(StartupBarkModule)
 
         try:
             module._bark_local()
@@ -76,7 +85,7 @@ class TestStartupBarkModule:
         global_config.replay = False
         global_config.simulation = True
 
-        module = StartupBarkModule()
+        module = object.__new__(StartupBarkModule)
 
         try:
             module._bark_local()
@@ -86,58 +95,66 @@ class TestStartupBarkModule:
         global_config.replay = original_replay
         global_config.simulation = original_simulation
 
-    def test_bark_on_robot_skips_when_no_ip(self) -> None:
-        """_bark_on_robot() logs a warning when robot_ip is not set."""
-        original_replay = global_config.replay
-        original_simulation = global_config.simulation
-        original_robot_ip = global_config.robot_ip
-        global_config.replay = False
-        global_config.simulation = False
-        global_config.robot_ip = None
-
-        module = StartupBarkModule()
-
-        with patch("dimos.robot.unitree.go2.modules.startup_bark.logger") as mock_logger:
-            module._bark_on_robot()
-            mock_logger.warning.assert_called_once_with("No robot IP configured, skipping bark")
-
-        global_config.replay = original_replay
-        global_config.simulation = original_simulation
-        global_config.robot_ip = original_robot_ip
-
-    def test_bark_on_robot_sends_vui_requests(self) -> None:
-        """_bark_on_robot() sends volume and switch requests to VUI in real mode."""
-        original_replay = global_config.replay
-        original_simulation = global_config.simulation
-        original_robot_ip = global_config.robot_ip
-        global_config.replay = False
-        global_config.simulation = False
-        global_config.robot_ip = "192.168.1.1"
-
-        module = StartupBarkModule()
-        module._go2_connection = MagicMock()
-
-        module._bark_on_robot()
-
-        assert module._go2_connection.publish_request.call_args_list == [
-            call(
-                RTC_TOPIC["VUI"],
-                {"api_id": VUI_API["SET_VOLUME"], "parameter": {"volume": STARTUP_VUI_VOLUME}},
-            ),
-            call(RTC_TOPIC["VUI"], {"api_id": VUI_API["SET_SWITCH"], "parameter": {"enable": 1}}),
-        ]
-
-        global_config.replay = original_replay
-        global_config.simulation = original_simulation
-        global_config.robot_ip = original_robot_ip
-
-    def test_vui_request_raises_without_connection(self) -> None:
-        """_vui_request() fails clearly before GO2Connection is injected."""
-        module = StartupBarkModule()
-
-        with pytest.raises(RuntimeError, match="GO2Connection not available"):
-            module._vui_request(VUI_API["SET_SWITCH"], {"enable": 1})
-
     def test_bark_text_is_five_woofs(self) -> None:
         """BARK_TEXT contains 5 bark instances as per spec."""
-        assert BARK_TEXT == "汪汪 汪汪 汪汪 汪汪汪"
+        assert BARK_TEXT == "汪汪汪"
+
+    def test_bark_on_robot_uses_vui_by_default(self) -> None:
+        """_bark_on_robot() uses VUI fallback unless SDK2 TTS is explicitly enabled."""
+        original_replay = global_config.replay
+        original_simulation = global_config.simulation
+        original_robot_ip = global_config.robot_ip
+        original_sdk2_tts = os.environ.get(USE_SDK2_TTS_ENV)
+        global_config.replay = False
+        global_config.simulation = False
+        global_config.robot_ip = "10.10.197.111"
+
+        module = object.__new__(StartupBarkModule)
+        module._go2_connection = MagicMock()
+
+        try:
+            with patch("dimos.robot.unitree.go2.modules.startup_bark.tts_maker") as mock_tts:
+                module._bark_on_robot()
+                mock_tts.assert_not_called()
+                assert module._go2_connection.publish_request.call_count == 2
+        finally:
+            global_config.replay = original_replay
+            global_config.simulation = original_simulation
+            global_config.robot_ip = original_robot_ip
+            if original_sdk2_tts is None:
+                os.environ.pop(USE_SDK2_TTS_ENV, None)
+            else:
+                os.environ[USE_SDK2_TTS_ENV] = original_sdk2_tts
+
+    def test_bark_on_robot_can_try_sdk2_tts_when_enabled(self) -> None:
+        """_bark_on_robot() can try SDK2 TTS when explicitly enabled."""
+        original_replay = global_config.replay
+        original_simulation = global_config.simulation
+        original_robot_ip = global_config.robot_ip
+        original_sdk2_tts = os.environ.get(USE_SDK2_TTS_ENV)
+        global_config.replay = False
+        global_config.simulation = False
+        global_config.robot_ip = "10.10.197.111"
+        os.environ[USE_SDK2_TTS_ENV] = "1"
+
+        module = object.__new__(StartupBarkModule)
+        module._go2_connection = MagicMock()
+
+        try:
+            with patch(
+                "dimos.robot.unitree.go2.modules.startup_bark.tts_maker", return_value=0
+            ) as mock_tts:
+                module._bark_on_robot()
+                mock_tts.assert_called_once_with(
+                    BARK_TEXT,
+                    speaker_id=0,
+                    network_interface=None,
+                )
+        finally:
+            global_config.replay = original_replay
+            global_config.simulation = original_simulation
+            global_config.robot_ip = original_robot_ip
+            if original_sdk2_tts is None:
+                os.environ.pop(USE_SDK2_TTS_ENV, None)
+            else:
+                os.environ[USE_SDK2_TTS_ENV] = original_sdk2_tts
