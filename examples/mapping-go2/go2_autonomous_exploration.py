@@ -92,6 +92,28 @@ go2_autonomous_exploration = (
 
 def main() -> None:
     """主函数 - 构建并运行blueprint."""
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="Unitree Go2 自主探索与地图保存系统")
+    parser.add_argument("--simulation", action="store_true", help="使用MuJoCo仿真模式")
+    parser.add_argument("--replay", action="store_true", help="使用回放模式")
+    parser.add_argument("--viewer", type=str, choices=["rerun", "rerun-web", "foxglove"], help="启用可视化")
+    args = parser.parse_args()
+
+    # 根据参数设置IP
+    if args.simulation:
+        os.environ["ROBOT_IP"] = "mujoco"
+        print("🎮 使用MuJoCo仿真模式\n")
+    elif args.replay:
+        os.environ["ROBOT_IP"] = "replay"
+        print("📼 使用回放模式\n")
+    elif "ROBOT_IP" not in os.environ:
+        print("⚠️  警告: 未设置ROBOT_IP环境变量")
+        print("   请使用以下方式之一:")
+        print("   1. export ROBOT_IP=192.168.123.161  # 真实硬件")
+        print("   2. python ... --simulation          # 仿真模式")
+        print("   3. python ... --replay              # 回放模式")
+        return
+
     print("=" * 70)
     print("Unitree Go2 自主探索与地图绘制系统")
     print("=" * 70)
