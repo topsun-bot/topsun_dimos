@@ -80,6 +80,7 @@ class Go2ConnectionProtocol(Protocol):
     def balance_stand(self) -> bool: ...
     def set_obstacle_avoidance(self, enabled: bool = True) -> None: ...
     def enable_rage_mode(self) -> bool: ...
+    def free_avoid(self, enabled: bool = True) -> bool: ...
     def publish_request(self, topic: str, data: dict) -> dict: ...  # type: ignore[type-arg]
 
 
@@ -165,6 +166,9 @@ class ReplayConnection(UnitreeWebRTCConnection):
         pass
 
     def enable_rage_mode(self) -> bool:
+        return True
+
+    def free_avoid(self, enabled: bool = True) -> bool:
         return True
 
     @simple_mcache
@@ -265,6 +269,18 @@ class GO2Connection(Module, Camera, Pointcloud):
             self.connection.enable_rage_mode()
 
         self.connection.set_obstacle_avoidance(self.config.g.obstacle_avoidance)
+        # Toggle Unitree's hidden FreeAvoid sport-mode AI obstacle-avoidance
+        # (SportClient::FreeAvoid, sport api_id=2048). See `free_avoid` on the
+        # underlying connection for details.
+        try:
+            free_avoid_ack = self.connection.free_avoid(self.config.g.free_avoid)
+            logger.info(
+                "FreeAvoid (sport api_id=2048) "
+                f"{'enabled' if self.config.g.free_avoid else 'disabled'}, "
+                f"ack={free_avoid_ack}"
+            )
+        except Exception as e:  # noqa: BLE001 - non-fatal best-effort toggle
+            logger.warning(f"FreeAvoid toggle failed (non-fatal): {e}")
 
         # self.record("go2_bigoffice")
 
@@ -344,6 +360,18 @@ class GO2Connection(Module, Camera, Pointcloud):
         time.sleep(0.3)
         result = self.connection.enable_rage_mode()
         logger.info("Rage Mode enabled")
+        return result
+
+    @rpc
+    def free_avoid(self, enabled: bool = True) -> bool:
+        """Toggle SportClient's hidden AI obstacle-avoidance (FreeAvoid, sport
+        api_id=2048) at runtime. Ensures BalanceStand precondition regardless
+        of the current FSM state, then forwards to the underlying connection.
+        """
+        self.connection.balance_stand()
+        time.sleep(0.3)
+        result = self.connection.free_avoid(enabled)
+        logger.info(f"FreeAvoid {'enabled' if enabled else 'disabled'}, ack={result}")
         return result
 
     @rpc

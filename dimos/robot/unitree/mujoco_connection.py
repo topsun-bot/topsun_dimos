@@ -240,6 +240,9 @@ class MujocoConnection:
     def enable_rage_mode(self) -> bool:
         return True
 
+    def free_avoid(self, enabled: bool = True) -> bool:
+        return True
+
     def get_video_frame(self) -> NDArray[Any] | None:
         if self.shm_data is None:
             return None

@@ -63,6 +63,12 @@ class GlobalConfig(BaseSettings):
     build_native: bool = DEFAULT_BUILD_NATIVE
     dtop: bool = False
     obstacle_avoidance: bool = True
+    # Whether to enable Unitree SportClient's hidden AI obstacle-avoidance
+    # switch (SportClient::FreeAvoid, sport api_id=2048). This capability is
+    # hidden in Unitree's official SDK and not exposed by the app or remote.
+    # Independent from `obstacle_avoidance` (ObstaclesAvoidClient.SwitchSet
+    # api_id=1001) — both can be enabled simultaneously.
+    free_avoid: bool = True
     detection_model: VlModelName = "moondream"
     listen_host: str = "127.0.0.1"
     dimsim_scene: str = "apt"
