@@ -2,7 +2,7 @@
 
 > `dimos/` 下 28 个顶层模块的语义地图。基于 `dev` 分支的 import 图与源码分析自动整理。**对外接口**(public surface)列表是您可以依赖、不必深挖源码的最小稳定契约。
 >
-> *英文原版见:[`modules.md`](/docs/architecture/modules.md)*
+> *英文原版见:[`docs/architecture/modules.md`](/docs/architecture/modules.md)*
 
 `dimos/__init__.py` 仅惰性加载 `dimos.porcelain.dimos` 中的 **`Dimos`**。绝大多数子包**没有在 `__init__.py` 里精心整理 export**(命名空间式布局)—— 除非显式增加了 re-export,否则请把**具体模块**当作公开 surface 来看。
 
