@@ -28,6 +28,7 @@ from pathlib import Path
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.mapping.costmapper import CostMapper
 from dimos.mapping.voxels import VoxelGridMapper
 from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector import (
