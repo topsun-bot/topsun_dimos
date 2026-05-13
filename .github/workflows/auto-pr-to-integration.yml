@@ -2,8 +2,8 @@
 # GitHub does not create PRs on `git push` by itself; `pr-gate` only merges existing PRs.
 #
 # Pushes directly to `feat/dingyi` do NOT get a PR (you are already on the integration branch).
-# Use a feature branch (e.g. `feat/go2-spin`) and push — this workflow opens
-# `feat/go2-spin` → `feat/dingyi` if no open PR exists yet.
+# Prefer `bin/topsun-dev-push` locally: it branches from `feat/dingyi`, commits, pushes — then this
+# workflow opens a ready PR → `feat/dingyi` if none exists; `pr-gate` merges and deletes the head branch.
 
 name: Auto-open PR to integration branch
 
@@ -51,9 +51,9 @@ jobs:
               title: `[auto] ${head}`,
               head,
               base,
-              draft: true,
+              draft: false,
               body:
-                'Draft PR opened by [`auto-pr-to-integration`](.github/workflows/auto-pr-to-integration.yml).\n\n' +
-                'Edit title/body, mark ready for review, then let CI + `pr-gate` run.',
+                'PR opened by [`auto-pr-to-integration`](.github/workflows/auto-pr-to-integration.yml).\n\n' +
+                'CI runs on this PR; `pr-gate` squash-merges when all checks are green (and deletes this branch after merge).',
             });
             core.info(`Created draft PR #${created.number}: ${created.html_url}`);

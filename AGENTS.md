@@ -380,8 +380,8 @@ CI asserts the file is current — if it's stale, CI fails.
 ### Topsun fork / this workspace
 
 - **`.cursor/` is gitignored** — Cursor project commands and rules are not committed; keep them local.
-- **`topsun-pipeline.yaml`** (repo root) holds this fork’s **GitHub URL**, default PR base **`feat/dingyi`**, and when to **auto-continue** after green local tests (**review → git → ci_cd → ship**) in one agent pass unless blocked (credentials, conflicts, or explicit user stop). Use that file instead of guessing the remote.
-- **Auto PR:** GitHub does not create PRs on push. Workflow **`auto-pr-to-integration`** opens a **draft** PR **into `feat/dingyi`** when you push a **branch other than** `main` / `dev` / **`feat/dingyi`** (e.g. `feat/my-feature`). Pushing **directly to `feat/dingyi`** will not open a PR by design.
+- **`topsun-pipeline.yaml`** — canonical **repo URL**, integration branch **`feat/dingyi`**, and the **full automation diagram** (local script → PR → CI → merge → delete head branch).
+- **Automated path (recommended):** run **`bin/topsun-dev-push "type(scope): message"`** from the repo root. It creates a **timestamped feature branch** from **`origin/feat/dingyi`**, commits your staged changes (or runs **`git add -u`** if the index is empty), **pushes once**, then GitHub Actions **`auto-pr-to-integration`** opens a **ready** PR into **`feat/dingyi`**, **`pr-gate`** **squash-merges** when checks are green, then **deletes the feature branch**. Pushing **only** to **`feat/dingyi`** bypasses that flow by design.
 
 ---
 

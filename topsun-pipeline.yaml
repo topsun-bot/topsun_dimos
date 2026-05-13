@@ -10,10 +10,18 @@ repository:
 git:
   # Upstream AGENTS.md says PRs target `dev`; this workspace lands integration work on:
   default_pr_base_branch: feat/dingyi
-  # GitHub never opens a PR on `git push` by default. `pr-gate` only merges an *existing* PR.
-  # Pushes **to** `default_pr_base_branch` do not create a PR (you are already on integration).
-  # Push a **feature branch** (e.g. `feat/foo` other than `feat/dingyi`) to trigger
-  # `.github/workflows/auto-pr-to-integration.yml`, which opens a **draft** PR into `feat/dingyi`.
+
+# One-shot flow from local change → GitHub → merge (no manual PR click if CI is green):
+#
+#   1. Implement + stage (or rely on `bin/topsun-dev-push` to `git add -u` when index empty).
+#   2. Run: `bin/topsun-dev-push "feat(scope): message"` [optional-slug]
+#      — creates `feat/auto-…` from `origin/feat/dingyi`, commits, pushes **one** feature branch.
+#   3. `auto-pr-to-integration` opens a **ready** PR into `feat/dingyi` (if none open for that head).
+#   4. `ci`, `macos`, `pr-gate` (and others) run on the PR.
+#   5. `pr-gate` squash-merges when all checks are green and no blocking Codex P0/P1 on the head SHA.
+#   6. `pr-gate` deletes the **head** branch after a successful merge (same-repo only; never deletes `feat/dingyi`).
+#
+# Pushing **directly** to `feat/dingyi` skips PR automation by design — use `bin/topsun-dev-push` for the full loop.
 
 pipeline:
   # After a full feature cycle (e.g. user `/pipeline`): once **local tests are green**,
@@ -28,7 +36,7 @@ pipeline:
     review:
       summary: Brief code-review mindset; findings by severity; do not edit code unless fixing a blocker.
     git:
-      summary: git status; stage meaningful paths; commit with a clear message; push once (minimize CI churn per AGENTS.md).
+      summary: Prefer `bin/topsun-dev-push` for the automated PR path; otherwise git add/commit once per batch per AGENTS.md.
     ci_cd:
       summary: Point to `repository.actions`; expect workflows `ci`, `pr-gate`, `macos` as applicable; use CI logs to fix failures.
     ship:

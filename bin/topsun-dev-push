@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# End-to-end helper: branch from integration, commit, push → Actions open PR → CI → pr-gate merge → delete branch.
+#
+# Usage:
+#   bin/topsun-dev-push "feat(go2): your message"
+#   bin/topsun-dev-push "fix: thing" optional-slug
+#
+# Env: TOPSUN_REMOTE (default origin), TOPSUN_INTEGRATION_BRANCH (default feat/dingyi)
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+REMOTE="${TOPSUN_REMOTE:-origin}"
+BASE="${TOPSUN_INTEGRATION_BRANCH:-feat/dingyi}"
+
+usage() {
+  echo "Usage: bin/topsun-dev-push <commit-message> [optional-branch-slug]" >&2
+  exit 1
+}
+
+[[ $# -ge 1 ]] || usage
+MSG="$1"
+SLUG_RAW="${2:-}"
+
+if git diff --cached --quiet; then
+  echo "topsun-dev-push: index empty — staging tracked changes (git add -u)..."
+  git add -u
+fi
+
+if git diff --cached --quiet; then
+  echo "topsun-dev-push: nothing to commit. Stage files or make edits, then re-run." >&2
+  exit 1
+fi
+
+stamp="$(date -u +%Y%m%d-%H%M%S)"
+if [[ -n "$SLUG_RAW" ]]; then
+  slug="$(echo "$SLUG_RAW" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-+|-+$//g' | cut -c1-32)"
+  BRANCH="feat/${slug}-${stamp}"
+else
+  slug="$(echo "$MSG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-+|-+$//g' | cut -c1-28)"
+  BRANCH="feat/auto-${stamp}"
+  [[ -n "$slug" ]] && BRANCH="${BRANCH}-${slug}"
+fi
+
+echo "topsun-dev-push: fetching ${REMOTE}/${BASE}..."
+git fetch "$REMOTE" "$BASE"
+
+if ! git show-ref --verify --quiet "refs/remotes/${REMOTE}/${BASE}"; then
+  echo "topsun-dev-push: missing ${REMOTE}/${BASE}. Push ${BASE} once or fix remote name." >&2
+  exit 1
+fi
+
+echo "topsun-dev-push: creating ${BRANCH} from ${REMOTE}/${BASE} (keeping your index)"
+git switch -c "$BRANCH" "${REMOTE}/${BASE}"
+
+git commit -m "$MSG"
+
+echo "topsun-dev-push: pushing ${REMOTE} ${BRANCH}"
+git push -u "$REMOTE" "$BRANCH"
+
+echo ""
+echo "Pushed ${BRANCH}. GitHub Actions: open PR → ${BASE} (if needed), CI, squash-merge, delete ${BRANCH}."
+echo "See topsun-pipeline.yaml (repository.actions)."
