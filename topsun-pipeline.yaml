@@ -10,6 +10,10 @@ repository:
 git:
   # Upstream AGENTS.md says PRs target `dev`; this workspace lands integration work on:
   default_pr_base_branch: feat/dingyi
+  # GitHub never opens a PR on `git push` by default. `pr-gate` only merges an *existing* PR.
+  # Pushes **to** `default_pr_base_branch` do not create a PR (you are already on integration).
+  # Push a **feature branch** (e.g. `feat/foo` other than `feat/dingyi`) to trigger
+  # `.github/workflows/auto-pr-to-integration.yml`, which opens a **draft** PR into `feat/dingyi`.
 
 pipeline:
   # After a full feature cycle (e.g. user `/pipeline`): once **local tests are green**,
