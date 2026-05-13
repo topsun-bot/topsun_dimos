@@ -300,6 +300,44 @@ class UnitreeSkillContainer(Module):
             logger.error(f"Failed to execute {command_name}: {e}")
             return "Failed to execute the command."
 
+    @skill
+    def stand_on_hind_legs(self, recover_after: bool = True) -> str:
+        """Make the Go2 stand up on its hind legs.
+
+        This wraps the official Unitree sport command "FingerHeart", whose motion
+        includes rising onto the hind legs.
+
+        Args:
+            recover_after: If True, send "RecoveryStand" after the motion to
+                return to a stable state for subsequent commands.
+        """
+        balance_id, _ = _UNITREE_COMMANDS["BalanceStand"]
+        finger_id, _ = _UNITREE_COMMANDS["FingerHeart"]
+        recovery_id, _ = _UNITREE_COMMANDS["RecoveryStand"]
+
+        try:
+            # Ensure we are in a stable standing mode before triggering a dynamic motion.
+            self._connection.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": balance_id})
+            time.sleep(0.3)
+
+            # Official motion that rises onto hind legs.
+            self._connection.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": finger_id})
+
+            # Give the motion a moment to start; this is intentionally short and
+            # avoids blocking for the full routine duration (which varies by firmware).
+            time.sleep(0.5)
+
+            if recover_after:
+                time.sleep(0.5)
+                self._connection.publish_request(
+                    RTC_TOPIC["SPORT_MOD"], {"api_id": recovery_id}
+                )
+
+            return "Hind-leg stand motion triggered (FingerHeart)."
+        except Exception as e:
+            logger.error(f"Failed to stand on hind legs: {e}")
+            return "Failed to trigger hind-leg stand motion."
+
 
 _commands = "\n".join(
     [f'- "{name}": {description}' for name, (_, description) in _UNITREE_COMMANDS.items()]
