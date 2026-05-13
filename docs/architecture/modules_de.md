@@ -2,7 +2,7 @@
 
 > Semantische Karte der 28 Top-Level-Module unter `dimos/`. Automatisch erstellt aus Import-Graph- und Quellcode-Analyse auf dem `dev`-Branch. Behandeln Sie die **öffentliche API** (public surface) als den kleinsten stabilen Vertrag, auf den Sie sich verlassen können, ohne den Quellcode zu durchforsten.
 >
-> *Englische Originalversion: [`modules.md`](./modules.md) · 中文: [`modules_cn.md`](./modules_cn.md) · 日本語: [`modules_ja.md`](./modules_ja.md)*
+> *Englische Originalversion: [`docs/architecture/modules.md`](/docs/architecture/modules.md) · 中文: [`docs/architecture/modules_cn.md`](/docs/architecture/modules_cn.md) · 日本語: [`docs/architecture/modules_ja.md`](/docs/architecture/modules_ja.md)*
 
 `dimos/__init__.py` lädt nur **`Dimos`** aus `dimos.porcelain.dimos` lazy. Die meisten Subpakete besitzen **keine kuratierten Exports in der `__init__.py`** (Namespace-artiges Layout) — solange keine expliziten Re-Exports hinzugefügt werden, behandeln Sie **konkrete Module** als die öffentliche API.
 
