@@ -1,5 +1,3 @@
-# Copyright 2025-2026 Dimensional Inc.
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -51,7 +49,9 @@ main = typer.Typer(
     no_args_is_help=True,
 )
 
-load_dotenv()
+# Load .env from the DimOS project root (not cwd, which varies by where dimos is invoked)
+_dimos_root = Path(__file__).resolve().parents[3]
+load_dotenv(_dimos_root / ".env")
 
 
 def create_dynamic_callback():  # type: ignore[no-untyped-def]

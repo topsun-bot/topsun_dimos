@@ -150,7 +150,6 @@ unitree_go2_basic = (
         WebsocketVisModule.blueprint(),
         StartupBarkModule.blueprint(),
     )
-    .connect(GO2Connection.go2_conn, StartupBarkModule.go2_conn)
     .global_config(n_workers=4, robot_model="unitree_go2")
     .configurators(ClockSyncConfigurator())
 )

@@ -14,13 +14,18 @@
 
 """Tests for StartupBarkModule."""
 
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
+from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.core.global_config import global_config
-from dimos.robot.unitree.go2.modules.startup_bark import BARK_TEXT, StartupBarkModule
+from dimos.robot.unitree.go2.modules.startup_bark import (
+    BARK_TEXT,
+    STARTUP_VUI_VOLUME,
+    VUI_API,
+    StartupBarkModule,
+)
 
 
 class TestStartupBarkModule:
@@ -48,39 +53,35 @@ class TestStartupBarkModule:
         module._go2_connection = None
 
     def test_bark_local_does_not_crash_in_replay_mode(self) -> None:
-        """_bark_local() works in replay mode without a speaker (logs warning)."""
+        """_bark_local() skips playback in replay mode."""
         original_replay = global_config.replay
         original_simulation = global_config.simulation
         global_config.replay = True
         global_config.simulation = False
 
         module = StartupBarkModule()
-        module._audio_output = MagicMock()
 
-        with patch.object(module, "_generate_audio", return_value=b"fake_mp3_data"):
-            try:
-                module._bark_local()
-            except Exception as e:
-                pytest.fail(f"_bark_local raised unexpectedly: {e}")
+        try:
+            module._bark_local()
+        except Exception as e:
+            pytest.fail(f"_bark_local raised unexpectedly: {e}")
 
         global_config.replay = original_replay
         global_config.simulation = original_simulation
 
     def test_bark_local_does_not_crash_in_sim_mode(self) -> None:
-        """_bark_local() works in simulation mode without a speaker."""
+        """_bark_local() skips playback in simulation mode."""
         original_replay = global_config.replay
         original_simulation = global_config.simulation
         global_config.replay = False
         global_config.simulation = True
 
         module = StartupBarkModule()
-        module._audio_output = MagicMock()
 
-        with patch.object(module, "_generate_audio", return_value=b"fake_mp3_data"):
-            try:
-                module._bark_local()
-            except Exception as e:
-                pytest.fail(f"_bark_local raised unexpectedly: {e}")
+        try:
+            module._bark_local()
+        except Exception as e:
+            pytest.fail(f"_bark_local raised unexpectedly: {e}")
 
         global_config.replay = original_replay
         global_config.simulation = original_simulation
@@ -104,8 +105,8 @@ class TestStartupBarkModule:
         global_config.simulation = original_simulation
         global_config.robot_ip = original_robot_ip
 
-    def test_bark_on_robot_generates_and_uploads_audio(self) -> None:
-        """_bark_on_robot() calls generate, upload, and play in real mode."""
+    def test_bark_on_robot_sends_vui_requests(self) -> None:
+        """_bark_on_robot() sends volume and switch requests to VUI in real mode."""
         original_replay = global_config.replay
         original_simulation = global_config.simulation
         original_robot_ip = global_config.robot_ip
@@ -114,65 +115,28 @@ class TestStartupBarkModule:
         global_config.robot_ip = "192.168.1.1"
 
         module = StartupBarkModule()
+        module._go2_connection = MagicMock()
 
-        with patch.object(module, "_generate_audio", return_value=b"fake_mp3_data") as mock_gen:
-            with patch.object(
-                module, "_upload_audio_to_robot", return_value="test_uuid"
-            ) as mock_upload:
-                with patch.object(module, "_play_audio_on_robot") as mock_play:
-                    module._bark_on_robot()
-                    mock_gen.assert_called_once_with(BARK_TEXT)
-                    mock_upload.assert_called_once_with(b"fake_mp3_data", filename="bark.wav")
-                    mock_play.assert_called_once_with("test_uuid")
+        module._bark_on_robot()
+
+        assert module._go2_connection.publish_request.call_args_list == [
+            call(
+                RTC_TOPIC["VUI"],
+                {"api_id": VUI_API["SET_VOLUME"], "parameter": {"volume": STARTUP_VUI_VOLUME}},
+            ),
+            call(RTC_TOPIC["VUI"], {"api_id": VUI_API["SET_SWITCH"], "parameter": {"enable": 1}}),
+        ]
 
         global_config.replay = original_replay
         global_config.simulation = original_simulation
         global_config.robot_ip = original_robot_ip
 
-    def test_generate_audio_returns_bytes(self) -> None:
-        """_generate_audio() returns bytes from MiniMax TTS API."""
+    def test_vui_request_raises_without_connection(self) -> None:
+        """_vui_request() fails clearly before GO2Connection is injected."""
         module = StartupBarkModule()
-        fake_hex = "ffd8ffe000104a46494600010100000100010000"
-        fake_response_data = {
-            "base_resp": {"status_code": 0, "status_msg": "success"},
-            "data": {"audio": fake_hex},
-        }
 
-        with patch.dict(os.environ, {"MINIMAX_API_KEY": "test-key"}):
-            with patch(
-                "dimos.robot.unitree.go2.modules.startup_bark.requests.post",
-            ) as mock_post:
-                mock_post.return_value = MagicMock()
-                mock_post.return_value.raise_for_status = MagicMock()
-                mock_post.return_value.json.return_value = fake_response_data
-
-                result = module._generate_audio("test text")
-
-                assert result == bytes.fromhex(fake_hex)
-                mock_post.assert_called_once()
-                call_kwargs = mock_post.call_args.kwargs
-                assert call_kwargs["headers"]["Authorization"] == "Bearer test-key"
-                assert call_kwargs["json"]["model"] == "speech-2.8-hd"
-                assert call_kwargs["json"]["text"] == "test text"
-                assert call_kwargs["json"]["voice_setting"]["voice_id"] == "female-tianmei"
-
-    def test_generate_audio_raises_on_api_error(self) -> None:
-        """_generate_audio() raises RuntimeError on non-zero status_code."""
-        module = StartupBarkModule()
-        fake_response_data = {
-            "base_resp": {"status_code": 10001, "status_msg": "invalid request"},
-        }
-
-        with patch.dict(os.environ, {"MINIMAX_API_KEY": "test-key"}):
-            with patch(
-                "dimos.robot.unitree.go2.modules.startup_bark.requests.post",
-            ) as mock_post:
-                mock_post.return_value = MagicMock()
-                mock_post.return_value.raise_for_status = MagicMock()
-                mock_post.return_value.json.return_value = fake_response_data
-
-                with pytest.raises(RuntimeError, match="MiniMax error:"):
-                    module._generate_audio("test text")
+        with pytest.raises(RuntimeError, match="GO2Connection not available"):
+            module._vui_request(VUI_API["SET_SWITCH"], {"enable": 1})
 
     def test_bark_text_is_five_woofs(self) -> None:
         """BARK_TEXT contains 5 bark instances as per spec."""
