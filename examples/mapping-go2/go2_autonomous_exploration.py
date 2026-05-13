@@ -146,7 +146,7 @@ def main() -> None:
     print()
 
     # 构建并运行blueprint
-    go2_autonomous_exploration.build().loop()
+    ModuleCoordinator.build(go2_autonomous_exploration).loop()
 
 
 if __name__ == "__main__":
