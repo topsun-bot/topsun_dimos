@@ -84,3 +84,5 @@ htmlcov/
 
 # Memory2 autorecord
 recording*.db
+
+.ai_longrun_harness
