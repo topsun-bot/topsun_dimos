@@ -102,6 +102,9 @@ class Go2FleetConnection(GO2Connection):
 
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
+        self._resume_from_idle_rest_if_needed(twist, duration)
+        if self._is_motion_command(twist, duration):
+            self._mark_action()
         results: list[bool] = []
         for conn in self._all_connections:
             try:
@@ -113,6 +116,7 @@ class Go2FleetConnection(GO2Connection):
 
     @rpc
     def standup(self) -> bool:
+        self._mark_action()
         results: list[bool] = []
         for conn in self._all_connections:
             try:
@@ -124,6 +128,7 @@ class Go2FleetConnection(GO2Connection):
 
     @rpc
     def liedown(self) -> bool:
+        self._mark_action()
         results: list[bool] = []
         for conn in self._all_connections:
             try:
@@ -136,6 +141,7 @@ class Go2FleetConnection(GO2Connection):
     @rpc
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
         """Publish a request to all robots, return primary's response."""
+        self._mark_action()
         for conn in self._extra_connections:
             try:
                 conn.publish_request(topic, data)

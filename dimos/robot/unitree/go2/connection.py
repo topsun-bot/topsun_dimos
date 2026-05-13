@@ -14,14 +14,15 @@
 
 from enum import Enum
 import sys
-from threading import Thread
+from threading import Event, Lock, Thread
 import time
 from typing import TYPE_CHECKING, Any, Protocol
 
-from pydantic import Field
+from pydantic import Field, PositiveFloat
 from reactivex.disposable import Disposable
 from reactivex.observable import Observable
 import rerun.blueprint as rrb
+from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.agents.annotation import skill
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
@@ -56,6 +57,10 @@ else:
 logger = setup_logger()
 
 
+GO2_SIT_API_ID = 1009
+GO2_RISE_SIT_API_ID = 1010
+
+
 class Go2Mode(str, Enum):
     DEFAULT = "default"
     RAGE = "rage"
@@ -64,6 +69,10 @@ class Go2Mode(str, Enum):
 class ConnectionConfig(ModuleConfig):
     ip: str = Field(default_factory=lambda m: m["g"].robot_ip)
     mode: Go2Mode = Go2Mode.DEFAULT
+    idle_rest_enabled: bool = True
+    idle_rest_after_startup_s: PositiveFloat = 5.0
+    idle_rest_poll_s: PositiveFloat = 0.1
+    idle_rest_resume_s: PositiveFloat = 1.0
 
 
 class Go2ConnectionProtocol(Protocol):
@@ -204,6 +213,11 @@ class GO2Connection(Module, Camera, Pointcloud):
     connection: Go2ConnectionProtocol
     camera_info_static: CameraInfo = _camera_info_static()
     _camera_info_thread: Thread | None = None
+    _idle_rest_thread: Thread | None = None
+    _idle_rest_stop: Event
+    _idle_rest_lock: Lock
+    _last_action_at: float
+    _idle_resting: bool
     _latest_video_frame: Image | None = None
 
     @classmethod
@@ -222,6 +236,11 @@ class GO2Connection(Module, Camera, Pointcloud):
 
         if hasattr(self.connection, "camera_info_static"):
             self.camera_info_static = self.connection.camera_info_static
+
+        self._last_action_at = time.monotonic()
+        self._idle_rest_stop = Event()
+        self._idle_rest_lock = Lock()
+        self._idle_resting = False
 
     @rpc
     def record(self, recording_name: str) -> None:
@@ -258,17 +277,20 @@ class GO2Connection(Module, Camera, Pointcloud):
 
         self.standup()
         time.sleep(3)
-        self.connection.balance_stand()
+        self.balance_stand()
 
         if self.config.mode == Go2Mode.RAGE:
-            self.connection.enable_rage_mode()
+            self.enable_rage_mode()
 
         self.connection.set_obstacle_avoidance(self.config.g.obstacle_avoidance)
+        self._mark_action()
+        self._start_idle_rest_monitor()
 
         # self.record("go2_bigoffice")
 
     @rpc
     def stop(self) -> None:
+        self._stop_idle_rest_monitor()
         self.liedown()
 
         if self.connection:
@@ -314,24 +336,95 @@ class GO2Connection(Module, Camera, Pointcloud):
             self.camera_info.publish(self.camera_info_static)
             time.sleep(1.0)
 
+    def _mark_action(self) -> None:
+        with self._idle_rest_lock:
+            self._last_action_at = time.monotonic()
+            self._idle_resting = False
+
+    def _start_idle_rest_monitor(self) -> None:
+        if not self.config.idle_rest_enabled:
+            return
+        if self._idle_rest_thread and self._idle_rest_thread.is_alive():
+            return
+
+        self._idle_rest_stop.clear()
+        self._idle_rest_thread = Thread(
+            target=self._idle_rest_loop,
+            name="go2-idle-rest",
+            daemon=True,
+        )
+        self._idle_rest_thread.start()
+
+    def _stop_idle_rest_monitor(self) -> None:
+        self._idle_rest_stop.set()
+        if self._idle_rest_thread and self._idle_rest_thread.is_alive():
+            self._idle_rest_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+        self._idle_rest_thread = None
+
+    def _idle_rest_loop(self) -> None:
+        while not self._idle_rest_stop.wait(float(self.config.idle_rest_poll_s)):
+            should_rest = False
+            with self._idle_rest_lock:
+                idle_for_s = time.monotonic() - self._last_action_at
+                if not self._idle_resting and idle_for_s >= float(
+                    self.config.idle_rest_after_startup_s
+                ):
+                    self._idle_resting = True
+                    should_rest = True
+
+            if should_rest:
+                logger.info(
+                    "No Go2 action within %.2fs; sending Sit command",
+                    self.config.idle_rest_after_startup_s,
+                )
+                try:
+                    self.connection.publish_request(
+                        RTC_TOPIC["SPORT_MOD"], {"api_id": GO2_SIT_API_ID}
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send idle Sit command: {e}")
+
+    def _is_motion_command(self, twist: Twist, duration: float) -> bool:
+        return bool(twist) or duration > 0.0
+
+    def _resume_from_idle_rest_if_needed(self, twist: Twist, duration: float) -> None:
+        if not self._is_motion_command(twist, duration):
+            return
+
+        with self._idle_rest_lock:
+            if not self._idle_resting:
+                return
+            self._idle_resting = False
+
+        logger.info("Resuming Go2 from idle rest before movement")
+        self.connection.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": GO2_RISE_SIT_API_ID})
+        time.sleep(float(self.config.idle_rest_resume_s))
+        self.connection.balance_stand()
+
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         """Send movement command to robot."""
+        self._resume_from_idle_rest_if_needed(twist, duration)
+        if self._is_motion_command(twist, duration):
+            self._mark_action()
         return self.connection.move(twist, duration)
 
     @rpc
     def standup(self) -> bool:
         """Make the robot stand up."""
+        self._mark_action()
         return self.connection.standup()
 
     @rpc
     def liedown(self) -> bool:
         """Make the robot lie down."""
+        self._mark_action()
         return self.connection.liedown()
 
     @rpc
     def balance_stand(self) -> bool:
         """Enter BalanceStand: neutral state for switching locomotion modes"""
+        self._mark_action()
         return self.connection.balance_stand()
 
     @rpc
@@ -339,6 +432,7 @@ class GO2Connection(Module, Camera, Pointcloud):
         """Enable Rage Mode (~2.5 m/s forward velocity envelope).
         Ensures BalanceStand precondition regardless of current FSM state.
         """
+        self._mark_action()
         self.connection.balance_stand()
         time.sleep(0.3)
         result = self.connection.enable_rage_mode()
@@ -354,6 +448,7 @@ class GO2Connection(Module, Camera, Pointcloud):
         Returns:
             The result of the publish request
         """
+        self._mark_action()
         return self.connection.publish_request(topic, data)
 
     @skill
