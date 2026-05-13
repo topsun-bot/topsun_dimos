@@ -23,6 +23,8 @@
 - MCP集成：LLM控制接口
 """
 
+import argparse
+import os
 from pathlib import Path
 
 from dimos.agents.mcp.mcp_client import McpClient
