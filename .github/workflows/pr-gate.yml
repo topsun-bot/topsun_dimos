@@ -30,7 +30,9 @@ jobs:
     name: pr-gate
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20-min envelope = head steps (~3 min) + 12-min wait window + 5-min merge
+    # buffer, so a green PR is never killed while waiting on Codex feedback.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
