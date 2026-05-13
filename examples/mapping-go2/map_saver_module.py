@@ -27,9 +27,9 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-from dimos.utils.logging import get_logger
+from dimos.utils.logging_config import setup_logger
 
-logger = get_logger(__name__)
+logger = setup_logger()
 
 
 class MapSaverModule(Module):
