@@ -40,7 +40,7 @@ jobs:
   checks:
     needs: [check-changes]
     if: needs.check-changes.outputs.should-run == 'true'
-    runs-on: [self-hosted, macos, arm64]
+    runs-on: macos-latest
     timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

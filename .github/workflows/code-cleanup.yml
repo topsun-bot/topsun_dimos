@@ -11,14 +11,10 @@ permissions:
 jobs:
   pre-commit:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-    - name: Fix permissions
-      run: |
-        sudo chown -R $USER:$USER ${{ github.workspace }} || true
-
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0
