@@ -24,12 +24,20 @@ import numpy as np
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
-from dimos.core.module import Module
+from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+
+class MapSaverConfig(ModuleConfig):
+    """地图保存模块配置."""
+
+    save_dir: str = "maps"
+    auto_save_interval: float = 60.0
+    enable_auto_save: bool = True
 
 
 class MapSaverModule(Module):
@@ -42,20 +50,16 @@ class MapSaverModule(Module):
     - 保存地图元数据
     """
 
+    config: MapSaverConfig
     # 输入流
     global_costmap: In[OccupancyGrid]
 
-    def __init__(
-        self,
-        save_dir: str = "maps",
-        auto_save_interval: float = 60.0,  # 自动保存间隔（秒）
-        enable_auto_save: bool = True,
-    ) -> None:
-        super().__init__()
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
 
-        self._save_dir = Path(save_dir)
-        self._auto_save_interval = auto_save_interval
-        self._enable_auto_save = enable_auto_save
+        self._save_dir = Path(self.config.save_dir)
+        self._auto_save_interval = self.config.auto_save_interval
+        self._enable_auto_save = self.config.enable_auto_save
 
         self._last_map: Optional[OccupancyGrid] = None
         self._last_save_time = 0.0
