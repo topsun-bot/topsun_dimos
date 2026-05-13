@@ -127,6 +127,7 @@ all_modules = {
     "cartesian-motion-controller": "dimos.manipulation.control.servo_control.cartesian_motion_controller.CartesianMotionController",
     "control-coordinator": "dimos.control.coordinator.ControlCoordinator",
     "cost-mapper": "dimos.mapping.costmapper.CostMapper",
+    "crow-agent": "dimos.agents.crow_agent.CrowAgent",
     "demo-calculator-skill": "dimos.agents.skills.demo_calculator_skill.DemoCalculatorSkill",
     "demo-robot": "dimos.agents.skills.demo_robot.DemoRobot",
     "detection2-d-module": "dimos.perception.detection.module2D.Detection2DModule",
