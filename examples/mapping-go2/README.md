@@ -21,49 +21,64 @@
         ┌─────────────────────┼─────────────────────┐
         │                     │                     │
 ┌───────▼────────┐  ┌────────▼────────┐  ┌────────▼────────┐
-│ VoxelGrid      │  │ Replanning      │  │ Wavefront       │
-│ Mapper         │  │ A* Planner      │  │ Frontier        │
-│                │  │                 │  │ Explorer        │
-│ - 点云->3D地图 │  │ - A*路径规划    │  │ - 前沿检测      │
-│ - 体素网格     │  │ - 动态重规划    │  │ - 目标选择      │
-│ - 障碍物检测   │  │ - 避障控制      │  │ - 探索策略      │
+│ Spatial        │  │ VoxelGrid       │  │ Replanning      │
+│ Memory         │  │ Mapper          │  │ A* Planner      │
+│                │  │                 │  │                 │
+│ - 物体跟踪     │  │ - 点云->3D地图  │  │ - A*路径规划    │
+│ - 空间记忆     │  │ - 体素网格      │  │ - 动态重规划    │
+│ - 物体定位     │  │ - 障碍物检测    │  │ - 避障控制      │
 └────────────────┘  └─────────────────┘  └─────────────────┘
         │                     │                     │
         └─────────────────────┼─────────────────────┘
                               │
-                    ┌─────────▼─────────┐
-                    │  CostMapper       │
-                    │                   │
-                    │  - 代价地图生成   │
-                    │  - 障碍物膨胀     │
-                    └───────────────────┘
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+┌───────▼────────┐  ┌────────▼────────┐  ┌────────▼────────┐
+│ Perceive       │  │ CostMapper      │  │ Wavefront       │
+│ Loop Skill     │  │                 │  │ Frontier        │
+│                │  │                 │  │ Explorer        │
+│ - 感知循环     │  │ - 代价地图生成  │  │ - 前沿检测      │
+│ - 物体识别     │  │ - 障碍物膨胀    │  │ - 目标选择      │
+└────────────────┘  └─────────────────┘  └─────────────────┘
 ```
 
 ## 核心模块
 
-### 1. VoxelGridMapper (体素地图)
+### 1. SpatialMemory (空间记忆)
+- 跟踪环境中的物体
+- 维护物体的空间位置
+- 提供物体查询接口
+- 支持物体持久化记忆
+
+### 2. PerceiveLoopSkill (感知循环技能)
+- 持续感知环境
+- 物体识别和分类
+- 为LLM提供感知技能接口
+- 支持查询"看到了什么"
+
+### 3. VoxelGridMapper (体素地图)
 - 将点云数据转换为3D体素网格
 - 实时更新地图
 - 障碍物检测
 
-### 2. CostMapper (代价地图)
+### 4. CostMapper (代价地图)
 - 生成导航代价地图
 - 障碍物膨胀（安全距离）
 - 为路径规划提供代价信息
 
-### 3. ReplanningAStarPlanner (A*规划器)
+### 5. ReplanningAStarPlanner (A*规划器)
 - A*算法路径规划
 - 动态重规划（环境变化时）
 - 平滑路径跟踪
 - 避障控制
 
-### 4. WavefrontFrontierExplorer (前沿探索)
+### 6. WavefrontFrontierExplorer (前沿探索)
 - Wavefront算法检测前沿点
 - 自动选择最优探索目标
 - 信息增益评估
 - 探索完成判断
 
-### 5. PatrollingModule (巡逻模块)
+### 7. PatrollingModule (巡逻模块)
 - 管理探索目标队列
 - 目标切换逻辑
 - 探索进度跟踪
@@ -111,7 +126,7 @@ dimos mcp call get_navigation_state
 
 ## 可用技能
 
-通过NavigationSkillContainer提供的技能：
+### 导航技能 (NavigationSkillContainer)
 
 - **set_goal(x: float, y: float, theta: float)**: 设置导航目标
   - x, y: 目标位置（米）
@@ -121,6 +136,15 @@ dimos mcp call get_navigation_state
 
 - **get_navigation_state()**: 获取当前导航状态
   - 返回: IDLE, NAVIGATING, GOAL_REACHED等
+
+### 感知技能 (PerceiveLoopSkill)
+
+- **perceive_objects()**: 感知当前环境中的物体
+  - 返回检测到的物体列表
+
+- **query_spatial_memory(query: str)**: 查询空间记忆
+  - 例如: "where is the chair?"
+  - 返回物体的位置信息
 
 ## 配置参数
 
@@ -226,11 +250,18 @@ python examples/mapping-go2/go2_autonomous_exploration.py --viewer rerun-web
 ## 数据流
 
 ```
+【感知流】
+相机 + 点云 → SpatialMemory → 物体跟踪
+                    ↓
+            PerceiveLoopSkill → 物体识别
+
+【地图流】
 点云传感器 → VoxelGridMapper → 3D体素地图
                     ↓
               CostMapper → 代价地图
-                    ↓
-         WavefrontFrontierExplorer → 前沿点
+
+【导航流】
+代价地图 → WavefrontFrontierExplorer → 前沿点
                     ↓
            PatrollingModule → 探索目标
                     ↓
