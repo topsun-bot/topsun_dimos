@@ -57,6 +57,9 @@ yolo11n.pt
 **/CLAUDE.md
 .direnv/
 
+# ai_longrun_harness - ignore entire workflow directory
+.ai_longrun_harness/
+
 /logs
 
 *.so
