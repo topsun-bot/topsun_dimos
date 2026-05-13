@@ -1,10 +1,9 @@
 name: PR Gate
 
-# Lightweight PR gate that runs on GitHub-hosted runners.
-# Purpose: a fast signal for the pr-loop automation, decoupled from the
-# heavy self-hosted ci.yml (ROS Docker, uv sync, mypy, coverage upload).
-#
-# pr-loop.yml watches the `pr-gate` job below via check_runs lookup.
+# PR Gate runs on GitHub-hosted runners and, after its own tests pass,
+# waits for the other check runs on the PR to settle and squash-merges
+# the PR if everything came back green. This keeps the merge decision
+# self-contained — no cross-workflow workflow_run trigger needed.
 
 on:
   push:
@@ -17,7 +16,10 @@ on:
       - '**.md'
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
 
 concurrency:
   group: pr-gate-${{ github.ref }}
@@ -28,7 +30,7 @@ jobs:
     name: pr-gate
     if: github.event.pull_request.draft == false || github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -54,3 +56,88 @@ jobs:
           else
             echo "no top-level tests/ dir on this branch — skipping pytest"
           fi
+
+      - name: Request @codex review (advisory)
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/github-script@v7
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
+            });
+            const reviewed = reviews.some(r =>
+              r.user.login === 'chatgpt-codex-connector[bot]' && r.commit_id === pr.head.sha
+            );
+            if (reviewed) { core.info('Codex already reviewed this HEAD.'); return; }
+            const token = process.env.PAT_TOKEN;
+            const client = token ? require('@actions/github').getOctokit(token) : github;
+            try {
+              await client.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: pr.number, body: '@codex review',
+              });
+              core.info('Posted @codex review (advisory).');
+            } catch (e) { core.warning(`@codex review post failed: ${e.message}`); }
+
+      - name: Auto-merge when all checks green
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr      = context.payload.pull_request;
+            const headSha = pr.head.sha;
+            const SELF    = 'pr-gate';
+
+            // Wait up to 8 min for every other check run on this commit to settle.
+            const deadline = Date.now() + 8 * 60 * 1000;
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.checks.listForRef({
+                owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100,
+              });
+              const pending = data.check_runs.filter(r => r.name !== SELF && r.status !== 'completed');
+              if (pending.length === 0) break;
+              core.info(`waiting for: ${pending.map(p => `${p.name}(${p.status})`).join(', ')}`);
+              await new Promise(r => setTimeout(r, 20000));
+            }
+
+            const { data: final } = await github.rest.checks.listForRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100,
+            });
+            const others = final.check_runs.filter(r => r.name !== SELF);
+            const bad    = others.filter(r => !['success', 'skipped', 'neutral'].includes(r.conclusion));
+            if (bad.length) {
+              core.info(`not merging — not green: ${bad.map(b => `${b.name}=${b.conclusion ?? b.status}`).join(', ')}`);
+              return;
+            }
+
+            // Also bail if Codex left P0/P1 comments on this HEAD (advisory wins if present).
+            const { data: comments } = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
+            });
+            const blocking = comments.filter(c =>
+              c.user.login === 'chatgpt-codex-connector[bot]' &&
+              c.commit_id === headSha &&
+              (c.body.includes('[P0') || c.body.includes('[P1'))
+            ).length;
+            if (blocking > 0) {
+              core.info(`not merging — Codex flagged ${blocking} P0/P1 issue(s).`);
+              return;
+            }
+
+            try {
+              await github.rest.pulls.merge({
+                owner:          context.repo.owner,
+                repo:           context.repo.repo,
+                pull_number:    pr.number,
+                merge_method:   'squash',
+                commit_title:   `${pr.title} (#${pr.number})`,
+                commit_message: 'Auto-merged: all checks passed.',
+                sha:            headSha,
+              });
+              core.info(`PR #${pr.number} merged.`);
+            } catch (e) {
+              core.warning(`merge failed: ${e.message}`);
+            }

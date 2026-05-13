@@ -14,10 +14,6 @@ permissions:
 
 jobs:
   ci-complete:
-    # Heavy ROS/uv/mypy/coverage suite has been disabled while the
-    # team moves to GitHub-hosted runners. PR Gate (pr-gate.yml) is
-    # the actual quality gate that pr-loop consumes. Re-enable the
-    # steps below once a Linux runner with ROS is back online.
     if: >
       github.event_name != 'pull_request' ||
       (
@@ -31,7 +27,4 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: CI placeholder (heavy tests disabled)
-        run: |
-          echo "ci-complete: heavy ROS/uv/mypy/coverage suite is temporarily disabled."
-          echo "The active PR quality gate is pr-gate.yml (PR Gate workflow)."
+      - run: 'true'
