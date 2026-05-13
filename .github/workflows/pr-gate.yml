@@ -49,5 +49,4 @@ jobs:
 
       - name: Fast tests
         run: |
-          python3 -m pytest dimos/core/tests/test_pr_loop_smoke.py \
-            -v --tb=short -m "not slow" --timeout=30
+          python3 -m pytest tests/ -v --tb=short -m "not slow" --timeout=30 --noconftest
