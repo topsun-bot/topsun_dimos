@@ -13,16 +13,22 @@
 # limitations under the License.
 
 import difflib
+from types import MappingProxyType
 from typing import Any
 
 from langchain_core.messages import HumanMessage
 import pytest
 
+from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.navigation.base import NavigationState
 from dimos.robot.unitree.unitree_skill_container import _UNITREE_COMMANDS, UnitreeSkillContainer
+
+_BUILD = MappingProxyType({"g": {"viewer": "none", "n_workers": 1}})
 
 
 class StubNavigation(Module):
@@ -48,6 +54,10 @@ class StubGO2Connection(Module):
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
         return {}
 
+    @rpc
+    def move(self, twist: Twist, duration: float = 0.0) -> bool:
+        return True
+
 
 class MockedUnitreeSkill(UnitreeSkillContainer):
     pass
@@ -72,3 +82,21 @@ def test_did_you_mean() -> None:
     suggestions = difflib.get_close_matches("Pounce", _UNITREE_COMMANDS.keys(), n=3, cutoff=0.6)
     assert "FrontPounce" in suggestions
     assert "Pose" in suggestions
+
+
+def test_spin_in_place_rpc_returns_success_message() -> None:
+    """RPC runs in a worker; we only assert the skill string (integration of blueprint + stub)."""
+    bp = autoconnect(
+        MockedUnitreeSkill.blueprint(),
+        StubNavigation.blueprint(),
+        StubGO2Connection.blueprint(),
+    )
+    coordinator = ModuleCoordinator.build(bp, dict(_BUILD))
+    try:
+        skill = coordinator.get_instance(MockedUnitreeSkill)
+        msg = skill.spin_in_place(yaw_rate=0.9, duration=2.5)
+        assert "Spinning" in msg
+        assert "0.90" in msg or "0.9" in msg
+        assert "2.5" in msg
+    finally:
+        coordinator.stop()

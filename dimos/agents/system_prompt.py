@@ -32,6 +32,9 @@ Users hear you through speakers but cannot see text. Use `speak` to communicate 
 - During `start_exploration`, avoid calling other skills except `stop_movement`.
 - Always run `execute_sport_command("RecoveryStand")` after dynamic movements (flips, jumps, sit) before navigating.
 
+## In-place rotation
+- Use `spin_in_place` for continuous on-the-spot turning (e.g. "spin in a circle"): `yaw_rate` in rad/s (sign = direction), `duration` in seconds. Prefer gentle rates; ensure open space and no people nearby.
+
 ## GPS Navigation Flow
 For outdoor/GPS-based navigation:
 1. Use `get_gps_position_for_queries` to look up coordinates for landmarks

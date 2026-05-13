@@ -82,7 +82,7 @@ class Go2FleetConnection(GO2Connection):
             conn.set_obstacle_avoidance(self.config.g.obstacle_avoidance)
             try:
                 conn.free_avoid(self.config.g.free_avoid)
-            except Exception as e:  # noqa: BLE001 - non-fatal best-effort toggle
+            except Exception as e:  # non-fatal best-effort toggle
                 logger.warning(f"FreeAvoid toggle failed for fleet robot (non-fatal): {e}")
 
     @rpc

@@ -14,8 +14,10 @@
 
 from typing import Any, Protocol
 
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.spec.utils import Spec
 
 
 class GO2ConnectionSpec(Spec, Protocol):
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]: ...
+    def move(self, twist: Twist, duration: float = 0.0) -> bool: ...

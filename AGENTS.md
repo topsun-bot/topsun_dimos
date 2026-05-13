@@ -377,6 +377,11 @@ CI asserts the file is current — if it's stale, CI fails.
 - **Don't force-push** unless after a rebase with conflicts
 - **Minimize pushes** — every push triggers CI (~1 hour on self-hosted runners). Batch commits locally, push once.
 
+### Topsun fork / this workspace
+
+- **`.cursor/` is gitignored** — Cursor project commands and rules are not committed; keep them local.
+- **`topsun-pipeline.yaml`** (repo root) holds this fork’s **GitHub URL**, default PR base **`feat/dingyi`**, and when to **auto-continue** after green local tests (**review → git → ci_cd → ship**) in one agent pass unless blocked (credentials, conflicts, or explicit user stop). Use that file instead of guessing the remote.
+
 ---
 
 ## Further Reading

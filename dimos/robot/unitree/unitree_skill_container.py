@@ -26,6 +26,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
@@ -253,6 +254,33 @@ class UnitreeSkillContainer(Module):
             return "Navigation was cancelled or failed"
         else:
             return "Navigation goal reached"
+
+    @skill
+    def spin_in_place(self, yaw_rate: float = 0.6, duration: float = 4.0) -> str:
+        """Spin the Go2 in place (rotate about the vertical axis) for a fixed time.
+
+        Sends zero linear velocity and constant yaw angular velocity, then the
+        low-level stack stops motion when the duration elapses. Use only with
+        clear space around the robot and moderate rates.
+
+        Args:
+            yaw_rate: Yaw angular velocity in rad/s. Positive is counterclockwise
+                when viewed from above; negative is clockwise.
+            duration: How long to spin in seconds (clamped between 0.5 and 30).
+        """
+        yaw_rate = float(yaw_rate)
+        duration = float(duration)
+        duration = max(0.5, min(duration, 30.0))
+        yaw_rate = max(-1.5, min(yaw_rate, 1.5))
+
+        twist = Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, yaw_rate))
+        ok = self._connection.move(twist, duration=duration)
+        if ok:
+            return (
+                f"Spinning in place at yaw_rate={yaw_rate:.2f} rad/s for {duration:.1f}s "
+                "(linear velocity zero)."
+            )
+        return "Failed to start in-place spin (connection.move returned false)."
 
     def _generate_new_goal(
         self, current_pose: PoseStamped, forward: float, left: float, degrees: float

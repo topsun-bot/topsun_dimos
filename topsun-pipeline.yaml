@@ -1,0 +1,31 @@
+# Topsun workspace — committed pipeline metadata.
+# The `.cursor/` directory is gitignored; keep Cursor commands/rules locally only.
+# Agents doing git / CI / release for this clone should read this file first.
+
+repository:
+  github_https: https://github.com/topsun-bot/topsun_dimos
+  origin_ssh: git@github.com:topsun-bot/topsun_dimos.git
+  actions: https://github.com/topsun-bot/topsun_dimos/actions
+
+git:
+  # Upstream AGENTS.md says PRs target `dev`; this workspace lands integration work on:
+  default_pr_base_branch: feat/dingyi
+
+pipeline:
+  # After a full feature cycle (e.g. user `/pipeline`): once **local tests are green**,
+  # continue **in the same session** without asking to proceed for each phase, unless
+  # blocked (no credentials, merge conflict, user interrupt).
+  auto_after_successful_local_tests:
+    - review
+    - git
+    - ci_cd
+    - ship
+  phases:
+    review:
+      summary: Brief code-review mindset; findings by severity; do not edit code unless fixing a blocker.
+    git:
+      summary: git status; stage meaningful paths; commit with a clear message; push once (minimize CI churn per AGENTS.md).
+    ci_cd:
+      summary: Point to `repository.actions`; expect workflows `ci`, `pr-gate`, `macos` as applicable; use CI logs to fix failures.
+    ship:
+      summary: Short go/no-go checklist; no hardware deploy without explicit human approval.

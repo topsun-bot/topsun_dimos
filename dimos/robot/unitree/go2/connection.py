@@ -278,7 +278,7 @@ class GO2Connection(Module, Camera, Pointcloud):
                 f"{'enabled' if self.config.g.free_avoid else 'disabled'}, "
                 f"ack={free_avoid_ack}"
             )
-        except Exception as e:  # noqa: BLE001 - non-fatal best-effort toggle
+        except Exception as e:  # non-fatal best-effort toggle
             logger.warning(f"FreeAvoid toggle failed (non-fatal): {e}")
 
         # self.record("go2_bigoffice")

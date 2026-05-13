@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - feat/dingyi
     paths-ignore:
       - '**.md'
   pull_request:
