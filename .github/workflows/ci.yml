@@ -26,7 +26,7 @@ jobs:
         )
       )
     timeout-minutes: 60
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/dimensionalos/ros-dev:dev
       env:
