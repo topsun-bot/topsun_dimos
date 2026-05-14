@@ -26,8 +26,8 @@
 
 import argparse
 import os
-import sys
 from pathlib import Path
+import sys
 
 from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
 from dimos.agents.mcp.mcp_server import McpServer
@@ -52,9 +52,7 @@ def _start_exploration_via_mcp() -> str:
     """在 MCP 就绪后调用 ``begin_exploration``(不经过 LLM)."""
     adapter = McpAdapter()
     if not adapter.wait_for_ready(timeout=60.0):
-        raise RuntimeError(
-            f"MCP 在 60s 内未就绪({adapter.url}).请确认 McpServer 已随蓝图启动."
-        )
+        raise RuntimeError(f"MCP 在 60s 内未就绪({adapter.url}).请确认 McpServer 已随蓝图启动.")
     try:
         return adapter.call_tool_text("begin_exploration")
     except McpError as e:
@@ -62,37 +60,34 @@ def _start_exploration_via_mcp() -> str:
 
 
 # 组装完整的自主探索blueprint
-def create_exploration_blueprint(robot_ip: str = None):
+def create_exploration_blueprint(robot_ip: str | None = None):
     """创建纯自主探索blueprint(无需LLM).
 
     Args:
         robot_ip: 机器人IP地址,或 "mujoco"/"replay" 用于仿真/回放模式
     """
-    return (
-        autoconnect(
-            # 1. Go2基础连接(传感器和控制)
-            unitree_go2_basic,
-            # 2. 地图构建模块
-            VoxelGridMapper.blueprint(),  # 体素地图(点云->3D地图)
-            CostMapper.blueprint(),  # 代价地图(用于路径规划)
-            # 3. 导航模块
-            ReplanningAStarPlanner.blueprint(),  # A*路径规划器
-            WavefrontFrontierExplorer.blueprint(),  # 前沿探索(自动选择探索目标)
-            PatrollingModule.blueprint(),  # 巡逻模块(管理探索目标)
-            # 4. 地图保存模块
-            MapSaverModule.blueprint(
-                save_dir="maps",  # 保存目录
-                auto_save_interval=60.0,  # 每60秒自动保存
-                enable_auto_save=True,  # 启用自动保存
-            ),
-            # 暴露各模块 @skill(含 WavefrontFrontierExplorer.begin_exploration)
-            McpServer.blueprint(),
-        )
-        .global_config(
-            n_workers=6,  # 使用6个worker进程
-            robot_model="unitree_go2",
-            robot_ip=robot_ip,  # 设置机器人IP
-        )
+    return autoconnect(
+        # 1. Go2基础连接(传感器和控制)
+        unitree_go2_basic,
+        # 2. 地图构建模块
+        VoxelGridMapper.blueprint(),  # 体素地图(点云->3D地图)
+        CostMapper.blueprint(),  # 代价地图(用于路径规划)
+        # 3. 导航模块
+        ReplanningAStarPlanner.blueprint(),  # A*路径规划器
+        WavefrontFrontierExplorer.blueprint(),  # 前沿探索(自动选择探索目标)
+        PatrollingModule.blueprint(),  # 巡逻模块(管理探索目标)
+        # 4. 地图保存模块
+        MapSaverModule.blueprint(
+            save_dir="maps",  # 保存目录
+            auto_save_interval=60.0,  # 每60秒自动保存
+            enable_auto_save=True,  # 启用自动保存
+        ),
+        # 暴露各模块 @skill(含 WavefrontFrontierExplorer.begin_exploration)
+        McpServer.blueprint(),
+    ).global_config(
+        n_workers=6,  # 使用6个worker进程
+        robot_model="unitree_go2",
+        robot_ip=robot_ip,  # 设置机器人IP
     )
 
 
@@ -102,7 +97,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Unitree Go2 自主探索与地图保存系统")
     parser.add_argument("--simulation", action="store_true", help="使用MuJoCo仿真模式")
     parser.add_argument("--replay", action="store_true", help="使用回放模式")
-    parser.add_argument("--viewer", type=str, choices=["rerun", "rerun-web", "foxglove"], help="启用可视化")
+    parser.add_argument(
+        "--viewer", type=str, choices=["rerun", "rerun-web", "foxglove"], help="启用可视化"
+    )
     parser.add_argument(
         "--no-mcp-auto-explore",
         action="store_true",
