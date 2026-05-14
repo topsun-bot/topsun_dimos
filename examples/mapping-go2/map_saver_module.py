@@ -43,10 +43,10 @@ class MapSaverConfig(ModuleConfig):
 class MapSaverModule(Module):
     """地图保存模块.
 
-    功能：
+    功能:
     - 定期自动保存地图
     - 提供手动保存技能
-    - 支持多种格式（PGM、PNG、NPY）
+    - 支持多种格式(PGM,PNG,NPY)
     - 保存地图元数据
     """
 
@@ -121,7 +121,7 @@ class MapSaverModule(Module):
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         base_name = f"{prefix}_{timestamp}"
 
-        # 保存为PGM格式（ROS标准格式）
+        # 保存为PGM格式(ROS标准格式)
         pgm_path = self._save_dir / f"{base_name}.pgm"
         yaml_path = self._save_dir / f"{base_name}.yaml"
 
@@ -131,7 +131,7 @@ class MapSaverModule(Module):
             height = map_data.info.height
             data = map_data.grid.reshape((height, width))
 
-            # 转换为0-255范围（PGM格式）
+            # 转换为0-255范围(PGM格式)
             # -1 (未知) -> 205
             # 0 (自由) -> 254
             # 100 (障碍) -> 0
@@ -170,35 +170,35 @@ class MapSaverModule(Module):
     def save_map_now(self, name: str = "manual") -> str:
         """立即保存当前地图.
 
-        手动触发地图保存，可以指定文件名前缀。
+        手动触发地图保存,可以指定文件名前缀.
 
         Args:
-            name: 文件名前缀，默认为"manual"
+            name: 文件名前缀,默认为"manual"
 
         Returns:
-            保存结果的描述，包括文件路径
+            保存结果的描述,包括文件路径
         """
         if self._last_map is None:
-            return "错误：当前没有可用的地图数据"
+            return "错误:当前没有可用的地图数据"
 
         file_path = self._save_map_internal(self._last_map, name)
 
         if file_path:
             return (
-                f"地图保存成功：\n"
-                f"  - 文件路径：{file_path}\n"
-                f"  - 地图尺寸：{self._last_map.info.width} x {self._last_map.info.height}\n"
-                f"  - 分辨率：{self._last_map.info.resolution} 米/像素\n"
-                f"  - 总保存次数：{self._save_count}"
+                f"地图保存成功:\n"
+                f"  - 文件路径:{file_path}\n"
+                f"  - 地图尺寸:{self._last_map.info.width} x {self._last_map.info.height}\n"
+                f"  - 分辨率:{self._last_map.info.resolution} 米/像素\n"
+                f"  - 总保存次数:{self._save_count}"
             )
         else:
-            return "错误：地图保存失败，请查看日志"
+            return "错误:地图保存失败,请查看日志"
 
     @skill
     def get_save_status(self) -> str:
         """获取地图保存状态.
 
-        返回自动保存配置和保存历史信息。
+        返回自动保存配置和保存历史信息.
 
         Returns:
             保存状态的描述
@@ -215,13 +215,13 @@ class MapSaverModule(Module):
         next_save_in = max(0, self._auto_save_interval - time_since_save)
 
         return (
-            f"地图保存状态：\n"
-            f"  - 保存目录：{self._save_dir}\n"
-            f"  - 自动保存：{'启用' if self._enable_auto_save else '禁用'}\n"
-            f"  - 保存间隔：{self._auto_save_interval} 秒\n"
-            f"  - 下次自动保存：{next_save_in:.1f} 秒后\n"
-            f"  - 已保存次数：{self._save_count}\n"
-            f"  - 当前地图：{map_status}"
+            f"地图保存状态:\n"
+            f"  - 保存目录:{self._save_dir}\n"
+            f"  - 自动保存:{'启用' if self._enable_auto_save else '禁用'}\n"
+            f"  - 保存间隔:{self._auto_save_interval} 秒\n"
+            f"  - 下次自动保存:{next_save_in:.1f} 秒后\n"
+            f"  - 已保存次数:{self._save_count}\n"
+            f"  - 当前地图:{map_status}"
         )
 
     @skill
@@ -229,7 +229,7 @@ class MapSaverModule(Module):
         """启用或禁用自动保存.
 
         Args:
-            enabled: True启用，False禁用
+            enabled: True启用,False禁用
 
         Returns:
             设置结果的描述
@@ -240,7 +240,7 @@ class MapSaverModule(Module):
         logger.info(f"Auto-save {status}")
 
         return (
-            f"自动保存已{status}：\n"
-            f"  - 保存间隔：{self._auto_save_interval} 秒\n"
-            f"  - 保存目录：{self._save_dir}"
+            f"自动保存已{status}:\n"
+            f"  - 保存间隔:{self._auto_save_interval} 秒\n"
+            f"  - 保存目录:{self._save_dir}"
         )
