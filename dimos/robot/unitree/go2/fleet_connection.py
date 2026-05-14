@@ -87,12 +87,12 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._extra_connections:
             try:
                 conn.liedown()
-            except Exception as exc:
-                logger.error(f"Error lying down fleet Go2: {exc}")
+            except Exception:
+                logger.exception("Error lying down fleet Go2")
             try:
                 conn.stop()
-            except Exception as exc:
-                logger.error(f"Error stopping fleet Go2: {exc}")
+            except Exception:
+                logger.exception("Error stopping fleet Go2")
         self._extra_connections.clear()
         super().stop()
 
@@ -106,8 +106,8 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._all_connections:
             try:
                 results.append(conn.move(twist, duration))
-            except Exception as exc:
-                logger.error(f"Fleet move failed: {exc}")
+            except Exception:
+                logger.exception("Fleet move failed")
                 results.append(False)
         return all(results)
 
@@ -117,8 +117,8 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._all_connections:
             try:
                 results.append(conn.standup())
-            except Exception as exc:
-                logger.error(f"Fleet standup failed: {exc}")
+            except Exception:
+                logger.exception("Fleet standup failed")
                 results.append(False)
         return all(results)
 
@@ -128,8 +128,8 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._all_connections:
             try:
                 results.append(conn.liedown())
-            except Exception as exc:
-                logger.error(f"Fleet liedown failed: {exc}")
+            except Exception:
+                logger.exception("Fleet liedown failed")
                 results.append(False)
         return all(results)
 
@@ -139,6 +139,6 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._extra_connections:
             try:
                 conn.publish_request(topic, data)
-            except Exception as e:
-                logger.error(f"Fleet publish_request failed: {e}")
+            except Exception:
+                logger.exception("Fleet publish_request failed")
         return self.connection.publish_request(topic, data)
