@@ -162,15 +162,26 @@ class JpegLcmTransport(LCMTransport):  # type: ignore[type-arg]
         self._started = False
 
 
+def _reconstruct_pshm_transport(topic: str, kwargs: dict[str, Any]) -> pSHMTransport[Any]:
+    return pSHMTransport(topic, **kwargs)
+
+
 class pSHMTransport(PubSubTransport[T]):
     _started: bool = False
 
     def __init__(self, topic: str, **kwargs) -> None:  # type: ignore[no-untyped-def]
         super().__init__(topic)
+        # Preserve init kwargs so that pickled instances (e.g. those shipped to
+        # forkserver workers) reconstruct with the same configuration.
+        # Without this, default_capacity is lost on the unpickle side and the
+        # SHM segment names diverge (segment names are deterministic on
+        # capacity), causing the publisher and subscriber to attach to
+        # different segments and silently drop all messages.
+        self._init_kwargs: dict[str, Any] = dict(kwargs)
         self.shm = PickleSharedMemory(**kwargs)
 
     def __reduce__(self):  # type: ignore[no-untyped-def]
-        return (pSHMTransport, (self.topic,))
+        return (_reconstruct_pshm_transport, (self.topic, self._init_kwargs))
 
     def broadcast(self, _, msg) -> None:  # type: ignore[no-untyped-def]
         if not self._started:

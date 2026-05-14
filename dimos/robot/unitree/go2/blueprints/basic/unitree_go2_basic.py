@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import platform
 from typing import Any
 
@@ -22,9 +23,13 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.core.transport import pSHMTransport
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.protocol.pubsub.impl.lcmpubsub import LCM
+from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
-from dimos.visualization.vis_module import vis_module
+from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
+
+_logger = logging.getLogger(__name__)
 
 # Mac has some issue with high bandwidth UDP, so we use pSHMTransport for color_image
 # actually we can use pSHMTransport for all platforms, and for all streams
@@ -38,6 +43,57 @@ _mac_transports: dict[tuple[str, type], pSHMTransport[Image]] = {
 _transports_base = (
     autoconnect() if platform.system() == "Linux" else autoconnect().transports(_mac_transports)
 )
+
+
+class _ColorImageSHMSubscriber:
+    """Expose the macOS color_image shared-memory stream to the Rerun bridge."""
+
+    def __init__(self) -> None:
+        self.shm: PickleSharedMemory | None = None
+
+    def start(self) -> None:
+        self.shm = PickleSharedMemory(default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE)
+        self.shm.start()
+
+        import hashlib
+
+        cap = int(self.shm.config.default_capacity)
+        h = hashlib.blake2b(f"color_image:{cap}".encode(), digest_size=8).hexdigest()
+        _logger.info(
+            "ColorImageSHMSubscriber started: capacity=%d (DEFAULT_CAPACITY_COLOR_IMAGE) "
+            "segment=psm_%s_data",
+            cap,
+            h,
+        )
+
+    def stop(self) -> None:
+        if self.shm:
+            self.shm.stop()
+            self.shm = None
+
+    def subscribe_all(self, callback: Any) -> Any:
+        if self.shm is None:
+            self.start()
+
+        seen = {"count": 0}
+
+        def on_color_image(msg: Any, _: str) -> None:
+            seen["count"] += 1
+            if seen["count"] <= 3 or seen["count"] % 60 == 0:
+                data = getattr(msg, "data", None)
+                shape = getattr(data, "shape", None)
+                dtype = getattr(data, "dtype", None)
+                fmt = getattr(msg, "format", None)
+                _logger.info(
+                    "color_image SHM frame #%d shape=%s dtype=%s format=%s",
+                    seen["count"],
+                    shape,
+                    dtype,
+                    fmt,
+                )
+            callback(msg, "/color_image")
+
+        return self.shm.subscribe("color_image", on_color_image)
 
 
 def _convert_camera_info(camera_info: Any) -> Any:
@@ -98,6 +154,10 @@ def _go2_rerun_blueprint() -> Any:
 
 rerun_config = {
     "blueprint": _go2_rerun_blueprint,
+    # any pubsub that supports subscribe_all and topic that supports str(topic)
+    # is acceptable here. macOS publishes color_image over pSHMTransport so we
+    # add a SHM subscriber alongside the default LCM one.
+    "pubsubs": [LCM(), _ColorImageSHMSubscriber()] if platform.system() != "Linux" else [LCM()],
     # Custom converters for specific rerun entity paths
     # Normally all these would be specified in their respectative modules
     # Until this is implemented we have central overrides here
@@ -119,20 +179,30 @@ rerun_config = {
     },
 }
 
-_with_vis = autoconnect(
-    _transports_base,
-    vis_module(
-        viewer_backend=global_config.viewer,
-        rerun_config=rerun_config,
-        foxglove_config={"shm_channels": ["/color_image#sensor_msgs.Image"]},
-    ),
-)
+
+if global_config.viewer == "foxglove":
+    from dimos.robot.foxglove_bridge import FoxgloveBridge
+
+    with_vis = autoconnect(
+        _transports_base,
+        FoxgloveBridge.blueprint(shm_channels=["/color_image#sensor_msgs.Image"]),
+    )
+elif global_config.viewer.startswith("rerun"):
+    from dimos.visualization.rerun.bridge import RerunBridgeModule, _resolve_viewer_mode
+
+    with_vis = autoconnect(
+        _transports_base,
+        RerunBridgeModule.blueprint(viewer_mode=_resolve_viewer_mode(), **rerun_config),
+    )
+else:
+    with_vis = _transports_base
 
 
 unitree_go2_basic = (
     autoconnect(
-        _with_vis,
+        with_vis,
         GO2Connection.blueprint(),
+        WebsocketVisModule.blueprint(),
     )
     .global_config(n_workers=4, robot_model="unitree_go2")
     .configurators(ClockSyncConfigurator())
