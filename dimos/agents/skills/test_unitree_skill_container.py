@@ -53,6 +53,24 @@ class MockedUnitreeSkill(UnitreeSkillContainer):
     pass
 
 
+class RecordingGO2Connection:
+    def __init__(self, fail_on_call: int | None = None) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.fail_on_call = fail_on_call
+
+    def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
+        self.calls.append((topic, data))
+        if self.fail_on_call is not None and len(self.calls) == self.fail_on_call:
+            raise RuntimeError("planned failure")
+        return {}
+
+
+def _unitree_skill_with_connection(connection: RecordingGO2Connection) -> MockedUnitreeSkill:
+    skill = object.__new__(MockedUnitreeSkill)
+    skill._connection = connection
+    return skill
+
+
 @pytest.mark.slow
 def test_pounce(agent_setup) -> None:
     history = agent_setup(
@@ -72,3 +90,57 @@ def test_did_you_mean() -> None:
     suggestions = difflib.get_close_matches("Pounce", _UNITREE_COMMANDS.keys(), n=3, cutoff=0.6)
     assert "FrontPounce" in suggestions
     assert "Pose" in suggestions
+
+
+def test_nod_head_sends_gentle_pitch_sequence(monkeypatch) -> None:
+    monkeypatch.setattr("dimos.robot.unitree.unitree_skill_container.time.sleep", lambda _: None)
+    connection = RecordingGO2Connection()
+    skill = _unitree_skill_with_connection(connection)
+
+    result = skill.nod_head()
+
+    assert result == "Nod head completed."
+    assert connection.calls == [
+        ("rt/api/sport/request", {"api_id": 1002}),
+        (
+            "rt/api/sport/request",
+            {"api_id": 1007, "parameter": {"x": 0.0, "y": -0.22, "z": 0.0}},
+        ),
+        (
+            "rt/api/sport/request",
+            {"api_id": 1007, "parameter": {"x": 0.0, "y": 0.0, "z": 0.0}},
+        ),
+        (
+            "rt/api/sport/request",
+            {"api_id": 1007, "parameter": {"x": 0.0, "y": -0.22, "z": 0.0}},
+        ),
+        (
+            "rt/api/sport/request",
+            {"api_id": 1007, "parameter": {"x": 0.0, "y": 0.0, "z": 0.0}},
+        ),
+        (
+            "rt/api/sport/request",
+            {"api_id": 1007, "parameter": {"x": 0.0, "y": 0.0, "z": 0.0}},
+        ),
+    ]
+
+
+def test_nod_head_restores_neutral_after_failure(monkeypatch) -> None:
+    monkeypatch.setattr("dimos.robot.unitree.unitree_skill_container.time.sleep", lambda _: None)
+    connection = RecordingGO2Connection(fail_on_call=2)
+    skill = _unitree_skill_with_connection(connection)
+
+    result = skill.nod_head()
+
+    assert result == "Failed to nod head."
+    assert connection.calls == [
+        ("rt/api/sport/request", {"api_id": 1002}),
+        (
+            "rt/api/sport/request",
+            {"api_id": 1007, "parameter": {"x": 0.0, "y": -0.22, "z": 0.0}},
+        ),
+        (
+            "rt/api/sport/request",
+            {"api_id": 1007, "parameter": {"x": 0.0, "y": 0.0, "z": 0.0}},
+        ),
+    ]

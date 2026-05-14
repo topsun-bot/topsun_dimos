@@ -34,6 +34,12 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+_GO2_EULER_API_ID = 1007
+_NOD_HEAD_PITCH_RAD = -0.22
+_NOD_HEAD_HOLD_SECONDS = 0.18
+_NOD_HEAD_PAUSE_SECONDS = 0.12
+_NOD_HEAD_REPETITIONS = 2
+
 
 UNITREE_WEBRTC_CONTROLS: list[tuple[str, int, str]] = [
     # ("Damp", 1001, "Lowers the robot to the ground fully."),
@@ -282,6 +288,46 @@ class UnitreeSkillContainer(Module):
     def current_time(self) -> str:
         """Provides current time."""
         return str(datetime.datetime.now())
+
+    @skill
+    def nod_head(self) -> str:
+        """Nod the Go2's body gently as an affirmative gesture.
+
+        Use this when the robot should nod, say yes, acknowledge a command, or perform a small
+        confirmation gesture.
+        """
+        neutral_euler = {"x": 0.0, "y": 0.0, "z": 0.0}
+        nod_euler = {"x": 0.0, "y": _NOD_HEAD_PITCH_RAD, "z": 0.0}
+
+        try:
+            balance_stand_id, _ = _UNITREE_COMMANDS["BalanceStand"]
+            self._connection.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": balance_stand_id})
+            time.sleep(_NOD_HEAD_PAUSE_SECONDS)
+
+            for _ in range(_NOD_HEAD_REPETITIONS):
+                self._connection.publish_request(
+                    RTC_TOPIC["SPORT_MOD"],
+                    {"api_id": _GO2_EULER_API_ID, "parameter": nod_euler},
+                )
+                time.sleep(_NOD_HEAD_HOLD_SECONDS)
+                self._connection.publish_request(
+                    RTC_TOPIC["SPORT_MOD"],
+                    {"api_id": _GO2_EULER_API_ID, "parameter": neutral_euler},
+                )
+                time.sleep(_NOD_HEAD_PAUSE_SECONDS)
+
+            return "Nod head completed."
+        except Exception as e:
+            logger.error(f"Failed to nod head: {e}")
+            return "Failed to nod head."
+        finally:
+            try:
+                self._connection.publish_request(
+                    RTC_TOPIC["SPORT_MOD"],
+                    {"api_id": _GO2_EULER_API_ID, "parameter": neutral_euler},
+                )
+            except Exception as e:
+                logger.error(f"Failed to restore neutral head pose: {e}")
 
     @skill
     def execute_sport_command(self, command_name: str) -> str:
