@@ -527,7 +527,7 @@ class CustomFrontierExplorer(WavefrontFrontierExplorer):
 ```python
 class CustomMapper(VoxelGridMapper):
     depth_camera: In[Image]
-    
+
     def process_depth(self, image):
         # 处理深度图像
         pass
@@ -546,8 +546,12 @@ Apache License 2.0
 
 ---
 
-**版本**: v2.0 (使用DimOS内置模块)  
-**创建日期**: 2026-05-13  
-**维护者**: sguanke  
-**适用平台**: Unitree Go2 (Pro/Air)  
+**版本**: v2.0 (使用DimOS内置模块)
+
+**创建日期**: 2026-05-13
+
+**维护者**: sguanke
+
+**适用平台**: Unitree Go2 (Pro/Air)
+
 **DimOS版本**: dev branch
