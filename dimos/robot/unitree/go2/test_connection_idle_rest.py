@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 
 from unitree_webrtc_connect.constants import RTC_TOPIC
@@ -34,8 +35,13 @@ class FakeGo2Connection:
         self.requests: list[tuple[str, dict[str, Any]]] = []
         self.moves: list[tuple[Twist, float]] = []
         self.balance_stand_count = 0
+        self.fail_next_api_ids: list[int] = []
 
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[str, str]:
+        api_id = data.get("api_id")
+        if api_id in self.fail_next_api_ids:
+            self.fail_next_api_ids.remove(api_id)
+            raise RuntimeError(f"failed api_id={api_id}")
         self.requests.append((topic, data))
         return {"status": "ok"}
 
@@ -103,6 +109,44 @@ def test_mark_action_resets_idle_rest_timer() -> None:
         connection._stop_idle_rest_monitor()
 
 
+def test_zero_motion_does_not_reset_idle_rest_timer() -> None:
+    connection = make_connection_under_test()
+    fake = connection.connection
+    assert isinstance(fake, FakeGo2Connection)
+
+    connection._start_idle_rest_monitor()
+    try:
+        time.sleep(0.03)
+        assert connection.move(Twist.zero())
+        assert wait_for_request(fake, GO2_SIT_API_ID)
+    finally:
+        connection._stop_idle_rest_monitor()
+
+
+def test_truthy_zero_twist_is_not_motion() -> None:
+    connection = make_connection_under_test()
+    raw_zero_twist = SimpleNamespace(
+        linear=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+        angular=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+    )
+
+    assert bool(raw_zero_twist)
+    assert not connection._is_motion_command(raw_zero_twist, 0.0)  # type: ignore[arg-type]
+
+
+def test_idle_rest_retries_after_failed_sit_request() -> None:
+    connection = make_connection_under_test()
+    fake = connection.connection
+    assert isinstance(fake, FakeGo2Connection)
+    fake.fail_next_api_ids.append(GO2_SIT_API_ID)
+
+    connection._start_idle_rest_monitor()
+    try:
+        assert wait_for_request(fake, GO2_SIT_API_ID, timeout_s=2.0)
+    finally:
+        connection._stop_idle_rest_monitor()
+
+
 def test_motion_resumes_from_idle_rest_before_move() -> None:
     connection = make_connection_under_test()
     fake = connection.connection
@@ -118,3 +162,23 @@ def test_motion_resumes_from_idle_rest_before_move() -> None:
     assert fake.balance_stand_count == 1
     assert fake.moves == [(twist, 0.0)]
     assert not connection._idle_resting
+
+
+def test_failed_resume_keeps_idle_resting_state() -> None:
+    connection = make_connection_under_test()
+    fake = connection.connection
+    assert isinstance(fake, FakeGo2Connection)
+    connection._idle_resting = True
+    fake.fail_next_api_ids.append(GO2_RISE_SIT_API_ID)
+
+    twist = Twist(linear=(1.0, 0.0, 0.0), angular=(0.0, 0.0, 0.0))
+
+    try:
+        connection.move(twist)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("move should fail when RiseSit fails")
+
+    assert connection._idle_resting
+    assert fake.moves == []

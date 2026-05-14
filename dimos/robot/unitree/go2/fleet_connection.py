@@ -21,6 +21,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, model_validator
+from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.core.core import rpc
 from dimos.robot.unitree.go2.connection import (
@@ -148,3 +149,12 @@ class Go2FleetConnection(GO2Connection):
             except Exception as e:
                 logger.error(f"Fleet publish_request failed: {e}")
         return self.connection.publish_request(topic, data)
+
+    def _send_idle_rest_sport_command(self, api_id: int) -> None:
+        data = {"api_id": api_id}
+        for conn in self._extra_connections:
+            try:
+                conn.publish_request(RTC_TOPIC["SPORT_MOD"], data)
+            except Exception as e:
+                logger.error(f"Fleet idle rest command failed: {e}")
+        self.connection.publish_request(RTC_TOPIC["SPORT_MOD"], data)

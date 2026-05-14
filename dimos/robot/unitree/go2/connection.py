@@ -361,6 +361,9 @@ class GO2Connection(Module, Camera, Pointcloud):
             self._idle_rest_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         self._idle_rest_thread = None
 
+    def _send_idle_rest_sport_command(self, api_id: int) -> None:
+        self.connection.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": api_id})
+
     def _idle_rest_loop(self) -> None:
         while not self._idle_rest_stop.wait(float(self.config.idle_rest_poll_s)):
             should_rest = False
@@ -378,14 +381,21 @@ class GO2Connection(Module, Camera, Pointcloud):
                     self.config.idle_rest_after_startup_s,
                 )
                 try:
-                    self.connection.publish_request(
-                        RTC_TOPIC["SPORT_MOD"], {"api_id": GO2_SIT_API_ID}
-                    )
+                    self._send_idle_rest_sport_command(GO2_SIT_API_ID)
                 except Exception as e:
                     logger.error(f"Failed to send idle Sit command: {e}")
+                    with self._idle_rest_lock:
+                        self._idle_resting = False
+                        self._last_action_at = time.monotonic()
+
+    @staticmethod
+    def _vector_has_motion(vector: Any, epsilon: float = 1e-6) -> bool:
+        return any(abs(float(getattr(vector, axis, 0.0))) > epsilon for axis in ("x", "y", "z"))
 
     def _is_motion_command(self, twist: Twist, duration: float) -> bool:
-        return bool(twist) or duration > 0.0
+        if duration > 0.0:
+            return True
+        return self._vector_has_motion(twist.linear) or self._vector_has_motion(twist.angular)
 
     def _resume_from_idle_rest_if_needed(self, twist: Twist, duration: float) -> None:
         if not self._is_motion_command(twist, duration):
@@ -397,9 +407,14 @@ class GO2Connection(Module, Camera, Pointcloud):
             self._idle_resting = False
 
         logger.info("Resuming Go2 from idle rest before movement")
-        self.connection.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": GO2_RISE_SIT_API_ID})
-        time.sleep(float(self.config.idle_rest_resume_s))
-        self.connection.balance_stand()
+        try:
+            self._send_idle_rest_sport_command(GO2_RISE_SIT_API_ID)
+            time.sleep(float(self.config.idle_rest_resume_s))
+            self.connection.balance_stand()
+        except Exception:
+            with self._idle_rest_lock:
+                self._idle_resting = True
+            raise
 
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
