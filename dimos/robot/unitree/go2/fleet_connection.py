@@ -87,12 +87,12 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._extra_connections:
             try:
                 conn.liedown()
-            except Exception as e:
-                logger.error(f"Error lying down fleet Go2: {e}")
+            except Exception as exc:
+                logger.error(f"Error lying down fleet Go2: {exc}")
             try:
                 conn.stop()
-            except Exception as e:
-                logger.error(f"Error stopping fleet Go2: {e}")
+            except Exception as exc:
+                logger.error(f"Error stopping fleet Go2: {exc}")
         self._extra_connections.clear()
         super().stop()
 
@@ -106,8 +106,8 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._all_connections:
             try:
                 results.append(conn.move(twist, duration))
-            except Exception as e:
-                logger.error(f"Fleet move failed: {e}")
+            except Exception as exc:
+                logger.error(f"Fleet move failed: {exc}")
                 results.append(False)
         return all(results)
 
@@ -117,8 +117,8 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._all_connections:
             try:
                 results.append(conn.standup())
-            except Exception as e:
-                logger.error(f"Fleet standup failed: {e}")
+            except Exception as exc:
+                logger.error(f"Fleet standup failed: {exc}")
                 results.append(False)
         return all(results)
 
@@ -128,8 +128,8 @@ class Go2FleetConnection(GO2Connection):
         for conn in self._all_connections:
             try:
                 results.append(conn.liedown())
-            except Exception as e:
-                logger.error(f"Fleet liedown failed: {e}")
+            except Exception as exc:
+                logger.error(f"Fleet liedown failed: {exc}")
                 results.append(False)
         return all(results)
 
