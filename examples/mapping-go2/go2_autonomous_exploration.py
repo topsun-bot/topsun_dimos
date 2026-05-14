@@ -15,13 +15,13 @@
 
 """Unitree Go2 自主探索与地图绘制 - 主Blueprint.
 
-这个blueprint组装了完整的自主探索系统，包括：
-- 地图模块：体素地图和代价地图
-- 导航模块：路径规划和前沿探索
-- 地图保存：自动保存和手动保存
+这个blueprint组装了完整的自主探索系统,包括:
+- 地图模块:体素地图和代价地图
+- 导航模块:路径规划和前沿探索
+- 地图保存:自动保存和手动保存
 
-纯自主模式：无需 LLM；通过本地 MCP HTTP 调用 ``begin_exploration`` 启动探索。
-也可在运行后用 ``dimos mcp call begin_exploration`` / ``end_exploration`` 手动控制。
+纯自主模式:无需 LLM;通过本地 MCP HTTP 调用 ``begin_exploration`` 启动探索.
+也可在运行后用 ``dimos mcp call begin_exploration`` / ``end_exploration`` 手动控制.
 """
 
 import argparse
@@ -49,11 +49,11 @@ from map_saver_module import MapSaverModule
 
 
 def _start_exploration_via_mcp() -> str:
-    """在 MCP 就绪后调用 ``begin_exploration``（不经过 LLM）。"""
+    """在 MCP 就绪后调用 ``begin_exploration``(不经过 LLM)."""
     adapter = McpAdapter()
     if not adapter.wait_for_ready(timeout=60.0):
         raise RuntimeError(
-            f"MCP 在 60s 内未就绪（{adapter.url}）。请确认 McpServer 已随蓝图启动。"
+            f"MCP 在 60s 内未就绪({adapter.url}).请确认 McpServer 已随蓝图启动."
         )
     try:
         return adapter.call_tool_text("begin_exploration")
@@ -63,29 +63,29 @@ def _start_exploration_via_mcp() -> str:
 
 # 组装完整的自主探索blueprint
 def create_exploration_blueprint(robot_ip: str = None):
-    """创建纯自主探索blueprint（无需LLM）.
+    """创建纯自主探索blueprint(无需LLM).
 
     Args:
-        robot_ip: 机器人IP地址，或 "mujoco"/"replay" 用于仿真/回放模式
+        robot_ip: 机器人IP地址,或 "mujoco"/"replay" 用于仿真/回放模式
     """
     return (
         autoconnect(
-            # 1. Go2基础连接（传感器和控制）
+            # 1. Go2基础连接(传感器和控制)
             unitree_go2_basic,
             # 2. 地图构建模块
-            VoxelGridMapper.blueprint(),  # 体素地图（点云->3D地图）
-            CostMapper.blueprint(),  # 代价地图（用于路径规划）
+            VoxelGridMapper.blueprint(),  # 体素地图(点云->3D地图)
+            CostMapper.blueprint(),  # 代价地图(用于路径规划)
             # 3. 导航模块
             ReplanningAStarPlanner.blueprint(),  # A*路径规划器
-            WavefrontFrontierExplorer.blueprint(),  # 前沿探索（自动选择探索目标）
-            PatrollingModule.blueprint(),  # 巡逻模块（管理探索目标）
+            WavefrontFrontierExplorer.blueprint(),  # 前沿探索(自动选择探索目标)
+            PatrollingModule.blueprint(),  # 巡逻模块(管理探索目标)
             # 4. 地图保存模块
             MapSaverModule.blueprint(
                 save_dir="maps",  # 保存目录
                 auto_save_interval=60.0,  # 每60秒自动保存
                 enable_auto_save=True,  # 启用自动保存
             ),
-            # 暴露各模块 @skill（含 WavefrontFrontierExplorer.begin_exploration）
+            # 暴露各模块 @skill(含 WavefrontFrontierExplorer.begin_exploration)
             McpServer.blueprint(),
         )
         .global_config(
@@ -106,7 +106,7 @@ def main() -> None:
     parser.add_argument(
         "--no-mcp-auto-explore",
         action="store_true",
-        help="不自动 MCP 调用 begin_exploration（可自行 dimos mcp call 或 Web 控制台启动）",
+        help="不自动 MCP 调用 begin_exploration(可自行 dimos mcp call 或 Web 控制台启动)",
     )
     args = parser.parse_args()
 
@@ -132,35 +132,35 @@ def main() -> None:
     print("🤖 Unitree Go2 纯自主探索与地图保存系统")
     print("=" * 70)
     print()
-    print("系统架构：")
+    print("系统架构:")
     print()
-    print("  【地图层】")
+    print("  [地图层]")
     print("  - VoxelGridMapper: 点云->3D体素地图")
     print("  - CostMapper: 生成导航代价地图")
     print()
-    print("  【导航层】")
+    print("  [导航层]")
     print("  - ReplanningAStarPlanner: A*路径规划")
-    print("  - WavefrontFrontierExplorer: 前沿探索算法（自动选择目标）")
+    print("  - WavefrontFrontierExplorer: 前沿探索算法(自动选择目标)")
     print("  - PatrollingModule: 探索目标管理")
     print()
-    print("  【地图保存】")
-    print("  - MapSaverModule: 自动保存（每60秒）+ 停止时保存")
+    print("  [地图保存]")
+    print("  - MapSaverModule: 自动保存(每60秒)+ 停止时保存")
     print()
-    print("  【MCP】")
+    print("  [MCP]")
     print(f"  - McpServer: http://127.0.0.1:{global_config.mcp_port}/mcp")
-    print("  - 启动后自动 tools/call begin_exploration（可用 --no-mcp-auto-explore 关闭）")
+    print("  - 启动后自动 tools/call begin_exploration(可用 --no-mcp-auto-explore 关闭)")
     print()
-    print("🎯 功能：")
-    print("  • 完全自主探索未知区域（无需人工干预）")
+    print("🎯 功能:")
+    print("  • 完全自主探索未知区域(无需人工干预)")
     print("  • 实时构建3D体素地图和2D代价地图")
     print("  • 自动保存地图到 maps/ 目录")
     print("  • 格式: PGM + YAML (ROS标准格式)")
     print()
-    print("📊 可视化：")
-    print("  • Rerun: 实时3D可视化（地图、路径、前沿点）")
+    print("📊 可视化:")
+    print("  • Rerun: 实时3D可视化(地图,路径,前沿点)")
     print("  • 启动: 添加 --viewer rerun 参数")
     print()
-    print("🛑 紧急停止：")
+    print("🛑 紧急停止:")
     print("  • Ctrl+C: 快速停止并保存地图")
     print("  • 遥控器: L2+R2 (硬件级停止)")
     print()
