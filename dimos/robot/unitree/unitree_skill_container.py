@@ -26,6 +26,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
@@ -267,6 +268,34 @@ class UnitreeSkillContainer(Module):
         goal_orientation = Quaternion.from_euler(goal_euler)
 
         return PoseStamped(position=goal_position, orientation=goal_orientation)
+
+    @skill
+    def spin_in_place(self, degrees: float = 360.0, speed: float = 1.0) -> str:
+        """使机器人原地旋转指定角度。
+
+        Args:
+            degrees: 旋转角度（度），正值为顺时针，负值为逆时针。默认 360 度（一圈）。
+            speed: 旋转角速度（弧度/秒），默认 1.0 rad/s，最大 2.0 rad/s。
+
+        Returns:
+            执行结果描述字符串。
+        """
+        degrees, speed = float(degrees), float(speed)
+
+        if degrees == 0:
+            return "旋转角度为0，无需移动。"
+
+        speed = max(0.1, min(abs(speed), 2.0))
+        sign = 1.0 if degrees > 0 else -1.0
+        radians = math.radians(abs(degrees))
+        duration = radians / speed
+
+        twist = Twist(
+            linear=Vector3(0.0, 0.0, 0.0),
+            angular=Vector3(0.0, 0.0, speed * sign),
+        )
+        self._connection.move(twist, duration=duration)
+        return f"原地旋转完成：{degrees}度，用时约{duration:.1f}秒。"
 
     @skill
     def wait(self, seconds: float) -> str:
