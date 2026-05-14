@@ -354,6 +354,11 @@ class ROSNav(
             return self._goal_reached
 
     @rpc
+    def get_last_navigation_path_length_m(self) -> float:
+        """Not tracked in ROSNav; use ReplanningAStarPlanner for integrated odom path length."""
+        return 0.0
+
+    @rpc
     def cancel_goal(self) -> bool:
         """Cancel the current navigation goal."""
 

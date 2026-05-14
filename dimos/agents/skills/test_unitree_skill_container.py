@@ -39,6 +39,10 @@ class StubNavigation(Module):
         return False
 
     @rpc
+    def get_last_navigation_path_length_m(self) -> float:
+        return 0.0
+
+    @rpc
     def cancel_goal(self) -> bool:
         return True
 

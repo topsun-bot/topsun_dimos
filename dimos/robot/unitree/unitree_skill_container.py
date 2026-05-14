@@ -249,10 +249,16 @@ class UnitreeSkillContainer(Module):
 
         time.sleep(1.0)
 
+        path_m = self._navigation.get_last_navigation_path_length_m()
         if not self._navigation.is_goal_reached():
-            return "Navigation was cancelled or failed"
-        else:
-            return "Navigation goal reached"
+            return f"Navigation was cancelled or failed (travelled ≈ {path_m:.2f} m along odom)"
+        logger.info(
+            f"已到达目的地：本次行程总距离 {path_m:.3f} 米（XY 平面里程计累计）。"
+        )
+        return (
+            f"已到达目的地。本次行程总距离约 {path_m:.2f} 米（XY 平面里程计累计）。"
+            f" / Navigation goal reached, total trip ≈ {path_m:.2f} m."
+        )
 
     def _generate_new_goal(
         self, current_pose: PoseStamped, forward: float, left: float, degrees: float

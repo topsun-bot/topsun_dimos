@@ -106,6 +106,10 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
         return self._planner.is_goal_reached()
 
     @rpc
+    def get_last_navigation_path_length_m(self) -> float:
+        return self._planner.get_last_navigation_path_length_m()
+
+    @rpc
     def cancel_goal(self) -> bool:
         self._planner.cancel_goal()
         return True

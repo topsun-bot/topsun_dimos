@@ -201,9 +201,16 @@ class NavigationSkillContainer(Module):
                     self._object_tracking.stop_track()
                     return None
                 else:
+                    trip_m = self._navigation.get_last_navigation_path_length_m()
+                    logger.info(
+                        f"已到达目的地：本次行程总距离 {trip_m:.3f} 米（XY 平面里程计累计）。"
+                    )
                     logger.info(f"Reached '{query}'")
                     self._object_tracking.stop_track()
-                    return f"Successfully arrived at '{query}'"
+                    return (
+                        f"Successfully arrived at '{query}'. "
+                        f"本次行程总距离约 {trip_m:.2f} 米（XY 平面里程计累计）。"
+                    )
 
             # If goal set and tracking lost, just continue (tracker will resume or timeout)
             if goal_set and not self._object_tracking.is_tracking():

@@ -67,6 +67,10 @@ class GlobalPlanner(Resource):
     _safe_goal_tolerance: float = 4.0
     _goal_tolerance: float = 0.2
     _rotation_tolerance: float = math.radians(15)
+    # Integral of planar odom motion while a goal is active (includes replans).
+    _trip_path_length_m: float
+    _last_odom_xy: tuple[float, float] | None
+    _last_completed_navigation_path_m: float
     _replan_goal_tolerance: float = 0.5
     _stuck_time_window: float = 8.0
     _stuck_threshold: float = 0.4
@@ -96,6 +100,9 @@ class GlobalPlanner(Resource):
         self._replan_reason = None
         self._lock = RLock()
         self._reset_safe_goal_clearance()
+        self._trip_path_length_m = 0.0
+        self._last_odom_xy = None
+        self._last_completed_navigation_path_m = 0.0
 
     def start(self) -> None:
         self._local_planner.start()
@@ -122,6 +129,12 @@ class GlobalPlanner(Resource):
     def handle_odom(self, msg: PoseStamped) -> None:
         with self._lock:
             self._current_odom = msg
+            if self._current_goal is not None and not self._goal_reached:
+                x, y = float(msg.position.x), float(msg.position.y)
+                if self._last_odom_xy is not None:
+                    lx, ly = self._last_odom_xy
+                    self._trip_path_length_m += math.hypot(x - lx, y - ly)
+                self._last_odom_xy = (x, y)
 
         self._local_planner.handle_odom(msg)
         self._position_tracker.add_position(msg)
@@ -135,6 +148,8 @@ class GlobalPlanner(Resource):
         with self._lock:
             self._current_goal = goal
             self._goal_reached = False
+            self._trip_path_length_m = 0.0
+            self._last_odom_xy = None
         self._replan_limiter.reset()
         self._plan_path()
 
@@ -148,13 +163,30 @@ class GlobalPlanner(Resource):
     def cancel_goal(self, *, but_will_try_again: bool = False, arrived: bool = False) -> None:
         logger.info("Cancelling goal.", but_will_try_again=but_will_try_again, arrived=arrived)
 
+        path_m = 0.0
         with self._lock:
             self._position_tracker.reset_data()
 
             if not but_will_try_again:
+                path_m = self._trip_path_length_m
+                self._last_completed_navigation_path_m = path_m
                 self._current_goal = None
                 self._goal_reached = arrived
                 self._replan_limiter.reset()
+                self._last_odom_xy = None
+
+        if not but_will_try_again:
+            # Emit before path/stop/LCM: ensures trip distance is logged even if later steps
+            # block, throw, or if an older dimos build had goal_reached before this line.
+            log_kwargs: dict[str, object] = {
+                "arrived": arrived,
+                "path_length_m": round(path_m, 3),
+            }
+            if arrived:
+                log_kwargs["trip_summary_cn"] = (
+                    f"已到达目的地：本次行程总距离 {path_m:.3f} 米（XY 平面里程计累计）。"
+                )
+            logger.info("Navigation ended.", **log_kwargs)
 
         self.path.on_next(Path())
         self._local_planner.stop_planning()
@@ -172,6 +204,11 @@ class GlobalPlanner(Resource):
     def is_goal_reached(self) -> bool:
         with self._lock:
             return self._goal_reached
+
+    def get_last_navigation_path_length_m(self) -> float:
+        """Planar path length (m) integrated from odom for the last finished navigation."""
+        with self._lock:
+            return self._last_completed_navigation_path_m
 
     @property
     def cmd_vel(self) -> Subject[Twist]:
