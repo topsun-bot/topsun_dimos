@@ -23,7 +23,7 @@
 - **框架**: DimOS (Dimensional Operating System)
 - **机器人平台**: Unitree Go2 (quadruped)
 - **编程语言**: Python 3.12
-- **核心依赖**: 
+- **核心依赖**:
   - dimos核心模块 (Module, Blueprint, Stream)
   - LCM/SHM传输层
   - DimOS内置的导航、感知、地图模块

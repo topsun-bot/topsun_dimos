@@ -15,10 +15,8 @@
 
 """地图保存模块 - 定期保存和手动保存地图."""
 
-import os
-import time
 from pathlib import Path
-from typing import Optional
+import time
 
 import numpy as np
 
@@ -61,7 +59,7 @@ class MapSaverModule(Module):
         self._auto_save_interval = self.config.auto_save_interval
         self._enable_auto_save = self.config.enable_auto_save
 
-        self._last_map: Optional[OccupancyGrid] = None
+        self._last_map: OccupancyGrid | None = None
         self._last_save_time = 0.0
         self._save_count = 0
 
@@ -106,9 +104,7 @@ class MapSaverModule(Module):
                 self._save_map_internal(map_data, "auto")
                 self._last_save_time = current_time
 
-    def _save_map_internal(
-        self, map_data: OccupancyGrid, prefix: str = "map"
-    ) -> str:
+    def _save_map_internal(self, map_data: OccupancyGrid, prefix: str = "map") -> str:
         """内部保存地图方法.
 
         Args:
