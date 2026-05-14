@@ -45,6 +45,14 @@ class StubNavigation(Module):
 
 class StubGO2Connection(Module):
     @rpc
+    def move(self, twist: Any, duration: float = 0.0) -> bool:
+        return True
+
+    @rpc
+    def balance_stand(self) -> bool:
+        return True
+
+    @rpc
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
         return {}
 
