@@ -26,6 +26,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
@@ -277,6 +278,61 @@ class UnitreeSkillContainer(Module):
         """
         time.sleep(seconds)
         return f"Wait completed with length={seconds}s"
+
+    def _go2_dance_sport_publish(self, phrase_seconds: float) -> str:
+        topic = RTC_TOPIC["SPORT_MOD"]
+        api_ids_ordered = (
+            _UNITREE_COMMANDS["Hello"][0],
+            _UNITREE_COMMANDS["Content"][0],
+            _UNITREE_COMMANDS["WiggleHips"][0],
+        )
+        try:
+            for api_id in api_ids_ordered:
+                self._connection.publish_request(topic, {"api_id": api_id})
+                time.sleep(phrase_seconds)
+            return "Go2 dance finished (sport): Hello → Content → WiggleHips."
+        except Exception as e:
+            logger.error(f"go2_dance sport path failed: {e}")
+            return "Go2 dance failed on the sport-command path."
+
+    def _go2_dance_mujoco_twists(self, phrase_seconds: float) -> str:
+        gap = max(phrase_seconds * 0.35, 0.05)
+        steps: list[tuple[tuple[float, float, float], tuple[float, float, float], float]] = [
+            ((0.0, 0.0, 0.0), (0.0, 0.0, 0.5), 0.42),
+            ((0.0, 0.0, 0.0), (0.0, 0.0, -0.5), 0.42),
+            ((0.0, 0.1, 0.0), (0.0, 0.0, 0.0), 0.36),
+            ((0.0, -0.1, 0.0), (0.0, 0.0, 0.0), 0.36),
+            ((0.07, 0.0, 0.0), (0.0, 0.0, 0.0), 0.34),
+            ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.12),
+        ]
+        try:
+            for lin, ang, dur in steps:
+                twist = Twist(Vector3(*lin), Vector3(*ang))
+                self._connection.move(twist, duration=dur)
+                time.sleep(gap + dur * 0.15)
+            return "Go2 dance finished (sim): gentle turn, side-step, and forward pulse."
+        except Exception as e:
+            logger.error(f"go2_dance MuJoCo path failed: {e}")
+            return "Go2 dance failed on the MuJoCo velocity path."
+
+    @skill
+    def go2_dance(self, phrase_seconds: float = 1.2) -> str:
+        """Run a short scripted dance routine on Go2.
+
+        On real hardware or replay logs, commands use Unitree sport mode (RTC SPORT_MOD).
+        In DimOS MuJoCo simulation ``publish_request`` is not wired for sport animation,
+        so this uses low-amplitude velocity ``move`` steps instead.
+
+        Args:
+            phrase_seconds: Pause between sport gestures, or pacing factor between sim moves.
+
+        Returns:
+            A short status sentence describing completion or failure.
+        """
+        pause = float(phrase_seconds)
+        if self.config.g.unitree_connection_type == "mujoco":
+            return self._go2_dance_mujoco_twists(pause)
+        return self._go2_dance_sport_publish(pause)
 
     @skill
     def current_time(self) -> str:
