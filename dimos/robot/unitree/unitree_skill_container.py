@@ -26,6 +26,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
@@ -267,6 +268,54 @@ class UnitreeSkillContainer(Module):
         goal_orientation = Quaternion.from_euler(goal_euler)
 
         return PoseStamped(position=goal_position, orientation=goal_orientation)
+
+    @skill
+    def spin_in_place(self, degrees: float = 360.0, speed: float = 1.0) -> str:
+        """Spin the robot in place by the specified number of degrees.
+
+        Uses direct angular velocity commands for lightweight, reliable rotation.
+        Positive degrees = counter-clockwise, negative = clockwise.
+
+        Example calls:
+
+            # Spin a full circle counter-clockwise at default speed
+            spin_in_place()
+
+            # Rotate 90 degrees counter-clockwise
+            spin_in_place(degrees=90)
+
+            # Rotate 90 degrees clockwise, faster
+            spin_in_place(degrees=-90, speed=1.5)
+
+        Args:
+            degrees: Rotation angle in degrees. Positive = counter-clockwise. Default 360.
+            speed: Angular speed in rad/s, clamped to [0.1, 2.0]. Default 1.0.
+
+        Returns:
+            Status string describing the result.
+        """
+        degrees, speed = float(degrees), float(speed)
+
+        if not math.isfinite(degrees) or not math.isfinite(speed):
+            return "Spin failed: degrees and speed must be finite numbers."
+
+        if degrees == 0:
+            return "No rotation needed (degrees=0)."
+
+        speed = max(0.1, min(abs(speed), 2.0))
+        sign = -1.0 if degrees > 0 else 1.0
+        radians = math.radians(abs(degrees))
+        duration = radians / speed
+
+        self._connection.balance_stand()
+        twist = Twist(
+            linear=Vector3(0.0, 0.0, 0.0),
+            angular=Vector3(0.0, 0.0, speed * sign),
+        )
+        ok = self._connection.move(twist, duration=duration)
+        if not ok:
+            return "Spin failed: unable to send move command to robot."
+        return f"Spin completed: {degrees} degrees in {duration:.1f}s."
 
     @skill
     def wait(self, seconds: float) -> str:
