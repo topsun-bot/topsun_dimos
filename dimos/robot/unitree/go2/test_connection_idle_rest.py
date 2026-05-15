@@ -60,7 +60,7 @@ def make_connection_under_test() -> GO2Connection:
         ip="fake",
         idle_rest_after_startup_s=0.05,
         idle_rest_poll_s=0.005,
-        idle_rest_resume_s=0.0,
+        idle_rest_resume_s=0.001,
     )
     connection.connection = FakeGo2Connection()
     connection._last_action_at = time.monotonic()
@@ -68,6 +68,7 @@ def make_connection_under_test() -> GO2Connection:
     connection._idle_rest_lock = threading.Lock()
     connection._idle_resting = False
     connection._idle_rest_thread = None
+    connection._agent_idle = True
     return connection
 
 
@@ -109,7 +110,7 @@ def test_mark_action_resets_idle_rest_timer() -> None:
         connection._stop_idle_rest_monitor()
 
 
-def test_zero_motion_does_not_reset_idle_rest_timer() -> None:
+def test_zero_cmd_vel_counts_as_human_teleop() -> None:
     connection = make_connection_under_test()
     fake = connection.connection
     assert isinstance(fake, FakeGo2Connection)
@@ -118,6 +119,8 @@ def test_zero_motion_does_not_reset_idle_rest_timer() -> None:
     try:
         time.sleep(0.03)
         assert connection.move(Twist.zero())
+        time.sleep(0.03)
+        assert (RTC_TOPIC["SPORT_MOD"], {"api_id": GO2_SIT_API_ID}) not in fake.requests
         assert wait_for_request(fake, GO2_SIT_API_ID)
     finally:
         connection._stop_idle_rest_monitor()
@@ -162,6 +165,39 @@ def test_motion_resumes_from_idle_rest_before_move() -> None:
     assert fake.balance_stand_count == 1
     assert fake.moves == [(twist, 0.0)]
     assert not connection._idle_resting
+
+
+def test_agent_busy_blocks_idle_sit() -> None:
+    connection = make_connection_under_test()
+    fake = connection.connection
+    assert isinstance(fake, FakeGo2Connection)
+
+    connection._agent_idle = False
+    connection._start_idle_rest_monitor()
+    try:
+        time.sleep(0.15)
+        assert not any(
+            topic == RTC_TOPIC["SPORT_MOD"] and data.get("api_id") == GO2_SIT_API_ID
+            for topic, data in fake.requests
+        )
+    finally:
+        connection._stop_idle_rest_monitor()
+
+
+def test_human_input_touch_delays_idle_sit() -> None:
+    connection = make_connection_under_test()
+    fake = connection.connection
+    assert isinstance(fake, FakeGo2Connection)
+
+    connection._start_idle_rest_monitor()
+    try:
+        time.sleep(0.03)
+        connection._on_idle_rest_human_input("hello")
+        time.sleep(0.03)
+        assert (RTC_TOPIC["SPORT_MOD"], {"api_id": GO2_SIT_API_ID}) not in fake.requests
+        assert wait_for_request(fake, GO2_SIT_API_ID)
+    finally:
+        connection._stop_idle_rest_monitor()
 
 
 def test_failed_resume_keeps_idle_resting_state() -> None:

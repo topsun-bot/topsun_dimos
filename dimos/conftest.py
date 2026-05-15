@@ -85,7 +85,17 @@ def _autoconf(request):
     capman = request.config.pluginmanager.getplugin("capturemanager")
     capman.suspend_global_capture(in_=True)
     try:
-        autoconf()
+        try:
+            autoconf()
+        except PermissionError as exc:
+            from dimos.utils.logging_config import setup_logger
+
+            setup_logger().warning(
+                "LCM system autoconf skipped (cannot run sudo). "
+                "Set CI=1 to skip autoconf entirely, or run tests where sudo is allowed. "
+                "Reason: %s",
+                exc,
+            )
     finally:
         capman.resume_global_capture()
 

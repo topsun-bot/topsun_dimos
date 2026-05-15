@@ -31,7 +31,7 @@ from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.core.transport import LCMTransport, pSHMTransport
+from dimos.core.transport import LCMTransport, pLCMTransport, pSHMTransport
 from dimos.spec.perception import Camera, Pointcloud
 from dimos.utils.logging_config import setup_logger
 
@@ -218,6 +218,9 @@ class GO2Connection(Module, Camera, Pointcloud):
     _idle_rest_lock: Lock
     _last_action_at: float
     _idle_resting: bool
+    _agent_idle: bool
+    _idle_rest_human_transport: pLCMTransport[str] | None
+    _idle_rest_agent_idle_transport: pLCMTransport[bool] | None
     _latest_video_frame: Image | None = None
 
     @classmethod
@@ -241,6 +244,9 @@ class GO2Connection(Module, Camera, Pointcloud):
         self._idle_rest_stop = Event()
         self._idle_rest_lock = Lock()
         self._idle_resting = False
+        self._agent_idle = True
+        self._idle_rest_human_transport = None
+        self._idle_rest_agent_idle_transport = None
 
     @rpc
     def record(self, recording_name: str) -> None:
@@ -268,6 +274,7 @@ class GO2Connection(Module, Camera, Pointcloud):
         self.register_disposable(self.connection.odom_stream().subscribe(self._publish_tf))
         self.register_disposable(self.connection.video_stream().subscribe(onimage))
         self.register_disposable(Disposable(self.cmd_vel.subscribe(self.move)))
+        self._start_idle_rest_lcm_subscriptions()
 
         self._camera_info_thread = Thread(
             target=self.publish_camera_info,
@@ -291,6 +298,7 @@ class GO2Connection(Module, Camera, Pointcloud):
     @rpc
     def stop(self) -> None:
         self._stop_idle_rest_monitor()
+        self._stop_idle_rest_lcm_subscriptions()
         self.liedown()
 
         if self.connection:
@@ -341,6 +349,46 @@ class GO2Connection(Module, Camera, Pointcloud):
             self._last_action_at = time.monotonic()
             self._idle_resting = False
 
+    def _touch_idle_activity_timer(self) -> None:
+        """Postpone idle sit without clearing seated state (human text while already sitting)."""
+        with self._idle_rest_lock:
+            self._last_action_at = time.monotonic()
+
+    def _on_idle_rest_human_input(self, _text: str) -> None:
+        self._touch_idle_activity_timer()
+
+    def _on_idle_rest_agent_idle(self, idle: bool) -> None:
+        with self._idle_rest_lock:
+            self._agent_idle = idle
+        if idle:
+            self._touch_idle_activity_timer()
+
+    def _start_idle_rest_lcm_subscriptions(self) -> None:
+        if not self.config.idle_rest_enabled:
+            return
+
+        self._idle_rest_human_transport = pLCMTransport("/human_input")
+        self._idle_rest_human_transport.start()
+        self.register_disposable(
+            Disposable(self._idle_rest_human_transport.subscribe(self._on_idle_rest_human_input))
+        )
+
+        self._idle_rest_agent_idle_transport = pLCMTransport("/agent_idle")
+        self._idle_rest_agent_idle_transport.start()
+        self.register_disposable(
+            Disposable(
+                self._idle_rest_agent_idle_transport.subscribe(self._on_idle_rest_agent_idle)
+            )
+        )
+
+    def _stop_idle_rest_lcm_subscriptions(self) -> None:
+        if self._idle_rest_human_transport is not None:
+            self._idle_rest_human_transport.stop()
+            self._idle_rest_human_transport = None
+        if self._idle_rest_agent_idle_transport is not None:
+            self._idle_rest_agent_idle_transport.stop()
+            self._idle_rest_agent_idle_transport = None
+
     def _start_idle_rest_monitor(self) -> None:
         if not self.config.idle_rest_enabled:
             return
@@ -368,6 +416,8 @@ class GO2Connection(Module, Camera, Pointcloud):
         while not self._idle_rest_stop.wait(float(self.config.idle_rest_poll_s)):
             should_rest = False
             with self._idle_rest_lock:
+                if not self._agent_idle:
+                    continue
                 idle_for_s = time.monotonic() - self._last_action_at
                 if not self._idle_resting and idle_for_s >= float(
                     self.config.idle_rest_after_startup_s
@@ -377,7 +427,7 @@ class GO2Connection(Module, Camera, Pointcloud):
 
             if should_rest:
                 logger.info(
-                    "No Go2 action within %.2fs; sending Sit command",
+                    "No Go2 motion and agent idle for %.2fs; sending Sit command",
                     self.config.idle_rest_after_startup_s,
                 )
                 try:
@@ -419,9 +469,11 @@ class GO2Connection(Module, Camera, Pointcloud):
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         """Send movement command to robot."""
+        self._touch_idle_activity_timer()
         self._resume_from_idle_rest_if_needed(twist, duration)
         if self._is_motion_command(twist, duration):
-            self._mark_action()
+            with self._idle_rest_lock:
+                self._idle_resting = False
         return self.connection.move(twist, duration)
 
     @rpc
