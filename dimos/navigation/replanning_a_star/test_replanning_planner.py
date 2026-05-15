@@ -17,7 +17,6 @@ PositionTracker, ReplanLimiter, and GlobalPlanner."""
 
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -45,20 +44,20 @@ class TestPositionTracker:
         assert tracker.is_stuck() is False
 
     def test_single_position_is_stuck(self) -> None:
-        """单个位置点 — 所有距离为0，低于阈值，应判定为卡住。"""
+        """Single position point: all distances are 0, below threshold, should be stuck."""
         tracker = PositionTracker(time_window=5.0, threshold=0.4)
         tracker.add_position(_make_pose(1.0, 2.0))
         assert tracker.is_stuck() is True
 
     def test_stationary_robot_is_stuck(self) -> None:
-        """机器人在同一位置不动 — 判定为卡住。"""
+        """Robot stationary at the same position -- should be stuck."""
         tracker = PositionTracker(time_window=5.0, threshold=0.4)
         for _ in range(10):
             tracker.add_position(_make_pose(3.0, 4.0))
         assert tracker.is_stuck() is True
 
     def test_moving_robot_not_stuck(self) -> None:
-        """机器人在大范围移动 — 不应判定为卡住。"""
+        """Robot moving over a large range -- should NOT be stuck."""
         tracker = PositionTracker(time_window=5.0, threshold=0.4)
         for i in range(10):
             tracker.add_position(_make_pose(float(i), float(i)))
@@ -74,7 +73,7 @@ class TestPositionTracker:
         assert tracker.is_stuck() is False
 
     def test_small_oscillation_within_threshold_is_stuck(self) -> None:
-        """机器人在小范围内来回抖动 — 应判定为卡住。"""
+        """Robot oscillating within a small range -- should be stuck."""
         tracker = PositionTracker(time_window=5.0, threshold=0.4)
         for i in range(20):
             offset = 0.05 * (i % 2)
@@ -93,7 +92,7 @@ class TestReplanLimiter:
         assert limiter.can_retry(Vector3(0.0, 0.0)) is True
 
     def test_exhausts_max_attempts(self) -> None:
-        """在同一位置连续重试，超过最大次数后应被拒绝。"""
+        """Retrying at the same position should be rejected after max attempts."""
         limiter = ReplanLimiter()
         pos = Vector3(1.0, 1.0)
         for _ in range(6):
@@ -102,7 +101,7 @@ class TestReplanLimiter:
         assert limiter.can_retry(pos) is False
 
     def test_moving_away_resets_attempts(self) -> None:
-        """移动足够远后重试计数应被重置。"""
+        """Moving far enough should reset the retry counter."""
         limiter = ReplanLimiter()
         pos_a = Vector3(1.0, 1.0)
         for _ in range(5):
@@ -134,24 +133,23 @@ class TestReplanLimiter:
 
 
 # ---------------------------------------------------------------------------
-# GlobalPlanner (目标处理和状态管理)
+# GlobalPlanner (goal handling and state management)
 # ---------------------------------------------------------------------------
 
 
 class TestGlobalPlannerGoalHandling:
     @pytest.fixture
     def planner(self) -> "MagicMock":
-        """创建一个 GlobalPlanner，mock 掉外部依赖。"""
+        """Create a GlobalPlanner with external dependencies mocked out."""
         from dimos.navigation.replanning_a_star.global_planner import GlobalPlanner
 
         mock_config = MagicMock()
         mock_config.simulation = False
         mock_config.robot_rotation_diameter = 0.6
 
-        with patch(
-            "dimos.navigation.replanning_a_star.global_planner.NavigationMap"
-        ), patch(
-            "dimos.navigation.replanning_a_star.global_planner.LocalPlanner"
+        with (
+            patch("dimos.navigation.replanning_a_star.global_planner.NavigationMap"),
+            patch("dimos.navigation.replanning_a_star.global_planner.LocalPlanner"),
         ):
             gp = GlobalPlanner(mock_config)
 
