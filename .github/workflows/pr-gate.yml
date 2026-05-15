@@ -54,7 +54,7 @@ jobs:
       - name: Fast tests
         run: |
           if [ -d tests ]; then
-            python3 -m pytest tests/ -v --tb=short -m "not slow" --timeout=30 --noconftest
+            python3 -m pytest tests/ -v --tb=short -m "not slow" --timeout=30 --noconftest -o addopts=
           else
             echo "no top-level tests/ dir on this branch — skipping pytest"
           fi
