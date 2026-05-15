@@ -64,9 +64,7 @@ class CrowAgent(Module):
             self._human_transport = None
         super().stop()
 
-    # ------------------------------------------------------------------
     # MCP skill — called by crow's DimosBridge
-    # ------------------------------------------------------------------
 
     @skill
     def receive(self, text: str) -> str:

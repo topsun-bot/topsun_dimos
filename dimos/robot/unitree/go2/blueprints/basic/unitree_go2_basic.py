@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import platform
 from typing import Any
 
@@ -27,9 +26,10 @@ from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
+from dimos.utils.logging_config import setup_logger
 from dimos.visualization.vis_module import vis_module
 
-_logger = logging.getLogger(__name__)
+_logger = setup_logger(__name__)
 
 # Mac has some issue with high bandwidth UDP, so we use pSHMTransport for color_image
 # actually we can use pSHMTransport for all platforms, and for all streams
