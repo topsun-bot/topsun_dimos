@@ -77,7 +77,13 @@ jobs:
             pyver: "3.14t"
             experimental: false
       fail-fast: true
-    runs-on: ${{ matrix.os }}-latest
+    # Fork uses org larger runners (32 vCPU); upstream stays on standard hosted runners.
+    runs-on: >-
+      ${{
+        github.repository == 'topsun-bot/topsun_dimos'
+        && 'ubuntu-latest-32-cores'
+        || format('{0}-latest', matrix.os)
+      }}
     continue-on-error: ${{ matrix.experimental }}
     permissions:
       contents: read  # For checkout
@@ -111,7 +117,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --group tests --frozen
       - name: Run tests
-        run: uv run pytest --numprocesses=3 --cov=dimos/ --junitxml=junit.xml -m 'not (tool or self_hosted or mujoco or dimsim)'
+        run: >-
+          uv run pytest
+          --numprocesses=${{ github.repository == 'topsun-bot/topsun_dimos' && 'auto' || '3' }}
+          --cov=dimos/ --junitxml=junit.xml
+          -m 'not (tool or self_hosted or mujoco or dimsim)'
       - name: Re-run the failing tests with maximum verbosity
         if: failure()
         env:
