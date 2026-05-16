@@ -29,7 +29,7 @@ from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.utils.logging_config import setup_logger
 from dimos.visualization.vis_module import vis_module
 
-_logger = setup_logger(__name__)
+_logger = setup_logger()
 
 # Mac has some issue with high bandwidth UDP, so we use pSHMTransport for color_image
 # actually we can use pSHMTransport for all platforms, and for all streams
