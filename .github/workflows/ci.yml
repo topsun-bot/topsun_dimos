@@ -121,7 +121,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra agents --extra web --extra unitree --extra drone --group tests --frozen
       - name: Run tests
-        run: uv run pytest --numprocesses=3 --cov=dimos/ --junitxml=junit.xml -m 'not (tool or self_hosted or mujoco or dimsim)'
+        # The default suite exercises LCM multicast and forkserver-backed
+        # workers; xdist workers make those integration-style tests flaky on
+        # hosted Ubuntu runners. Run the hosted gate sequentially and leave
+        # process-heavy coverage to the dedicated self-hosted jobs.
+        run: uv run pytest --cov=dimos/ --junitxml=junit.xml -m 'not (tool or self_hosted or mujoco or dimsim)'
       - name: Re-run the failing tests with maximum verbosity
         if: failure()
         env:
