@@ -97,6 +97,9 @@ class DimSimConnection:
     def enable_rage_mode(self) -> bool:
         return True
 
+    def free_avoid(self, enabled: bool = True) -> bool:
+        return True
+
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
         return {}
 

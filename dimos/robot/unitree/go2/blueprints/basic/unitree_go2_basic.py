@@ -27,6 +27,7 @@ from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
+from dimos.visualization.rerun.constants import RerunOpenOption
 from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
 
 _logger = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ class _ColorImageSHMSubscriber:
     def subscribe_all(self, callback: Any) -> Any:
         if self.shm is None:
             self.start()
+        shm = self.shm
+        assert shm is not None
 
         seen = {"count": 0}
 
@@ -93,7 +96,7 @@ class _ColorImageSHMSubscriber:
                 )
             callback(msg, "/color_image")
 
-        return self.shm.subscribe("color_image", on_color_image)
+        return shm.subscribe("color_image", on_color_image)
 
 
 def _convert_camera_info(camera_info: Any) -> Any:
@@ -188,19 +191,27 @@ if global_config.viewer == "foxglove":
         FoxgloveBridge.blueprint(shm_channels=["/color_image#sensor_msgs.Image"]),
     )
 elif global_config.viewer.startswith("rerun"):
-    from dimos.visualization.rerun.bridge import RerunBridgeModule, _resolve_viewer_mode
+    from dimos.visualization.rerun.bridge import RerunBridgeModule
+
+    rerun_open: RerunOpenOption = global_config.rerun_open
 
     with_vis = autoconnect(
         _transports_base,
-        RerunBridgeModule.blueprint(viewer_mode=_resolve_viewer_mode(), **rerun_config),
+        RerunBridgeModule.blueprint(
+            rerun_open=rerun_open,
+            rerun_web=global_config.rerun_web,
+            **rerun_config,
+        ),
     )
 else:
     with_vis = _transports_base
 
+_with_vis = with_vis
+
 
 unitree_go2_basic = (
     autoconnect(
-        with_vis,
+        _with_vis,
         GO2Connection.blueprint(),
         WebsocketVisModule.blueprint(),
     )
