@@ -33,7 +33,7 @@ Stream("odom"): 5465 items, 2025-12-26 11:09:08 — 2025-12-26 11:14:00 (292.5s)
 
 Any stream is drawable
 
-```python session=mem output=none
+```python session=mem output=none skip
 global_map = pickle.loads(get_data("unitree_go2_bigoffice_map.pickle").read_bytes())
 
 drawing = Space()
@@ -52,7 +52,7 @@ our drawing system applies turbo color scheme to timestamps by default
 
 we can create new streams by querying existing streams, and we can save, further transform or draw those
 
-```python session=mem output=none
+```python session=mem output=none skip
 
 drawing = Space()
 drawing.add(global_map)
@@ -71,7 +71,7 @@ drawing.to_svg("assets/speed.svg")
 
 we can do all kinds of things with this, for example map out room lighting
 
-```python session=mem output=none
+```python session=mem output=none skip
 drawing = Space()
 drawing.add(global_map)
 
@@ -121,7 +121,7 @@ for obs in pipeline:
 
 let's query it!
 
-```python session=mem output=none
+```python session=mem output=none skip
 from dimos.models.embedding.clip import CLIPModel
 
 drawing = Space()
@@ -138,7 +138,7 @@ drawing.to_svg("assets/embedding.svg")
 
 We don't really have to deal with the whole global map actually, let's get top 10 embeddings, and render only lidar around those.
 
-```python session=mem output=none
+```python session=mem output=none skip
 from dimos.models.embedding.clip import CLIPModel
 from dimos.mapping.voxels import VoxelMapTransformer
 drawing = Space()
@@ -170,7 +170,7 @@ Stream("color_image_embedded") | vector_search(k=30)
 
 <details><summary>Python</summary>
 
-```python fold session=mem
+```python fold session=mem skip
 import matplotlib
 import matplotlib.pyplot as plt
 import math
@@ -203,7 +203,7 @@ def plot_mosaic(frames, path, cols=5):
 
 let's view those images
 
-```python session=mem
+```python session=mem skip
 plot_mosaic(matches.map(lambda obs: obs.data).to_list(), "assets/grid.png")
 ```
 

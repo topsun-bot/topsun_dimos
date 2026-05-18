@@ -65,7 +65,7 @@ def _convert_camera_info(camera_info: Any) -> Any:
 
 在 `dimos/core/transport.py` 里:
 
-```python
+```python skip
 class pSHMTransport(PubSubTransport[T]):
     def __init__(self, topic: str, **kwargs) -> None:
         super().__init__(topic)
@@ -77,7 +77,7 @@ class pSHMTransport(PubSubTransport[T]):
 
 而 SHM segment 命名 (`dimos/protocol/pubsub/impl/shmpubsub.py`):
 
-```python
+```python skip
 def _names_for_topic(topic: str, capacity: int) -> tuple[str, str]:
     h = hashlib.blake2b(f"{topic}:{capacity}".encode(), digest_size=8).hexdigest()
     return f"psm_{h}_data", f"psm_{h}_ctrl"
@@ -88,9 +88,18 @@ def _names_for_topic(topic: str, capacity: int) -> tuple[str, str]:
 时序:
 
 1. 主进程 `import unitree_go2_basic` 时,在模块顶层执行:
-   ```python
+   ```python skip
    pSHMTransport("color_image", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE)  # 6220800
    ```
+
+<!--Error:-->
+```
+File "/var/folders/cq/fll2q9993y58l355fsz1z3jh0000gn/T/tmpzz499dc4.py", line 1
+    pSHMTransport("color_image", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE)  # 6220800
+IndentationError: unexpected indent
+
+Exit code: 1
+```
 2. `ModuleCoordinator` 把这个 `pSHMTransport` 对象 pickle 后送到 `GO2Connection` 的 forkserver worker
 3. Worker 进程 unpickle 时,`__reduce__` 返回 `(pSHMTransport, ("color_image",))`,重建调用 `pSHMTransport("color_image")` —— 没传 `default_capacity`,用了默认 `3686400`
 4. Worker 进程的 publisher 把图像写到 segment `psm_<hash("color_image:3686400")>_data`
@@ -110,7 +119,7 @@ rebuilt capacity: 3686400   →  psm_832a9bc625d1d502_data
 
 `dimos/core/transport.py`:
 
-```python
+```python skip
 def _reconstruct_pshm_transport(topic: str, kwargs: dict[str, Any]) -> "pSHMTransport[Any]":
     return pSHMTransport(topic, **kwargs)
 
@@ -144,7 +153,7 @@ rebuilt capacity: 6220800   →  psm_a8e59af2d97f9c7f_data   ✅ 一致
 
 macOS 默认就把 `color_image` 流的 transport 重映射成 `pSHMTransport`(避开 macOS 上多播 UDP 的高带宽问题):
 
-```python
+```python skip
 _mac_transports: dict[tuple[str, type], pSHMTransport[Image]] = {
     ("color_image", Image): pSHMTransport(
         "color_image", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE
@@ -156,7 +165,7 @@ _mac_transports: dict[tuple[str, type], pSHMTransport[Image]] = {
 
 加一个 SHM bridge 类把 `color_image` SHM 流暴露给 RerunBridgeModule:
 
-```python
+```python skip
 class _ColorImageSHMSubscriber:
     """Expose the macOS color_image shared-memory stream to the Rerun bridge."""
 
@@ -183,7 +192,7 @@ class _ColorImageSHMSubscriber:
 
 然后在 `rerun_config` 里把它加到 `pubsubs`:
 
-```python
+```python skip
 rerun_config = {
     "blueprint": _go2_rerun_blueprint,
     "pubsubs": [LCM(), _ColorImageSHMSubscriber()] if platform.system() != "Linux" else [LCM()],

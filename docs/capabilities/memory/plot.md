@@ -94,7 +94,7 @@ plot.to_svg("assets/plot_robot_data.svg")
 
 Let's find some plants!
 
-```python session=robotdata
+```python session=robotdata skip
 from dimos.memory2.vis.plot.elements import Series, HLine, Style
 from dimos.memory2.vis import color
 from dimos.memory2.transform import normalize, smooth_time
@@ -150,7 +150,7 @@ Embeddings are calculated according to some minimum picture brightness. Complete
 
 Let's investigate how our embedding stream relates to image brightness:
 
-```python session=robotdata
+```python session=robotdata skip
 
 plot = Plot()
 
@@ -175,7 +175,7 @@ We see that stuff isn't embedded below some minimum brightness.
 
 Let's now fill the gaps in our semantic graph a bit, looks super ugly above, we will tell plotter to consider unmapped values as zero and connect values that are within 7.5 seconds, smooth with 5 second time window, and normalize the data
 
-```python session=robotdata
+```python session=robotdata skip
 
 plot = Plot()
 
