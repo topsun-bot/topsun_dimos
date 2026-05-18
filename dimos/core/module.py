@@ -189,6 +189,16 @@ class ModuleBase(Configurable, CompositeResource):
         if loop_thread:
             if loop_thread.is_alive():
                 if loop:
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            loop.shutdown_default_executor(),
+                            loop,
+                        ).result(timeout=self._loop_thread_timeout)
+                    except Exception:
+                        logger.exception(
+                            "Failed to shut down default executor for %s",
+                            type(self).__name__,
+                        )
                     loop.call_soon_threadsafe(loop.stop)
                 loop_thread.join(timeout=self._loop_thread_timeout)
             self._loop = None

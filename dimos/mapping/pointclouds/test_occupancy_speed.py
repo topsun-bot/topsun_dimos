@@ -17,6 +17,8 @@ import time
 
 import pytest
 
+pytest.importorskip("torch")
+
 from dimos.mapping.pointclouds.occupancy import OCCUPANCY_ALGOS
 from dimos.mapping.voxels import VoxelGrid
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2

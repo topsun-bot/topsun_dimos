@@ -18,7 +18,6 @@ from dimos_lcm.foxglove_msgs.ImageAnnotations import ImageAnnotations
 import pytest
 
 from dimos.core.transport import LCMTransport
-from dimos.models.vl.moondream import MoondreamVlModel
 from dimos.models.vl.qwen import QwenVlModel
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
@@ -126,6 +125,10 @@ def test_query_detections_real() -> None:
 @pytest.mark.tool
 def test_query_points() -> None:
     """Test query_points with real API calls (requires API key)."""
+    pytest.importorskip("torch")
+
+    from dimos.models.vl.moondream import MoondreamVlModel
+
     # Load test image
     image = Image.from_file(get_data("cafe.jpg"), format=ImageFormat.RGB).to_rgb()
 

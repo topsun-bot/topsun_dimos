@@ -71,7 +71,7 @@ jobs:
         with:
           node-version: 'lts/*'
       - name: Install Python dependencies
-        run: uv sync --group tests --frozen
+        run: uv sync --extra agents --extra web --extra unitree --extra drone --group tests --frozen
       - name: Execute documentation code blocks
         run: ./bin/run-doc-codeblocks --ci --no-cache
 
@@ -119,7 +119,7 @@ jobs:
         if: ${{ endsWith(matrix.pyver, 't') }}
         run: echo "PYTHON_GIL=0" >> $GITHUB_ENV
       - name: Install dependencies
-        run: uv sync --group tests --frozen
+        run: uv sync --extra agents --extra web --extra unitree --extra drone --group tests --frozen
       - name: Run tests
         run: uv run pytest --numprocesses=3 --cov=dimos/ --junitxml=junit.xml -m 'not (tool or self_hosted or mujoco or dimsim)'
       - name: Re-run the failing tests with maximum verbosity
@@ -197,7 +197,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --group tests-self-hosted --frozen
+        run: uv sync --extra agents --extra web --extra unitree --extra drone --group tests-self-hosted --frozen
       - name: Build C++ extensions in-place
         run: uv run python setup.py build_ext --inplace
       - name: Source ROS environment

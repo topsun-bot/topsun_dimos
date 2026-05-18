@@ -25,7 +25,6 @@ from dimos.memory.timeseries.legacy import LegacyPickleStore
 from dimos.memory2.embed import EmbedImages
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.memory2.transform import QualityWindow
-from dimos.models.embedding.clip import CLIPModel
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.robot.unitree.type.odometry import Odometry
@@ -33,6 +32,8 @@ from dimos.utils.data import get_data_dir
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from dimos.models.embedding.clip import CLIPModel
 
 DB_PATH = get_data_dir() / "go2_short.db"
 

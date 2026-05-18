@@ -22,6 +22,8 @@ from dimos_lcm.foxglove_msgs.SceneUpdate import SceneUpdate
 from dimos_lcm.visualization_msgs.MarkerArray import MarkerArray
 import pytest
 
+pytest.importorskip("ultralytics")
+
 from dimos.core.transport import LCMTransport
 from dimos.memory.timeseries.legacy import LegacyPickleStore
 from dimos.msgs.geometry_msgs.Transform import Transform

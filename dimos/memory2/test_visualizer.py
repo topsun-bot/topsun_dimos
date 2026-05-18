@@ -21,6 +21,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+pytest.importorskip("torch")
+pytest.importorskip("transformers")
+
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.memory2.transform import Batch, QualityWindow
 from dimos.models.embedding.clip import CLIPModel

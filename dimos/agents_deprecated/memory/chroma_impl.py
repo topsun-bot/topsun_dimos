@@ -14,12 +14,28 @@
 
 from collections.abc import Sequence
 import os
+from typing import Any
 
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
-import torch
 
 from dimos.agents_deprecated.memory.base import AbstractAgentSemanticMemory
+
+
+def _require_torch() -> Any:
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError("torch is required to use LocalSemanticMemory") from exc
+    return torch
+
+
+def _require_sentence_transformer() -> Any:
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise ImportError("sentence-transformers is required to use LocalSemanticMemory") from exc
+    return SentenceTransformer
 
 
 class ChromaAgentSemanticMemory(AbstractAgentSemanticMemory):
@@ -145,6 +161,8 @@ class LocalSemanticMemory(ChromaAgentSemanticMemory):
     def create(self) -> None:
         """Create local embedding model and initialize the ChromaDB client."""
         # Load the sentence transformer model
+        torch = _require_torch()
+        sentence_transformer = _require_sentence_transformer()
 
         # Use GPU if available, otherwise fall back to CPU
         if torch.cuda.is_available():
@@ -156,7 +174,7 @@ class LocalSemanticMemory(ChromaAgentSemanticMemory):
             self.device = "cpu"
 
         print(f"Using device: {self.device}")
-        self.model = SentenceTransformer(self.model_name, device=self.device)  # type: ignore[name-defined]
+        self.model = sentence_transformer(self.model_name, device=self.device)
 
         # Create a custom embedding class that implements the embed_query method
         class SentenceTransformerEmbeddings:

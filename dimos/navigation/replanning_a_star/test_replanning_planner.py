@@ -33,11 +33,6 @@ def _make_pose(x: float, y: float, z: float = 0.0) -> PoseStamped:
     )
 
 
-# ---------------------------------------------------------------------------
-# PositionTracker
-# ---------------------------------------------------------------------------
-
-
 class TestPositionTracker:
     def test_empty_tracker_not_stuck(self) -> None:
         tracker = PositionTracker(time_window=5.0, threshold=0.4)
@@ -79,11 +74,6 @@ class TestPositionTracker:
             offset = 0.05 * (i % 2)
             tracker.add_position(_make_pose(1.0 + offset, 1.0 - offset))
         assert tracker.is_stuck() is True
-
-
-# ---------------------------------------------------------------------------
-# ReplanLimiter
-# ---------------------------------------------------------------------------
 
 
 class TestReplanLimiter:
@@ -130,11 +120,6 @@ class TestReplanLimiter:
         assert limiter.get_attempt() == 1
         limiter.will_retry()
         assert limiter.get_attempt() == 2
-
-
-# ---------------------------------------------------------------------------
-# GlobalPlanner (goal handling and state management)
-# ---------------------------------------------------------------------------
 
 
 class TestGlobalPlannerGoalHandling:

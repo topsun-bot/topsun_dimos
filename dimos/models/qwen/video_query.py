@@ -16,16 +16,35 @@
 
 import json
 import os
+from typing import Any
 
 import numpy as np
 from openai import OpenAI
 from reactivex import Observable, operators as ops
 from reactivex.subject import Subject
 
-from dimos.agents_deprecated.agent import OpenAIAgent
-from dimos.agents_deprecated.tokenizer.huggingface_tokenizer import HuggingFaceTokenizer
 from dimos.models.qwen.bbox import BBox
 from dimos.utils.threadpool import get_scheduler
+
+
+def _create_qwen_agent(
+    qwen_client: OpenAI,
+    model_name: str,
+    query: str,
+    max_output_tokens_per_request: int,
+) -> Any:
+    from dimos.agents_deprecated.agent import OpenAIAgent
+    from dimos.agents_deprecated.tokenizer.huggingface_tokenizer import HuggingFaceTokenizer
+
+    return OpenAIAgent(
+        dev_name="QwenSingleFrameAgent",
+        openai_client=qwen_client,
+        model_name=model_name,
+        tokenizer=HuggingFaceTokenizer(model_name=f"Qwen/{model_name}"),
+        max_output_tokens_per_request=max_output_tokens_per_request,
+        system_query=query,
+        pool_scheduler=get_scheduler(),
+    )
 
 
 def query_single_frame_observable(
@@ -70,14 +89,11 @@ def query_single_frame_observable(
     response_subject = Subject()  # type: ignore[var-annotated]
 
     # Create temporary agent for processing
-    agent = OpenAIAgent(
-        dev_name="QwenSingleFrameAgent",
-        openai_client=qwen_client,
+    agent = _create_qwen_agent(
+        qwen_client=qwen_client,
         model_name=model_name,
-        tokenizer=HuggingFaceTokenizer(model_name=f"Qwen/{model_name}"),
+        query=query,
         max_output_tokens_per_request=100,
-        system_query=query,
-        pool_scheduler=get_scheduler(),
     )
 
     # Take only first frame
@@ -139,14 +155,11 @@ def query_single_frame(
     )
 
     # Create temporary agent for processing
-    agent = OpenAIAgent(
-        dev_name="QwenSingleFrameAgent",
-        openai_client=qwen_client,
+    agent = _create_qwen_agent(
+        qwen_client=qwen_client,
         model_name=model_name,
-        tokenizer=HuggingFaceTokenizer(model_name=f"Qwen/{model_name}"),
+        query=query,
         max_output_tokens_per_request=8192,
-        system_query=query,
-        pool_scheduler=get_scheduler(),
     )
 
     # Use the numpy array directly (no conversion needed)

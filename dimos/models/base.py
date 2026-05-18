@@ -17,20 +17,55 @@
 from __future__ import annotations
 
 from functools import cached_property
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
-import torch
+from pydantic import Field
 
 from dimos.core.resource import Resource
 from dimos.protocol.service.spec import BaseConfig, Configurable
+
+if TYPE_CHECKING:
+    import torch
 
 # Device string type - 'cuda', 'cpu', 'cuda:0', 'cuda:1', etc.
 DeviceType = Annotated[str, "Device identifier (e.g., 'cuda', 'cpu', 'cuda:0')"]
 
 
+def _try_import_torch() -> Any | None:
+    try:
+        import torch
+    except ImportError:
+        return None
+    return torch
+
+
+def _require_torch() -> Any:
+    torch = _try_import_torch()
+    if torch is None:
+        raise ImportError("torch is required for local model execution")
+    return torch
+
+
+def _default_device() -> str:
+    torch = _try_import_torch()
+    if torch is not None and torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def _default_float32() -> Any:
+    torch = _try_import_torch()
+    return torch.float32 if torch is not None else None
+
+
+def _default_float16() -> Any:
+    torch = _try_import_torch()
+    return torch.float16 if torch is not None else None
+
+
 class LocalModelConfig(BaseConfig):
-    device: DeviceType = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype: torch.dtype = torch.float32
+    device: DeviceType = Field(default_factory=_default_device)
+    dtype: Any = Field(default_factory=_default_float32)
     warmup: bool = False
     autostart: bool = False
 
@@ -94,20 +129,27 @@ class LocalModel(Resource, Configurable):
         """
         import gc
 
+        torch = _try_import_torch()
+
         if "_model" in self.__dict__:
             del self.__dict__["_model"]
 
         # Reset torch.compile caches to free memory from compiled models
         # See: https://github.com/pytorch/pytorch/issues/105181
-        try:
-            import torch._dynamo
+        if torch is not None:
+            try:
+                import torch._dynamo
 
-            torch._dynamo.reset()
-        except (ImportError, AttributeError):
-            pass
+                torch._dynamo.reset()
+            except (ImportError, AttributeError):
+                pass
 
         gc.collect()
-        if self.config.device.startswith("cuda") and torch.cuda.is_available():
+        if (
+            torch is not None
+            and self.config.device.startswith("cuda")
+            and torch.cuda.is_available()
+        ):
             torch.cuda.empty_cache()
 
     def _ensure_cuda_initialized(self) -> None:
@@ -116,7 +158,12 @@ class LocalModel(Resource, Configurable):
         Some models (CLIP, TorchReID) fail if they are the first to use CUDA.
         Call this before model loading if needed.
         """
-        if self.config.device.startswith("cuda") and torch.cuda.is_available():
+        torch = _try_import_torch()
+        if (
+            torch is not None
+            and self.config.device.startswith("cuda")
+            and torch.cuda.is_available()
+        ):
             try:
                 _ = torch.zeros(1, 1, device="cuda") @ torch.zeros(1, 1, device="cuda")
                 torch.cuda.synchronize()
@@ -127,7 +174,7 @@ class LocalModel(Resource, Configurable):
 class HuggingFaceModelConfig(LocalModelConfig):
     model_name: str = ""
     trust_remote_code: bool = True
-    dtype: torch.dtype = torch.float16
+    dtype: Any = Field(default_factory=_default_float16)
 
 
 class HuggingFaceModel(LocalModel):
@@ -161,6 +208,7 @@ class HuggingFaceModel(LocalModel):
             raise NotImplementedError(
                 f"{self.__class__.__name__} must set _model_class or override _model property"
             )
+        _require_torch()
         model = self._model_class.from_pretrained(
             self.config.model_name,
             trust_remote_code=self.config.trust_remote_code,
@@ -182,6 +230,7 @@ class HuggingFaceModel(LocalModel):
         Returns:
             Dictionary with tensors moved to device
         """
+        torch = _require_torch()
         result = {}
         for k, v in inputs.items():
             if isinstance(v, torch.Tensor):

@@ -16,17 +16,26 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import threading
+from typing import Any
 
 import numpy as np
 from PIL import Image as PILImage
-import torch
-from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 
 _DEPTH_MODEL_NAME = "depth-anything/Depth-Anything-V2-Small-hf"
 _DEPTH_MAX_WIDTH = 640
+
+
+def _require_depth_dependencies() -> tuple[Any, Any, Any]:
+    try:
+        import torch
+        from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+    except ImportError as exc:
+        raise ImportError("torch and transformers are required to use DepthEstimator") from exc
+
+    return torch, AutoImageProcessor, AutoModelForDepthEstimation
 
 
 class DepthEstimator:
@@ -38,6 +47,8 @@ class DepthEstimator:
 
     def __init__(self, publish: Callable[[Image], None], device: str | None = None) -> None:
         self._publish = publish
+        torch, auto_image_processor, auto_model_for_depth_estimation = _require_depth_dependencies()
+        self._torch = torch
         if device is None:
             if torch.cuda.is_available():
                 device = "cuda"
@@ -46,8 +57,8 @@ class DepthEstimator:
             else:
                 device = "cpu"
         self._device = torch.device(device)
-        self._processor = AutoImageProcessor.from_pretrained(_DEPTH_MODEL_NAME)
-        self._model = AutoModelForDepthEstimation.from_pretrained(_DEPTH_MODEL_NAME).to(
+        self._processor = auto_image_processor.from_pretrained(_DEPTH_MODEL_NAME)
+        self._model = auto_model_for_depth_estimation.from_pretrained(_DEPTH_MODEL_NAME).to(
             self._device
         )
         self._latest: Image | None = None
@@ -83,6 +94,7 @@ class DepthEstimator:
                 self._process(image)
 
     def _process(self, image: Image) -> None:
+        torch = self._torch
         rgb = image.to_rgb()
         pil_image = PILImage.fromarray(rgb.data)
         if pil_image.width > _DEPTH_MAX_WIDTH:

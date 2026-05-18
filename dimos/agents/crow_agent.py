@@ -64,10 +64,6 @@ class CrowAgent(Module):
             self._human_transport = None
         super().stop()
 
-    # ------------------------------------------------------------------
-    # MCP skill — called by crow's DimosBridge
-    # ------------------------------------------------------------------
-
     @skill
     def receive(self, text: str) -> str:
         """Forward a CROW command to the dimos agent via /human_input.

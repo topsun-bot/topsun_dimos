@@ -24,6 +24,8 @@ import pytest
 from reactivex import operators as ops
 from reactivex.scheduler import ThreadPoolScheduler
 
+pytest.importorskip("transformers")
+
 from dimos.agents_deprecated.memory.image_embedding import ImageEmbeddingProvider
 from dimos.stream.video_provider import VideoProvider
 

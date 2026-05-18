@@ -26,7 +26,6 @@ from dimos.memory2.blobstore.file import FileBlobStore
 from dimos.memory2.blobstore.sqlite import SqliteBlobStore
 from dimos.memory2.store.memory import MemoryStore
 from dimos.memory2.store.sqlite import SqliteStore
-from dimos.models.embedding.clip import CLIPModel
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -34,10 +33,16 @@ if TYPE_CHECKING:
 
     from dimos.memory2.blobstore.base import BlobStore
     from dimos.memory2.store.base import Store
+    from dimos.models.embedding.clip import CLIPModel
 
 
 @pytest.fixture(scope="module")
 def clip() -> CLIPModel:
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+
+    from dimos.models.embedding.clip import CLIPModel
+
     return CLIPModel()
 
 

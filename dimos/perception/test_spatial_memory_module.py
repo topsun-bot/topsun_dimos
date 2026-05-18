@@ -20,6 +20,8 @@ from typing import Any
 import pytest
 from reactivex import operators as ops
 
+pytest.importorskip("transformers")
+
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig

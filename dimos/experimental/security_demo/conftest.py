@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("torch")
+
 from dimos.experimental.security_demo.security_module import SecurityModule
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image

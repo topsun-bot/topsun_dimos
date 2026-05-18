@@ -20,7 +20,7 @@ from pathlib import Path
 import time
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from reactivex.disposable import Disposable
 
 from dimos.agents.annotation import skill
@@ -33,8 +33,6 @@ from dimos.memory2.store.sqlite import SqliteStore
 from dimos.memory2.stream import Stream
 from dimos.memory2.transform import QualityWindow
 from dimos.memory2.type.observation import EmbeddedObservation, Observation
-from dimos.models.embedding.base import EmbeddingModel
-from dimos.models.embedding.clip import CLIPModel
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.utils.logging_config import setup_logger
@@ -43,6 +41,9 @@ if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
 
     from dimos.core.stream import In, Out
+    from dimos.models.embedding.base import EmbeddingModel
+else:
+    EmbeddingModel = Any
 
 logger = setup_logger()
 
@@ -189,8 +190,14 @@ class MemoryModule(Module):
         return self._store
 
 
+def _default_embedding_model() -> type[EmbeddingModel]:
+    from dimos.models.embedding.clip import CLIPModel
+
+    return CLIPModel
+
+
 class SemanticSearchConfig(MemoryModuleConfig):
-    embedding_model: type[EmbeddingModel] = CLIPModel
+    embedding_model: type[EmbeddingModel] = Field(default_factory=_default_embedding_model)
 
 
 class SemanticSearch(MemoryModule):

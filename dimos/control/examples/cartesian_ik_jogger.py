@@ -39,11 +39,13 @@ from typing import Any
 
 import numpy as np
 
-try:
-    import pygame
-except ImportError:
-    print("pygame not installed. Install with: pip install pygame")
-    raise
+
+def _require_pygame() -> Any:
+    try:
+        import pygame
+    except ImportError as exc:
+        raise ImportError("pygame not installed. Install with: pip install pygame") from exc
+    return pygame
 
 
 @dataclass
@@ -169,6 +171,8 @@ def run_jogger_ui(model_path: str | None = None, ee_joint_id: int = 6) -> None:
     """
     from dimos.core.transport import LCMTransport
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+
+    pygame = _require_pygame()
 
     # Use Piper model if not specified
     if model_path is None:

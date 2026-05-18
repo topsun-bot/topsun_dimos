@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ultralytics import YOLO  # type: ignore[attr-defined]
+from pathlib import Path
+from typing import Any
 
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.perception.detection.detectors.base import Detector
@@ -24,6 +25,15 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 
+def _load_yolo_model(model_file: Path, task: str) -> Any:
+    try:
+        from ultralytics import YOLO  # type: ignore[attr-defined]
+    except ImportError as exc:
+        raise ImportError("ultralytics is required to use YoloPersonDetector") from exc
+
+    return YOLO(model_file, task=task)
+
+
 class YoloPersonDetector(Detector):
     def __init__(
         self,
@@ -31,7 +41,7 @@ class YoloPersonDetector(Detector):
         model_name: str = "yolo11n-pose.pt",
         device: str | None = None,
     ) -> None:
-        self.model = YOLO(get_data(model_path) / model_name, task="track")
+        self.model = _load_yolo_model(get_data(model_path) / model_name, task="track")
 
         self.tracker = get_data(model_path) / "botsort.yaml"
 

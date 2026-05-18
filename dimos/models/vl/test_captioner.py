@@ -18,6 +18,9 @@ from typing import Protocol, TypeVar
 
 import pytest
 
+pytest.importorskip("torch")
+pytest.importorskip("transformers")
+
 from dimos.models.vl.florence import Florence2Model
 from dimos.models.vl.moondream import MoondreamVlModel
 from dimos.msgs.sensor_msgs.Image import Image

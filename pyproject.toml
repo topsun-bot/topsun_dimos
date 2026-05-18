@@ -362,6 +362,7 @@ lint = [
 ]
 tests = [
     "coverage>=7.0",
+    "googlemaps>=4.10.0",
     "md-babel-py==1.1.5",
     "pytest==8.3.5",
     "pytest-asyncio==0.26.0",
@@ -370,6 +371,7 @@ tests = [
     "pytest-mock==3.15.0",
     "pytest-timeout==2.4.0",
     "pytest-xdist>=3.8.0",
+    "reportlab>=4.4.0",
     "requests-mock==1.12.1",
 ]
 tests-self-hosted = [

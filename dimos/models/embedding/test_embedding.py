@@ -16,6 +16,9 @@ import time
 from typing import Any
 
 import pytest
+
+pytest.importorskip("torch")
+
 import torch
 
 from dimos.models.embedding.clip import CLIPModel

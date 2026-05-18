@@ -19,17 +19,22 @@ This module provides a class for generating vector embeddings from images
 using pre-trained models like CLIP, ResNet, etc.
 """
 
+from __future__ import annotations
+
 import base64
 import io
 import os
 import sys
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 import onnxruntime as ort
 from PIL import Image
-from transformers.modeling_utils import PreTrainedModel
-from transformers.processing_utils import ProcessorMixin
+
+if TYPE_CHECKING:
+    from transformers.modeling_utils import PreTrainedModel
+    from transformers.processing_utils import ProcessorMixin
 
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
@@ -161,7 +166,7 @@ class ImageEmbeddingProvider:
                 embedding = embedding[0]
 
             elif self.model_name == "resnet":
-                assert isinstance(self.model, PreTrainedModel)
+                assert self.model is not None
                 inputs = self.processor(images=pil_image, return_tensors="pt")
 
                 with torch.no_grad():

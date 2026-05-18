@@ -28,7 +28,6 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
-from dimos.navigation.visual.query import get_object_bbox_from_image
 from dimos.perception.object_tracking_spec import ObjectTrackingSpec
 from dimos.perception.spatial_memory_spec import SpatialMemorySpec
 from dimos.types.robot_location import RobotLocation
@@ -223,6 +222,8 @@ class NavigationSkillContainer(Module):
     def _get_bbox_for_current_frame(self, query: str) -> BBox | None:
         if self._latest_image is None:
             return None
+
+        from dimos.navigation.visual.query import get_object_bbox_from_image
 
         return get_object_bbox_from_image(self._vl_model, self._latest_image, query)
 

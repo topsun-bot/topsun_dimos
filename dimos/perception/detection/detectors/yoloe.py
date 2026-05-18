@@ -13,12 +13,12 @@
 # limitations under the License.
 
 from enum import Enum
+from pathlib import Path
 import threading
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from ultralytics import YOLOE  # type: ignore[attr-defined]
 
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.perception.detection.detectors.base import Detector
@@ -32,6 +32,15 @@ class YoloePromptMode(Enum):
 
     LRPC = "lrpc"
     PROMPT = "prompt"
+
+
+def _load_yoloe_model(model_file: Path) -> Any:
+    try:
+        from ultralytics import YOLOE  # type: ignore[attr-defined]
+    except ImportError as exc:
+        raise ImportError("ultralytics is required to use Yoloe2DDetector") from exc
+
+    return YOLOE(model_file)
 
 
 class Yoloe2DDetector(Detector):
@@ -61,7 +70,7 @@ class Yoloe2DDetector(Detector):
             else:
                 model_name = "yoloe-11s-seg.pt"
 
-        self.model = YOLOE(get_data(model_path) / model_name)
+        self.model = _load_yoloe_model(get_data(model_path) / model_name)
         self.prompt_mode = prompt_mode
         self._visual_prompts: dict[str, NDArray[Any]] | None = None
         self.max_area_ratio = max_area_ratio

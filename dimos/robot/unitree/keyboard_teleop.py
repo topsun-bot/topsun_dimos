@@ -13,11 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import os
 import threading
 from typing import Any
-
-import pygame
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
@@ -28,6 +28,15 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+
+def _require_pygame() -> Any:
+    try:
+        import pygame
+    except ImportError as exc:
+        raise ImportError("pygame is required to use KeyboardTeleop") from exc
+    return pygame
+
 
 # Force X11 driver to avoid OpenGL threading issues
 os.environ["SDL_VIDEODRIVER"] = "x11"
@@ -54,9 +63,9 @@ class KeyboardTeleop(Module):
     _stop_event: threading.Event
     _keys_held: set[int] | None = None
     _thread: threading.Thread | None = None
-    _screen: pygame.Surface | None = None
-    _clock: pygame.time.Clock | None = None
-    _font: pygame.font.Font | None = None
+    _screen: Any | None = None
+    _clock: Any | None = None
+    _font: Any | None = None
 
     def __init__(
         self,
@@ -102,6 +111,7 @@ class KeyboardTeleop(Module):
         if self._keys_held is None:
             raise RuntimeError("_keys_held not initialized")
 
+        pygame = _require_pygame()
         pygame.init()
         self._screen = pygame.display.set_mode((_WINDOW_WIDTH, _WINDOW_HEIGHT), pygame.SWSURFACE)
         pygame.display.set_caption("Keyboard Teleop")
@@ -179,6 +189,7 @@ class KeyboardTeleop(Module):
         if self._screen is None or self._font is None or self._keys_held is None:
             raise RuntimeError("Not initialized correctly")
 
+        pygame = _require_pygame()
         self._screen.fill(_BACKGROUND_COLOR)
 
         y_pos = 20

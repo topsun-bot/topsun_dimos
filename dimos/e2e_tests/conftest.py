@@ -18,6 +18,8 @@ import time
 
 import pytest
 
+pytest.importorskip("mujoco")
+
 from dimos.core.transport import pLCMTransport
 from dimos.e2e_tests.conf_types import StartPersonTrack
 from dimos.e2e_tests.dim_sim_client import DimSimClient

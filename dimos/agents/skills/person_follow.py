@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import base64
 from threading import Event, RLock, Thread
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from reactivex.disposable import Disposable
@@ -27,7 +29,6 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.models.qwen.bbox import BBox
-from dimos.models.segmentation.edge_tam import EdgeTAMProcessor
 from dimos.models.vl.base import VlModel
 from dimos.models.vl.create import create
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -39,6 +40,9 @@ from dimos.navigation.visual.query import get_object_bbox_from_image
 from dimos.navigation.visual_servoing.detection_navigation import DetectionNavigation
 from dimos.navigation.visual_servoing.visual_servoing_2d import VisualServoing2D
 from dimos.utils.logging_config import setup_logger
+
+if TYPE_CHECKING:
+    from dimos.models.segmentation.edge_tam import EdgeTAMProcessor
 
 logger = setup_logger()
 
@@ -257,7 +261,7 @@ class PersonFollowSkillContainer(Module):
 
         return message
 
-    def _follow_loop(self, tracker: "EdgeTAMProcessor", query: str) -> None:
+    def _follow_loop(self, tracker: EdgeTAMProcessor, query: str) -> None:
         lost_count = 0
         period = 1.0 / self._frequency
         next_time = time.monotonic()

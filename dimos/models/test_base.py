@@ -16,6 +16,10 @@
 
 from functools import cached_property
 
+import pytest
+
+pytest.importorskip("torch")
+
 import torch
 
 from dimos.models.base import HuggingFaceModel, LocalModel

@@ -116,7 +116,7 @@ def _read_sse_notifications(
     """
     collected: list[dict] = []
     deadline = time.monotonic() + timeout
-    with httpx.Client(timeout=timeout) as client:
+    with httpx.Client(timeout=timeout, trust_env=False) as client:
         with client.stream(
             "GET",
             url,

@@ -30,7 +30,6 @@ from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.models.segmentation.edge_tam import EdgeTAMProcessor
 from dimos.perception.detection.detectors.person.yolo import YoloPersonDetector
 from dimos.perception.detection.type.detection2d.person import Detection2DPerson
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -43,7 +42,6 @@ from dimos.navigation.patrolling.routers.patrol_router import PatrolRouter
 from dimos.agents.skills.speak_skill_spec import SpeakSkillSpec
 from dimos.navigation.replanning_a_star.module_spec import ReplanningAStarPlannerSpec
 from dimos.navigation.visual_servoing.visual_servoing_2d import VisualServoing2D
-from dimos.perception.common.utils import draw_bounding_box
 from dimos.utils.logging_config import setup_logger
 from dimos.navigation.patrolling.constants import EXTRA_CLEARANCE
 
@@ -156,6 +154,9 @@ class SecurityModule(Module):
         self._router: PatrolRouter = _create_router(self.config.g)
         self._visual_servo = _create_visual_servo(self.config, self.config.g)
         self._detector = YoloPersonDetector()
+
+        from dimos.models.segmentation.edge_tam import EdgeTAMProcessor
+
         self._tracker = EdgeTAMProcessor()
 
         self._depth_estimator = DepthEstimator(self.depth_image.publish)
@@ -297,6 +298,8 @@ class SecurityModule(Module):
             confidence=f"{best.confidence:.2f}",
             area=f"{best.bbox_2d_volume():.0f}px",
         )
+
+        from dimos.perception.common.utils import draw_bounding_box
 
         annotated = draw_bounding_box(
             image.data.copy(),

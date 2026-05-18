@@ -78,7 +78,7 @@ class McpClient(Module):
             daemon=True,
         )
         self._stop_event = Event()
-        self._http_client = httpx.Client(timeout=120.0)
+        self._http_client = httpx.Client(timeout=120.0, trust_env=False)
         self._seq_ids = SequentialIds()
         self._tool_stream_cleanup = None
 
@@ -155,13 +155,16 @@ class McpClient(Module):
         while True:
             try:
                 self._mcp_request("initialize")
-                break
-            except (httpx.ConnectError, httpx.RemoteProtocolError):
-                if time.monotonic() >= deadline:
-                    return None
-                time.sleep(interval)
+                return self._mcp_request("tools/list")
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code < 500:
+                    raise
+            except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.TimeoutException):
+                pass
 
-        return self._mcp_request("tools/list")
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(interval)
 
     def _mcp_tool_to_langchain(self, mcp_tool: dict[str, Any]) -> StructuredTool:
         name = mcp_tool["name"]

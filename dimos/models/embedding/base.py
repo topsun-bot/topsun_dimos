@@ -16,17 +16,33 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import time
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Any, overload
 
 import numpy as np
-import torch
 
 from dimos.core.resource import Resource
 from dimos.models.base import HuggingFaceModelConfig, LocalModelConfig
 from dimos.types.timestamped import Timestamped
 
 if TYPE_CHECKING:
+    import torch
+
     from dimos.msgs.sensor_msgs.Image import Image
+
+
+def _try_import_torch() -> Any | None:
+    try:
+        import torch
+    except ImportError:
+        return None
+    return torch
+
+
+def _require_torch() -> Any:
+    torch = _try_import_torch()
+    if torch is None:
+        raise ImportError("torch is required for torch-backed embeddings")
+    return torch
 
 
 class EmbeddingModelConfig(LocalModelConfig):
@@ -59,7 +75,8 @@ class Embedding(Timestamped):
 
     def __matmul__(self, other: Embedding) -> float:
         """Compute cosine similarity via @ operator."""
-        if isinstance(self.vector, torch.Tensor):
+        torch = _try_import_torch()
+        if torch is not None and isinstance(self.vector, torch.Tensor):
             other_tensor = other.to_torch(self.vector.device)
             result = self.vector @ other_tensor
             return result.item()
@@ -67,12 +84,14 @@ class Embedding(Timestamped):
 
     def to_numpy(self) -> np.ndarray:
         """Convert to numpy array (moves to CPU if needed)."""
-        if isinstance(self.vector, torch.Tensor):
+        torch = _try_import_torch()
+        if torch is not None and isinstance(self.vector, torch.Tensor):
             return self.vector.detach().cpu().numpy()
         return self.vector
 
     def to_torch(self, device: str | torch.device | None = None) -> torch.Tensor:
         """Convert to torch tensor on specified device."""
+        torch = _require_torch()
         if isinstance(self.vector, np.ndarray):
             tensor = torch.from_numpy(self.vector)
             return tensor.to(device) if device else tensor
@@ -83,7 +102,8 @@ class Embedding(Timestamped):
 
     def to_cpu(self) -> Embedding:
         """Move embedding to CPU, returning self for chaining."""
-        if isinstance(self.vector, torch.Tensor):
+        torch = _try_import_torch()
+        if torch is not None and isinstance(self.vector, torch.Tensor):
             self.vector = self.vector.cpu()
         return self
 
@@ -128,6 +148,7 @@ class EmbeddingModel(Resource, ABC):
         Returns:
             torch.Tensor of similarities (N,)
         """
+        torch = _require_torch()
         query_tensor = query.to_torch(self.device)
         candidate_tensors = torch.stack([c.to_torch(self.device) for c in candidates])
         return query_tensor @ candidate_tensors.T
@@ -145,6 +166,7 @@ class EmbeddingModel(Resource, ABC):
         Returns:
             torch.Tensor of similarities (M, N) where M=len(queries), N=len(candidates)
         """
+        torch = _require_torch()
         query_tensors = torch.stack([q.to_torch(self.device) for q in queries])
         candidate_tensors = torch.stack([c.to_torch(self.device) for c in candidates])
         return query_tensors @ candidate_tensors.T

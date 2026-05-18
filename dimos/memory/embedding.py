@@ -24,15 +24,20 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.models.embedding.base import Embedding, EmbeddingModel
-from dimos.models.embedding.clip import CLIPModel
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image, sharpness_barrier
 from dimos.utils.reactive import getter_hot
 
 
+def _default_embedding_model() -> EmbeddingModel:
+    from dimos.models.embedding.clip import CLIPModel
+
+    return CLIPModel()
+
+
 class Config(ModuleConfig):
-    embedding_model: EmbeddingModel = Field(default_factory=CLIPModel)
+    embedding_model: EmbeddingModel = Field(default_factory=_default_embedding_model)
 
 
 @dataclass
