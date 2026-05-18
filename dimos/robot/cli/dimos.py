@@ -203,8 +203,8 @@ def run(
     show_help: bool = typer.Option(False, "--help"),
 ) -> None:
     """Start a robot blueprint"""
-    logger.info("Starting DimOS")
-
+    #logger.info("Starting DimOS")
+    logger.info("Starting DimOS with local dev code...")
     from dimos.core.coordination.blueprints import autoconnect
     from dimos.core.coordination.module_coordinator import ModuleCoordinator
     from dimos.core.coordination.process_lifecycle import (

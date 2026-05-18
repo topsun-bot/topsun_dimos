@@ -28,6 +28,7 @@ from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.base import NavigationInterface, NavigationState
 from dimos.navigation.replanning_a_star.global_planner import GlobalPlanner
+from dimos.navigation.stairs.contracts import StairCorridor
 
 
 class ReplanningAStarPlanner(Module, NavigationInterface):
@@ -121,3 +122,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
     @rpc
     def reset_safe_goal_clearance(self) -> None:
         self._planner.reset_safe_goal_clearance()
+
+    @rpc
+    def set_stair_corridor(self, corridor: StairCorridor | None) -> bool:
+        return self._planner.set_stair_corridor(corridor)

@@ -54,6 +54,7 @@ class GlobalConfig(BaseSettings):
     mcp_port: int = 9990
     dtop: bool = False
     obstacle_avoidance: bool = True
+    stair_navigation: bool = False
     detection_model: VlModelName = "moondream"
     listen_host: str = "127.0.0.1"
 

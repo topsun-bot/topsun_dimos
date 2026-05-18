@@ -22,6 +22,8 @@ from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
+from dimos.robot.unitree.go2.stair_locomotion.twist_limiter import stair_aware_limit
 from dimos.utils.trigonometry import angle_diff
 
 
@@ -39,6 +41,7 @@ class PController:
     _global_config: GlobalConfig
     _speed: float
     _control_frequency: float
+    _on_stair: bool = False
 
     _min_linear_velocity: float = 0.2
     _min_angular_velocity: float = 0.2
@@ -50,6 +53,18 @@ class PController:
         self._global_config = global_config
         self._speed = speed
         self._control_frequency = control_frequency
+        self._stair_config = StairLocomotionConfig()
+
+    def set_on_stair(self, on_stair: bool) -> None:
+        self._on_stair = on_stair
+
+    def _limit_twist(self, twist: Twist) -> Twist:
+        return stair_aware_limit(
+            twist,
+            self._stair_config,
+            stair_navigation_enabled=self._global_config.stair_navigation,
+            on_stair=self._on_stair,
+        )
 
     def advance(self, lookahead_point: NDArray[np.float64], current_odom: PoseStamped) -> Twist:
         current_pos = np.array([current_odom.position.x, current_odom.position.y])
@@ -68,20 +83,22 @@ class PController:
 
         # Rotate-then-drive: if heading error is large, rotate in place first
         if abs(yaw_error) > self._rotation_threshold:
-            return self._angular_twist(angular_velocity)
+            return self._limit_twist(self._angular_twist(angular_velocity))
 
         # When aligned, drive forward with proportional angular correction
         linear_velocity = self._speed * (1.0 - abs(yaw_error) / self._rotation_threshold)
         linear_velocity = self._apply_min_velocity(linear_velocity, self._min_linear_velocity)
 
-        return Twist(
-            linear=Vector3(linear_velocity, 0.0, 0.0),
-            angular=Vector3(0.0, 0.0, angular_velocity),
+        return self._limit_twist(
+            Twist(
+                linear=Vector3(linear_velocity, 0.0, 0.0),
+                angular=Vector3(0.0, 0.0, angular_velocity),
+            )
         )
 
     def rotate(self, yaw_error: float) -> Twist:
         angular_velocity = self._compute_angular_velocity(yaw_error)
-        return self._angular_twist(angular_velocity)
+        return self._limit_twist(self._angular_twist(angular_velocity))
 
     def _compute_angular_velocity(self, yaw_error: float) -> float:
         angular_velocity = self._k_angular * yaw_error

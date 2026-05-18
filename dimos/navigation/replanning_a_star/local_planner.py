@@ -106,6 +106,9 @@ class LocalPlanner(Resource):
         with self._lock:
             self._current_odom = msg
 
+    def set_following_stair(self, on_stair: bool) -> None:
+        self._controller.set_on_stair(on_stair)
+
     def start_planning(self, path: Path) -> None:
         self.stop_planning()
 

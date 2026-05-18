@@ -15,6 +15,7 @@
 import asyncio
 import os
 import platform
+import subprocess
 import threading
 
 from dotenv import load_dotenv
@@ -87,7 +88,7 @@ def _autoconf(request):
     try:
         try:
             autoconf()
-        except PermissionError as exc:
+        except (PermissionError, subprocess.CalledProcessError) as exc:
             from dimos.utils.logging_config import setup_logger
 
             setup_logger().warning(

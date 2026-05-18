@@ -36,6 +36,8 @@ from dimos.navigation.replanning_a_star.min_cost_astar import min_cost_astar
 from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
 from dimos.navigation.replanning_a_star.position_tracker import PositionTracker
 from dimos.navigation.replanning_a_star.replan_limiter import ReplanLimiter
+from dimos.navigation.stairs.contracts import StairCorridor
+from dimos.navigation.stairs.plan_in_corridor import plan_in_corridor
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.trigonometry import angle_diff
 
@@ -72,6 +74,8 @@ class GlobalPlanner(Resource):
     _stuck_threshold: float = 0.4
     _max_path_deviation: float = 0.9
     _replanning_enabled: bool = True
+    _stair_corridor: StairCorridor | None = None
+    _following_stair_path: bool = False
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self.path = Subject()
@@ -302,12 +306,20 @@ class GlobalPlanner(Resource):
 
         self._plan_path()
 
+    def set_stair_corridor(self, corridor: StairCorridor | None) -> bool:
+        with self._lock:
+            self._stair_corridor = corridor
+            if corridor is None:
+                self._following_stair_path = False
+        return True
+
     def _plan_path(self) -> None:
         self.cancel_goal(but_will_try_again=True)
 
         with self._lock:
             current_odom = self._current_odom
             current_goal = self._current_goal
+            stair_corridor = self._stair_corridor
 
         assert current_goal is not None
 
@@ -324,7 +336,24 @@ class GlobalPlanner(Resource):
             self.cancel_goal()
             return
 
-        path = self._find_wide_path(safe_goal, current_odom.position)
+        path: Path | None = None
+        if self._global_config.stair_navigation and stair_corridor is not None:
+            path = plan_in_corridor(
+                current_odom.position,
+                safe_goal,
+                stair_corridor,
+                step_m=0.1,
+                frame_id=current_goal.frame_id or "map",
+            )
+            if path and path.poses:
+                logger.info("Using stair corridor centerline path.")
+                with self._lock:
+                    self._following_stair_path = True
+
+        if path is None or not path.poses:
+            with self._lock:
+                self._following_stair_path = False
+            path = self._find_wide_path(safe_goal, current_odom.position)
 
         if not path:
             logger.warning(
@@ -337,6 +366,9 @@ class GlobalPlanner(Resource):
 
         self.path.on_next(resampled_path)
 
+        with self._lock:
+            on_stair = self._following_stair_path
+        self._local_planner.set_following_stair(on_stair)
         self._local_planner.start_planning(resampled_path)
 
     def _find_wide_path(self, goal: Vector3, robot_pos: Vector3) -> Path | None:
