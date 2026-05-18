@@ -37,6 +37,8 @@ jobs:
         uses: pre-commit/action@v3.0.1
 
   md-babel:
+    # Fork: LFS/checkout often fails; skip until mirror is fixed.
+    if: github.repository == 'dimensionalOS/dimos'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
@@ -136,8 +138,12 @@ jobs:
 
   self-hosted-tests:
     # Skip on PRs from forks which would expose the self-hosted runner to untrusted code from external contributors.
+    # Fork org has no self-hosted pool matching dimensionalOS labels.
     if: |
-      github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+      github.repository == 'dimensionalOS/dimos' && (
+        github.event_name == 'push' ||
+        github.event.pull_request.head.repo.full_name == github.repository
+      )
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -264,7 +270,7 @@ jobs:
     - name: Decide whether the needed jobs succeeded or failed
       uses: re-actors/alls-green@release/v1
       with:
-        allowed-skips: self-hosted-tests
+        allowed-skips: self-hosted-tests, md-babel
         jobs: ${{ toJSON(needs) }}
     - name: Trigger Codecov notifications
       uses: codecov/codecov-action@v6
