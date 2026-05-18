@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dimos.core.coordination.python_worker import PythonWorker
 from dimos.core.global_config import GlobalConfig
@@ -37,6 +37,7 @@ class WorkerManagerPython:
         self._cfg = g
         self._n_workers = g.n_workers
         self._workers: list[PythonWorker] = []
+        self._local_modules: list[ModuleBase] = []
         self._closed = False
         self._started = False
         self._stats_monitor: StatsMonitor | None = None
@@ -45,6 +46,9 @@ class WorkerManagerPython:
         if self._started:
             return
         self._started = True
+        if self._n_workers == 0:
+            logger.info("Worker pool disabled; deploying modules in-process.")
+            return
         for _ in range(self._n_workers):
             worker = PythonWorker()
             worker.start_process()
@@ -84,6 +88,14 @@ class WorkerManagerPython:
 
         if not self._started:
             self.start()
+
+        if self._n_workers == 0:
+            kwargs = dict(kwargs)
+            kwargs["g"] = global_config
+            module = module_class(**kwargs)
+            self._local_modules.append(module)
+            logger.info("Deployed module in-process.", module=module_class.__name__)
+            return cast("ModuleProxyProtocol", module)
 
         worker = self._select_worker()
         actor = worker.deploy_module(module_class, global_config, kwargs=kwargs)
@@ -148,6 +160,13 @@ class WorkerManagerPython:
         if not self._started:
             self.start()
 
+        if self._n_workers == 0:
+            modules: list[ModuleProxyProtocol] = []
+            for module_class, _global_config, kwargs in specs:
+                kwargs.update(blueprint_args.get(module_class.name, {}))
+                modules.append(self.deploy(module_class, _global_config, kwargs))
+            return modules
+
         # Pre-assign workers sequentially (so least-loaded accounting is
         # correct), then deploy concurrently via threads. The per-worker lock
         # serializes deploys that land on the same worker process.
@@ -169,6 +188,8 @@ class WorkerManagerPython:
             raise
 
     def health_check(self) -> bool:
+        if self._n_workers == 0:
+            return True
         if len(self._workers) == 0:
             logger.error("health_check: no workers found")
             return False
@@ -196,6 +217,20 @@ class WorkerManagerPython:
             self._stats_monitor = None
 
         logger.info("Shutting down all workers...")
+
+        if self._n_workers == 0:
+            for module in reversed(self._local_modules):
+                try:
+                    module.stop()
+                except Exception:
+                    logger.error(
+                        "Error stopping in-process module",
+                        module=module.__class__.__name__,
+                        exc_info=True,
+                    )
+            self._local_modules.clear()
+            logger.info("All in-process modules released")
+            return
 
         for worker in reversed(self._workers):
             try:

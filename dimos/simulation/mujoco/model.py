@@ -145,12 +145,56 @@ def _add_person_object(root: ET.Element) -> None:
     )
 
 
+def _load_scene_file(room_name: str) -> str:
+    xml_file = (_get_data_dir() / f"scene_{room_name}.xml").as_posix()
+    with open(xml_file) as f:
+        return f.read()
+
+
+def _load_threshold_scene_xml() -> str:
+    root = ET.fromstring(_load_scene_file("empty"))
+
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+
+    if asset.find("./material[@name='threshold_red']") is None:
+        ET.SubElement(asset, "material", name="threshold_red", rgba="0.9 0.05 0.02 1")
+
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        worldbody = ET.SubElement(root, "worldbody")
+
+    ET.SubElement(
+        worldbody,
+        "geom",
+        name="ten_cm_threshold",
+        type="box",
+        pos="-0.35 1.0 0.05",
+        size="0.08 0.75 0.05",
+        material="threshold_red",
+        friction="1.0 0.1 0.1",
+    )
+
+    ET.SubElement(
+        worldbody,
+        "site",
+        name="threshold_center_marker",
+        pos="-0.35 1.0 0.12",
+        size="0.035",
+        rgba="0.1 0.6 1.0 1",
+    )
+
+    return ET.tostring(root, encoding="unicode")
+
+
 def load_scene_xml(config: GlobalConfig) -> str:
     if config.mujoco_room_from_occupancy:
         path = Path(config.mujoco_room_from_occupancy)
         return generate_mujoco_scene(OccupancyGrid.from_path(path))
 
     mujoco_room = config.mujoco_room or "office1"
-    xml_file = (_get_data_dir() / f"scene_{mujoco_room}.xml").as_posix()
-    with open(xml_file) as f:
-        return f.read()
+    if mujoco_room == "threshold":
+        return _load_threshold_scene_xml()
+
+    return _load_scene_file(mujoco_room)

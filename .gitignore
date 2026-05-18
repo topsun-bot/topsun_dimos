@@ -84,3 +84,4 @@ htmlcov/
 
 # Memory2 autorecord
 recording*.db
+.omx/
