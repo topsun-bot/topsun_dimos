@@ -132,6 +132,18 @@ class ThresholdCrossingPlanner:
                 obstacle=obstacle,
             )
 
+        required_foot_raise_m = obstacle.height_m + cfg.foot_raise_margin_m
+        if required_foot_raise_m > cfg.max_foot_raise_height_m:
+            return ThresholdDecision(
+                kind="avoid",
+                reason=(
+                    f"obstacle height {obstacle.height_m:.2f}m needs "
+                    f"{required_foot_raise_m:.2f}m foot raise with clearance margin, above "
+                    f"{cfg.max_foot_raise_height_m:.2f}m foot raise limit"
+                ),
+                obstacle=obstacle,
+            )
+
         if obstacle.width_m > cfg.max_crossable_width_m:
             return ThresholdDecision(
                 kind="avoid",

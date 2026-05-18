@@ -38,12 +38,18 @@ from dimos.core.global_config import GlobalConfig
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.porcelain.local_module_source import LocalModuleSource
 from dimos.spec.utils import Spec
 
 # Disable Rerun for tests (prevents viewer spawn and gRPC flush errors)
 _BUILD_WITHOUT_RERUN = MappingProxyType(
     {
         "g": {"viewer": "none"},
+    }
+)
+_BUILD_IN_PROCESS_WITHOUT_RERUN = MappingProxyType(
+    {
+        "g": {"viewer": "none", "n_workers": 0},
     }
 )
 
@@ -91,6 +97,15 @@ class SourceModule(Module):
 
 class TargetModule(Module):
     remapped_data: In[Data1]
+
+
+class StopCountingModule(Module):
+    stop_calls: int = 0
+
+    @rpc
+    def stop(self) -> None:
+        super().stop()
+        type(self).stop_calls += 1
 
 
 # ModuleRef / RPC tests
@@ -577,6 +592,9 @@ def test_optional_module_ref_without_provider(build_coordinator) -> None:
 def test_load_blueprint_auto_scales_empty_pool(dynamic_coordinator) -> None:
     """A coordinator with 0 initial workers auto-adds workers on load_blueprint."""
     dynamic_coordinator.load_blueprint(ModuleA.blueprint())
+    python_wm = dynamic_coordinator._managers["python"]
+    assert isinstance(python_wm, WorkerManagerPython)
+    assert len(python_wm.workers) == 1
     assert dynamic_coordinator.get_instance(ModuleA) is not None
     assert dynamic_coordinator.get_instance(ModuleA).data1.transport is not None
 
@@ -651,21 +669,41 @@ def test_restart_consumer_rewires_outbound_refs(dynamic_coordinator) -> None:
     assert b_after.what_is_as_name() == "A, Module A"
 
 
-def test_restart_module_shuts_down_empty_worker(dynamic_coordinator) -> None:
-    """Restart shuts down the old worker (when empty) and spawns a new one."""
+def test_restart_module_replaces_in_process_module() -> None:
+    """Zero-worker restart replaces the local module handle without spawning workers."""
+    coordinator = ModuleCoordinator.build(
+        ModuleA.blueprint(), _BUILD_IN_PROCESS_WITHOUT_RERUN.copy()
+    )
+    try:
+        python_wm = coordinator._managers["python"]
+        assert isinstance(python_wm, WorkerManagerPython)
+        assert python_wm.workers == []
 
-    dynamic_coordinator.load_module(ModuleA)
-    python_wm = dynamic_coordinator._managers["python"]
+        old_local_ids = set(python_wm._local_modules)
+        assert len(old_local_ids) == 1
+
+        coordinator.restart_module(ModuleA, reload_source=False)
+
+        new_local_ids = set(python_wm._local_modules)
+        assert python_wm.workers == []
+        assert len(new_local_ids) == 1
+        assert new_local_ids.isdisjoint(old_local_ids)
+    finally:
+        coordinator.stop()
+
+
+def test_zero_worker_stop_calls_module_stop_once() -> None:
+    StopCountingModule.stop_calls = 0
+    coordinator = ModuleCoordinator.build(
+        StopCountingModule.blueprint(), _BUILD_IN_PROCESS_WITHOUT_RERUN.copy()
+    )
+    python_wm = coordinator._managers["python"]
     assert isinstance(python_wm, WorkerManagerPython)
 
-    old_worker_ids = {w.worker_id for w in python_wm.workers}
-    assert len(old_worker_ids) == 1
+    coordinator.stop()
 
-    dynamic_coordinator.restart_module(ModuleA, reload_source=False)
-
-    new_worker_ids = {w.worker_id for w in python_wm.workers}
-    assert len(new_worker_ids) == 1
-    assert new_worker_ids.isdisjoint(old_worker_ids)
+    assert StopCountingModule.stop_calls == 1
+    assert python_wm._local_modules == {}
 
 
 def test_restart_module_calls_importlib_reload(dynamic_coordinator, mocker) -> None:
@@ -793,6 +831,19 @@ def test_get_module_endpoint(dynamic_coordinator) -> None:
     assert host == "localhost"
     assert port > 0
     assert isinstance(module_id, int)
+
+
+def test_local_module_source_reads_zero_worker_module() -> None:
+    coordinator = ModuleCoordinator.build(
+        ModuleA.blueprint(), _BUILD_IN_PROCESS_WITHOUT_RERUN.copy()
+    )
+    source = LocalModuleSource(coordinator)
+    try:
+        module = source.get_rpyc_module("ModuleA")
+        assert module.get_name() == "A, Module A"
+    finally:
+        source.close()
+        coordinator.stop()
 
 
 def test_get_module_endpoint_unknown_raises(dynamic_coordinator) -> None:

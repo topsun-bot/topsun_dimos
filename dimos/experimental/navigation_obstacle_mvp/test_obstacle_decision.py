@@ -83,6 +83,22 @@ def test_rejects_obstacle_above_crossing_limit() -> None:
     assert "height" in decision.reason
 
 
+def test_rejects_height_without_foot_clearance_margin() -> None:
+    planner = ThresholdCrossingPlanner()
+
+    decision = planner.evaluate(
+        ThresholdObstacle(
+            height_m=0.16,
+            width_m=0.10,
+            distance_m=0.30,
+            lateral_clearance_m=0.30,
+        )
+    )
+
+    assert decision.kind == "avoid"
+    assert "foot raise" in decision.reason
+
+
 def test_rejects_wide_obstacle_as_non_threshold() -> None:
     planner = ThresholdCrossingPlanner()
 

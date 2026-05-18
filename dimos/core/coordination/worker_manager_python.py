@@ -15,9 +15,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import threading
+import time
 from typing import TYPE_CHECKING, Any, cast
 
+from rpyc.utils.server import ThreadedServer
+
 from dimos.core.coordination.python_worker import PythonWorker
+from dimos.core.coordination.rpyc_services import WorkerRpycService
 from dimos.core.global_config import GlobalConfig
 from dimos.core.module import ModuleBase, ModuleSpec
 from dimos.core.rpc_client import ModuleProxyProtocol, RPCClient
@@ -30,6 +35,58 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 
+class _LocalModuleActor:
+    """Small actor shim for modules deployed in the coordinator process."""
+
+    def __init__(
+        self,
+        module_id: int,
+        instances: dict[int, ModuleBase],
+        listen_host: str,
+    ) -> None:
+        self._module_id = module_id
+        self._instances = instances
+        self._listen_host = listen_host
+        self._rpyc_server: ThreadedServer | None = None
+        self._rpyc_thread: threading.Thread | None = None
+
+    def start_rpyc(self) -> int:
+        if self._rpyc_server is not None:
+            return int(self._rpyc_server.port)
+
+        class LocalWorkerRpycService(WorkerRpycService):  # type: ignore[misc]
+            _instances = self._instances
+
+        self._rpyc_server = ThreadedServer(
+            LocalWorkerRpycService,
+            port=0,
+            hostname=self._listen_host,
+            protocol_config={
+                "allow_all_attrs": True,
+                "allow_public_attrs": True,
+                "allow_pickle": True,
+            },
+        )
+        self._rpyc_thread = threading.Thread(target=self._rpyc_server.start, daemon=True)
+        self._rpyc_thread.start()
+        deadline = time.monotonic() + 5.0
+        while not self._rpyc_server.active:
+            if not self._rpyc_thread.is_alive():
+                raise RuntimeError("local rpyc server thread died before listening")
+            if time.monotonic() > deadline:
+                raise RuntimeError("local rpyc server failed to start listening within 5s")
+            time.sleep(0.001)
+        return int(self._rpyc_server.port)
+
+    def close(self) -> None:
+        if self._rpyc_server is not None:
+            self._rpyc_server.close()
+            self._rpyc_server = None
+        if self._rpyc_thread is not None:
+            self._rpyc_thread.join(timeout=5)
+            self._rpyc_thread = None
+
+
 class WorkerManagerPython:
     deployment_identifier: str = "python"
 
@@ -37,7 +94,9 @@ class WorkerManagerPython:
         self._cfg = g
         self._n_workers = g.n_workers
         self._workers: list[PythonWorker] = []
-        self._local_modules: list[ModuleBase] = []
+        self._local_modules: dict[int, ModuleBase] = {}
+        self._local_actors: dict[int, _LocalModuleActor] = {}
+        self._next_local_module_id = 1
         self._closed = False
         self._started = False
         self._stats_monitor: StatsMonitor | None = None
@@ -93,13 +152,26 @@ class WorkerManagerPython:
             kwargs = dict(kwargs)
             kwargs["g"] = global_config
             module = module_class(**kwargs)
-            self._local_modules.append(module)
-            logger.info("Deployed module in-process.", module=module_class.__name__)
+            module_id = self._next_local_module_id
+            self._next_local_module_id += 1
+            local_actor = _LocalModuleActor(
+                module_id, self._local_modules, global_config.listen_host
+            )
+            local_proxy = cast("Any", module)
+            local_proxy.actor_instance = local_actor
+            local_proxy.ref = local_actor
+            self._local_modules[module_id] = module
+            self._local_actors[module_id] = local_actor
+            logger.info(
+                "Deployed module in-process.",
+                module=module_class.__name__,
+                module_id=module_id,
+            )
             return cast("ModuleProxyProtocol", module)
 
         worker = self._select_worker()
-        actor = worker.deploy_module(module_class, global_config, kwargs=kwargs)
-        return RPCClient(actor, module_class)
+        remote_actor = worker.deploy_module(module_class, global_config, kwargs=kwargs)
+        return RPCClient(remote_actor, module_class)
 
     def deploy_fresh(
         self,
@@ -118,6 +190,9 @@ class WorkerManagerPython:
         if not self._started:
             self.start()
 
+        if self._n_workers == 0:
+            return self.deploy(module_class, global_config, kwargs)
+
         worker = PythonWorker()
         worker.start_process()
         self._workers.append(worker)
@@ -128,6 +203,12 @@ class WorkerManagerPython:
     def undeploy(self, proxy: ModuleProxyProtocol) -> None:
         """Undeploy a module and shut down its worker if it is now empty."""
         actor = getattr(proxy, "actor_instance", None)
+        if isinstance(actor, _LocalModuleActor):
+            self._local_modules.pop(actor._module_id, None)
+            self._local_actors.pop(actor._module_id, None)
+            actor.close()
+            return
+
         if actor is None:
             raise ValueError("Proxy has no actor_instance. Cannot undeploy.")
 
@@ -219,16 +300,10 @@ class WorkerManagerPython:
         logger.info("Shutting down all workers...")
 
         if self._n_workers == 0:
-            for module in reversed(self._local_modules):
-                try:
-                    module.stop()
-                except Exception:
-                    logger.error(
-                        "Error stopping in-process module",
-                        module=module.__class__.__name__,
-                        exc_info=True,
-                    )
+            for actor in reversed(list(self._local_actors.values())):
+                actor.close()
             self._local_modules.clear()
+            self._local_actors.clear()
             logger.info("All in-process modules released")
             return
 
