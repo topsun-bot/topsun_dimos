@@ -27,6 +27,7 @@ from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
+from dimos.robot.unitree.go2.modules import StartupBarkModule
 from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
 
 _logger = logging.getLogger(__name__)
@@ -203,6 +204,7 @@ unitree_go2_basic = (
         with_vis,
         GO2Connection.blueprint(),
         WebsocketVisModule.blueprint(),
+        StartupBarkModule.blueprint(),
     )
     .global_config(n_workers=4, robot_model="unitree_go2")
     .configurators(ClockSyncConfigurator())
