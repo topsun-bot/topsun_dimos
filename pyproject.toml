@@ -351,6 +351,11 @@ base = [
     "dimos[agents,web,visualization]",
 ]
 
+[dependency-groups]
+autofix = [
+    "ruff==0.14.3",
+]
+
 [tool.ruff]
 line-length = 100
 exclude = [
