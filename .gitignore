@@ -53,8 +53,8 @@ yolo11n.pt
 
 # symlink one of .envrc.* if you'd like to use
 .envrc
-.claude
-.ai_longrun_harness
+.ai_longrun_harness/
+.claude/
 **/CLAUDE.md
 .direnv/
 
