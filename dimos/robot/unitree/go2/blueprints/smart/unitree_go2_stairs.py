@@ -15,10 +15,12 @@
 
 """Go2 stack with straight-stair detection and corridor planning enabled.
 
-Run with stair navigation::
+Run with stair navigation (enabled by default in this blueprint)::
 
+    dimos run unitree-go2-stairs
     dimos run unitree-go2-stairs --stair-navigation
-    dimos --replay run unitree-go2-stairs --stair-navigation
+    dimos --stair-navigation run unitree-go2
+    dimos --replay run unitree-go2-stairs
 """
 
 from dimos.core.coordination.blueprints import autoconnect

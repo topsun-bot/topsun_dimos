@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from contextlib import suppress
 from datetime import datetime, timezone
+import functools
 import inspect
 import json
 import os
@@ -54,63 +55,82 @@ main = typer.Typer(
 load_dotenv()
 
 
-def create_dynamic_callback():  # type: ignore[no-untyped-def]
-    fields = GlobalConfig.model_fields
+def _global_config_field_type(field_type: type) -> type:
+    if get_origin(field_type) is type(str | None):
+        inner_types = get_args(field_type)
+        if len(inner_types) == 2 and type(None) in inner_types:
+            return next(t for t in inner_types if t is not type(None))
+    return field_type
 
-    # Build the function signature dynamically
+
+def _global_config_cli_parameters() -> list[inspect.Parameter]:
+    """CLI parameters mirroring GlobalConfig fields (for subcommands like ``run``)."""
+    params: list[inspect.Parameter] = []
+    for field_name, field_info in GlobalConfig.model_fields.items():
+        actual_type = _global_config_field_type(field_info.annotation)
+        cli_option_name = field_name.replace("_", "-")
+        if actual_type is bool:
+            default = typer.Option(
+                None,
+                f"--{cli_option_name}/--no-{cli_option_name}",
+                help=f"Override {field_name} in GlobalConfig",
+            )
+            annotation: type = bool | None
+        else:
+            default = typer.Option(
+                None,
+                f"--{cli_option_name}",
+                help=f"Override {field_name} in GlobalConfig",
+            )
+            annotation = actual_type | None
+        params.append(
+            inspect.Parameter(
+                field_name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=default,
+                annotation=annotation,
+            )
+        )
+    return params
+
+
+def _merge_global_config_cli_overrides(ctx: typer.Context, overrides: dict[str, Any]) -> None:
+    filtered = {k: v for k, v in overrides.items() if v is not None}
+    if not filtered:
+        return
+    ctx.obj = {**(ctx.obj or {}), **filtered}
+
+
+def with_global_config_cli_options(func):  # type: ignore[no-untyped-def]
+    """Attach GlobalConfig flags to a subcommand so they work after the command name."""
+
+    original_sig = inspect.signature(func)
+    existing = set(original_sig.parameters)
+    extra_params = [p for p in _global_config_cli_parameters() if p.name not in existing]
+    new_sig = inspect.Signature(list(original_sig.parameters.values()) + extra_params)
+
+    @functools.wraps(func)
+    def wrapper(**kwargs: Any) -> Any:
+        known = {k: v for k, v in kwargs.items() if k in original_sig.parameters}
+        extra = {k: v for k, v in kwargs.items() if k not in original_sig.parameters}
+        ctx = known.get("ctx")
+        if ctx is not None:
+            _merge_global_config_cli_overrides(ctx, extra)
+        return func(**known)
+
+    wrapper.__signature__ = new_sig  # type: ignore[attr-defined]
+    return wrapper
+
+
+def create_dynamic_callback():  # type: ignore[no-untyped-def]
     params = [
         inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=typer.Context),
+        *_global_config_cli_parameters(),
     ]
-
-    # Create parameters for each field in GlobalConfig
-    for field_name, field_info in fields.items():
-        field_type = field_info.annotation
-
-        # Handle Optional types
-        # Check for Optional/Union with None
-        if get_origin(field_type) is type(str | None):
-            inner_types = get_args(field_type)
-            if len(inner_types) == 2 and type(None) in inner_types:
-                # It's Optional[T], get the actual type T
-                actual_type = next(t for t in inner_types if t != type(None))
-            else:
-                actual_type = field_type
-        else:
-            actual_type = field_type
-
-        # Convert field name from snake_case to kebab-case for CLI
-        cli_option_name = field_name.replace("_", "-")
-
-        # Special handling for boolean fields
-        if actual_type is bool:
-            # For boolean fields, create --flag/--no-flag pattern
-            param = inspect.Parameter(
-                field_name,
-                inspect.Parameter.KEYWORD_ONLY,
-                default=typer.Option(
-                    None,  # None means use the model's default if not provided
-                    f"--{cli_option_name}/--no-{cli_option_name}",
-                    help=f"Override {field_name} in GlobalConfig",
-                ),
-                annotation=bool | None,
-            )
-        else:
-            # For non-boolean fields, use regular option
-            param = inspect.Parameter(
-                field_name,
-                inspect.Parameter.KEYWORD_ONLY,
-                default=typer.Option(
-                    None,  # None means use the model's default if not provided
-                    f"--{cli_option_name}",
-                    help=f"Override {field_name} in GlobalConfig",
-                ),
-                annotation=actual_type | None,
-            )
-        params.append(param)
 
     def callback(**kwargs) -> None:  # type: ignore[no-untyped-def]
         ctx = kwargs.pop("ctx")
-        ctx.obj = {k: v for k, v in kwargs.items() if v is not None}
+        _merge_global_config_cli_overrides(ctx, kwargs)
 
     callback.__signature__ = inspect.Signature(params)  # type: ignore[attr-defined]
 
@@ -191,6 +211,7 @@ def load_config_args(config: type[BaseModel], args: Iterable[str], path: Path) -
 
 
 @main.command()
+@with_global_config_cli_options
 def run(
     ctx: typer.Context,
     robot_types: list[str] = typer.Argument(..., help="Blueprints or modules to run"),
@@ -580,6 +601,7 @@ def restart(
 
 
 @main.command()
+@with_global_config_cli_options
 def show_config(ctx: typer.Context) -> None:
     """Show current config settings and their values."""
 
