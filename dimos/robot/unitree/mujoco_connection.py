@@ -153,10 +153,21 @@ class MujocoConnection:
         while time.time() - start_time < ready_timeout:
             if self.process.poll() is not None:
                 exit_code = self.process.returncode
+                stderr_tail = ""
+                if self.process.stderr is not None:
+                    try:
+                        stderr_tail = self.process.stderr.read().decode(errors="replace").strip()
+                    except Exception:
+                        pass
                 self.stop()
-                raise RuntimeError(f"MuJoCo process failed to start (exit code {exit_code})")
+                msg = f"MuJoCo process failed to start (exit code {exit_code})"
+                if stderr_tail:
+                    logger.error("%s\n%s", msg, stderr_tail[-4000:])
+                    raise RuntimeError(f"{msg}. See log for subprocess stderr.")
+                raise RuntimeError(msg)
             if self.shm_data.is_ready():
                 logger.info("MuJoCo process started successfully")
+                self._start_mujoco_watchdog()
                 # Register atexit handler to ensure subprocess is cleaned up
                 # Use weakref to avoid preventing garbage collection
                 weak_self = weakref.ref(self)
@@ -175,6 +186,31 @@ class MujocoConnection:
         # Timeout
         self.stop()
         raise RuntimeError("MuJoCo process failed to start (timeout)")
+
+    def _start_mujoco_watchdog(self) -> None:
+        """Log unexpected MuJoCo subprocess exit (common if the sim robot tips on stairs)."""
+
+        def _watch() -> None:
+            proc = self.process
+            if proc is None:
+                return
+            code = proc.wait()
+            if self._is_cleaned_up:
+                return
+            stderr_tail = ""
+            if proc.stderr is not None:
+                try:
+                    stderr_tail = proc.stderr.read().decode(errors="replace").strip()
+                except Exception:
+                    pass
+            logger.error(
+                "MuJoCo subprocess exited unexpectedly",
+                exit_code=code,
+                stderr=stderr_tail[-3000:] if stderr_tail else None,
+            )
+
+        thread = threading.Thread(target=_watch, name="mujoco-watchdog", daemon=True)
+        thread.start()
 
     def stop(self) -> None:
         if self._is_cleaned_up:
@@ -385,7 +421,7 @@ class MujocoConnection:
 
         if self.shm_data is not None and topic == RTC_TOPIC["SPORT_MOD"]:
             if self.shm_data.write_sport_payload(data):
-                logger.debug("MuJoCo sport SHM updated", payload=data)
+                logger.info("MuJoCo sport SHM updated", api_id=data.get("api_id"))
             return {}
         logger.debug("MuJoCo publish_request (no SHM)", topic=topic, data=data)
         return {}

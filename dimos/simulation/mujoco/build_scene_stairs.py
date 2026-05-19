@@ -29,8 +29,14 @@ STAIR_WIDTH_M = 1.2
 STAIR_START_X = 3.0
 STAIR_START_Y = 0.0
 
+# Approach ramp: 5 mini treads (3 cm riser) before main 15 cm stairs.
+TRANSITION_STEPS = 5
+TRANSITION_RISER_M = 0.03
+TRANSITION_TREAD_M = 0.16
+TRANSITION_START_X = 2.2
+
 # Bump to invalidate cached scene_stairs.xml when geometry changes.
-SCENE_MARKER = "discrete_treads_15cm_v3"
+SCENE_MARKER = "discrete_treads_15cm_v4_ramp"
 
 STAIR_ASSET_SNIPPET = """\
     <material name="mat_stair" rgba="0.55 0.45 0.35 1.0"/>
@@ -41,15 +47,36 @@ STAIR_WORLD_SNIPPET = f"""\
 """
 
 
+def _transition_geom_lines() -> list[str]:
+    """Shallow ramp treads so the Go1 ONNX policy can enter the main stair run."""
+    half_w = STAIR_WIDTH_M / 2.0
+    half_t = TRANSITION_TREAD_M / 2.0
+    half_r = TRANSITION_RISER_M / 2.0
+    lines = [
+        f'    <!-- approach ramp: {TRANSITION_STEPS} x {TRANSITION_RISER_M:.2f} m riser -->',
+    ]
+    for i in range(TRANSITION_STEPS):
+        cx = TRANSITION_START_X + (i + 0.5) * TRANSITION_TREAD_M
+        cz = (i + 0.5) * TRANSITION_RISER_M
+        lines.append(
+            f'    <geom name="stair_ramp_{i}" type="box" '
+            f'pos="{cx:.4f} {STAIR_START_Y:.4f} {cz:.4f}" '
+            f'size="{half_t:.4f} {half_w:.4f} {half_r:.4f}" '
+            f'material="mat_stair" contype="1" conaffinity="1" friction="1.1"/>'
+        )
+    return lines
+
+
 def _stair_geom_lines() -> list[str]:
     """One box per tread; tread i sits on top of tread i-1 (no monolithic wedge)."""
     half_w = STAIR_WIDTH_M / 2.0
     half_t = TREAD_M / 2.0
     half_r = RISER_M / 2.0
-    lines = [STAIR_WORLD_SNIPPET]
+    lines = [STAIR_WORLD_SNIPPET, *_transition_geom_lines()]
+    z_offset = TRANSITION_STEPS * TRANSITION_RISER_M
     for i in range(NUM_STEPS):
         cx = STAIR_START_X + (i + 0.5) * TREAD_M
-        cz = (i + 0.5) * RISER_M
+        cz = z_offset + (i + 0.5) * RISER_M
         lines.append(
             f'    <geom name="stair_step_{i}" type="box" '
             f'pos="{cx:.4f} {STAIR_START_Y:.4f} {cz:.4f}" '

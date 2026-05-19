@@ -19,11 +19,11 @@ from dimos.simulation.unitree_mujoco.paths import unitree_mujoco_root
 from dimos.simulation.unitree_mujoco.scenes import resolve_robot_scene
 
 
-def test_global_config_unitree_backend() -> None:
+def test_global_config_mujoco_backends() -> None:
+    assert GlobalConfig().mujoco_backend == "dimos"
+    assert GlobalConfig(simulation=True).unitree_connection_type == "mujoco"
     cfg = GlobalConfig(simulation=True, mujoco_backend="unitree")
     assert cfg.unitree_connection_type == "unitree_mujoco"
-    cfg_dimos = GlobalConfig(simulation=True, mujoco_backend="dimos")
-    assert cfg_dimos.unitree_connection_type == "mujoco"
 
 
 def test_resolve_stairs_scene_when_vendored() -> None:

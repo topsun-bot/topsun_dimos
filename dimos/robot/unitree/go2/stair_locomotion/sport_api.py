@@ -53,6 +53,9 @@ API_BODY_HEIGHT = SPORT_CMD["BodyHeight"]
 API_FOOT_RAISE_HEIGHT = SPORT_CMD["FootRaiseHeight"]
 API_SPEED_LEVEL = SPORT_CMD["SpeedLevel"]
 API_ECONOMIC_GAIT = SPORT_CMD["EconomicGait"]
+API_CROSS_STEP = SPORT_CMD["CrossStep"]
+API_CROSS_WALK = SPORT_CMD["CrossWalk"]
+API_ONESIDED_STEP = SPORT_CMD["OnesidedStep"]
 
 
 @dataclass
@@ -97,6 +100,8 @@ class Go2StairSportController:
     def prepare_locomotion(self) -> None:
         """BalanceStand + FreeWalk — required before velocity / stair sport tweaks."""
         if self._global_config is not None and self._global_config.simulation:
+            self._sport(API_BALANCE_STAND)
+            self._sport(API_FREE_WALK)
             return
         self._connection.balance_stand()
         self._settle()
@@ -131,6 +136,10 @@ class Go2StairSportController:
         if self._config.use_economic_gait:
             self._sport(API_ECONOMIC_GAIT, True)
 
+        if self._config.use_cross_step:
+            self._sport(API_CROSS_STEP, True)
+            self._settle()
+
         self._stair_mode_active = True
         sim_note = ""
         if self._global_config is not None and self._global_config.simulation:
@@ -157,6 +166,8 @@ class Go2StairSportController:
         self._sport(API_BODY_HEIGHT, self._snapshot.body_height_m)
         self._sport(API_SPEED_LEVEL, self._snapshot.speed_level)
         self._sport(API_SWITCH_GAIT, self._snapshot.gait_id)
+        if self._config.use_cross_step:
+            self._sport(API_CROSS_STEP, False)
 
         if self._config.disable_obstacle_avoidance_on_stair:
             try:

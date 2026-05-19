@@ -22,16 +22,16 @@ Run with stair navigation (enabled by default in this blueprint)::
     dimos --stair-navigation run unitree-go2
     dimos --replay run unitree-go2-stairs
 
-Install once: ``uv sync --extra go2-sim`` (MuJoCo + Unitree DDS + torch for mapping).
+Install once: ``uv sync --extra go2-sim`` (MuJoCo + torch for mapping).
 
-MuJoCo (default: Unitree official ``unitree_mujoco`` in ``third_party/``)::
+DimOS MuJoCo (default): lidars, head camera, ``mujoco_room=stairs``, Sport API → SHM::
 
     dimos --simulation run unitree-go2-stairs
-    # --mujoco-room stairs --mujoco-start-pos 2.5, 0.0
+    # optional: --mujoco-start-pos 2.5, 0.0
 
-Legacy DimOS MuJoCo (lidars + head camera for perception)::
+Optional official ``unitree_mujoco`` (DDS, no DimOS lidar stack)::
 
-    dimos --simulation --mujoco-backend dimos run unitree-go2-stairs
+    dimos --simulation --mujoco-backend unitree run unitree-go2-stairs
 """
 
 from dimos.core.coordination.blueprints import autoconnect
@@ -46,7 +46,7 @@ unitree_go2_stairs = autoconnect(
     n_workers=10,
     mujoco_room="stairs",
     # Slightly closer to the first tread; idle rest is disabled when stair_navigation=True.
-    mujoco_start_pos="2.85, 0.0",
+    mujoco_start_pos="2.35, 0.0",
 )
 
 __all__ = ["unitree_go2_stairs"]

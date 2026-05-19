@@ -1,6 +1,8 @@
-# Unitree official MuJoCo simulator
+# Unitree official MuJoCo simulator (optional)
 
-DimOS can drive [unitree_mujoco](https://github.com/unitreerobotics/unitree_mujoco) instead of the legacy in-repo MuJoCo stack (head camera, multi-depth lidar, custom office scenes).
+**Default:** `mujoco_backend=dimos` — in-repo MuJoCo (lidars, head camera, stairs rooms, Sport API → SHM). See [go2_stair_mujoco_sport.md](go2_stair_mujoco_sport.md).
+
+DimOS can optionally drive [unitree_mujoco](https://github.com/unitreerobotics/unitree_mujoco) with `--mujoco-backend unitree` (DDS + official Go2 MJCF, no DimOS lidar stack).
 
 ## Setup
 
@@ -22,8 +24,9 @@ The Python package `cyclonedds` must compile against the **C library**. There is
 ```bash
 cd /path/to/topsun_dimos
 ./bin/install-cyclonedds
-# Copy the export lines the script prints, e.g.:
-export CYCLONEDDS_HOME="$PWD/.cyclonedds/install"
+# Copy the export lines the script prints (default: ~/.local/dimos-cyclonedds).
+# Do not build under a path with spaces in the name — CycloneDDS CMake will fail.
+export CYCLONEDDS_HOME="$HOME/.local/dimos-cyclonedds"
 export DYLD_LIBRARY_PATH="$CYCLONEDDS_HOME/lib:${DYLD_LIBRARY_PATH:-}"
 uv sync --extra go2-sim
 ```
@@ -36,7 +39,15 @@ Requires `cmake` and Xcode CLT (`xcode-select --install`). Same steps as [unitre
 
 If `uv sync` fails with `Could not locate cyclonedds`, export `CYCLONEDDS_HOME` **before** syncing.
 
-At runtime, CycloneDDS must use **domain id 1** and interface **`lo`**, matching `simulate_python/config.py`.
+At runtime, CycloneDDS uses **domain id 1**. DimOS picks **`lo0`** on macOS and **`lo`** on Linux
+(official `simulate_python/config.py` uses `lo`, which does not exist on macOS).
+
+If your repo path contains **spaces** (e.g. `New project 2`), the launcher copies Go2 MJCF
+meshes to `~/.local/dimos-mujoco-work/` automatically — MuJoCo cannot load assets from paths with spaces.
+
+**macOS note:** DimOS uses its own DDS bridge (`dimos_bridge.py`) instead of importing
+`unitree_sdk2py_bridge` directly, because upstream `RecurrentThread` relies on Linux
+`timerfd_create` (not available on macOS).
 
 ## CLI
 
@@ -68,7 +79,11 @@ flowchart LR
 
 - **Locomotion**: Unitree sim is low-level only; DimOS runs the same Go1 ONNX policy as legacy sim, reading velocity and stair Sport gains from shared memory.
 - **State**: Official bridge publishes `rt/sportmodestate` and `rt/lowstate`; odometry for DimOS modules is written to SHM from `qpos`.
-- **Perception**: Official Go2 MJCF has no head camera or lidar. Use `--mujoco-backend dimos` for mapping / stair detection that needs point clouds, or replay mode.
+- **Perception**: The Unitree launcher publishes synthetic lidar (MuJoCo raycast or depth cameras on a welded sensor rig) and RGB video into the same SHM path as DimOS MuJoCo, so `VoxelGridMapper` / Rerun `global_map` work.
+
+**Navigation goals**: Rerun alone does not send click goals. Use the WebSocket dashboard (started with the stack) at **http://127.0.0.1:7779** — click the map to set `goal_request`. The Rerun window is for 3D debug view.
+
+Wait until the 2D map shows obstacles (or ~10 s after start) before clicking a goal. If you click too early, the goal is **queued** and planning starts automatically when the first `global_costmap` arrives.
 
 ## Stairs scene
 

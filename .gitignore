@@ -14,6 +14,7 @@ __pycache__/
 .ssh/
 .direnv/
 .cyclonedds/
+.local/dimos-mujoco-work/
 
 # Ignore python tooling dirs
 *.egg-info/

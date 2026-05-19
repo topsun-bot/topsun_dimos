@@ -37,7 +37,8 @@ Homebrew does not provide `cyclonedds`. Either use **nix** (above) or build the 
 
 ```bash
 ./bin/install-cyclonedds
-export CYCLONEDDS_HOME="$PWD/.cyclonedds/install"
+# Installs to ~/.local/dimos-cyclonedds (avoids spaces in repo path breaking CMake)
+export CYCLONEDDS_HOME="$HOME/.local/dimos-cyclonedds"
 export DYLD_LIBRARY_PATH="$CYCLONEDDS_HOME/lib:${DYLD_LIBRARY_PATH:-}"
 uv sync --extra go2-sim
 ```

@@ -53,6 +53,11 @@ class NavigationMap:
             self._binary = occupancy_grid
 
     @property
+    def has_binary(self) -> bool:
+        with self._lock:
+            return self._binary is not None
+
+    @property
     def binary_costmap(self) -> OccupancyGrid:
         """
         Get the latest binary costmap received from the global costmap source.

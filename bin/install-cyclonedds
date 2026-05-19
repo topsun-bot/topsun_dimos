@@ -6,9 +6,15 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALL_PREFIX="${CYCLONEDDS_INSTALL_PREFIX:-$REPO_ROOT/.cyclonedds/install}"
-SRC_DIR="${CYCLONEDDS_SRC_DIR:-$REPO_ROOT/.cyclonedds/src}"
+# CycloneDDS CMake breaks when the repo path contains spaces (e.g. "New project 2").
+# Default to a space-free prefix under $HOME, not inside the repo tree.
+INSTALL_PREFIX="${CYCLONEDDS_INSTALL_PREFIX:-$HOME/.local/dimos-cyclonedds}"
+SRC_DIR="${CYCLONEDDS_SRC_DIR:-$HOME/.local/dimos-cyclonedds-src}"
 BRANCH="${CYCLONEDDS_BRANCH:-releases/0.10.x}"
+
+if [[ "$REPO_ROOT" == *" "* && "$INSTALL_PREFIX" == "$REPO_ROOT"* ]]; then
+  echo "warning: repo path has spaces; using INSTALL_PREFIX=$INSTALL_PREFIX (not under repo)" >&2
+fi
 
 if ! command -v cmake >/dev/null 2>&1; then
   echo "cmake is required. On macOS: xcode-select --install  (or brew install cmake)" >&2

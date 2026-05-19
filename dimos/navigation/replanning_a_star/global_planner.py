@@ -83,6 +83,7 @@ class GlobalPlanner(Resource):
     _stair_corridor: StairCorridor | None = None
     _following_stair_path: bool = False
     _sport_connection: Go2SportConnection | None = None
+    _pending_goal: PoseStamped | None = None
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self.path = Subject()
@@ -138,8 +139,24 @@ class GlobalPlanner(Resource):
         self._position_tracker.add_position(msg)
 
     def handle_global_costmap(self, msg: OccupancyGrid) -> None:
+        had_map = self._navigation_map.has_binary
         self._navigation_map.update(msg)
         self._navigation_map_near.update(msg)
+        if not had_map:
+            with self._lock:
+                pending = self._pending_goal
+            if pending is not None:
+                logger.info(
+                    "Global costmap ready — planning queued goal",
+                    x=round(pending.position.x, 2),
+                    y=round(pending.position.y, 2),
+                )
+                with self._lock:
+                    self._current_goal = pending
+                    self._pending_goal = None
+                    self._goal_reached = False
+                self._replan_limiter.reset()
+                self._plan_path()
 
     def handle_goal_request(self, goal: PoseStamped) -> None:
         with self._lock:
@@ -172,9 +189,20 @@ class GlobalPlanner(Resource):
                 self._current_goal = goal
             return
 
+        if not self._navigation_map.has_binary:
+            with self._lock:
+                self._pending_goal = goal
+            logger.info(
+                "Global costmap not ready — goal queued (wait for lidar map, ~5–15 s)",
+                x=round(goal.position.x, 2),
+                y=round(goal.position.y, 2),
+            )
+            return
+
         logger.info("Got new goal", goal=str(goal))
         with self._lock:
             self._current_goal = goal
+            self._pending_goal = None
             self._goal_reached = False
         self._replan_limiter.reset()
         self._plan_path()
@@ -497,6 +525,10 @@ class GlobalPlanner(Resource):
                 y=round(snapped.y, 2),
             )
             return snapped
+
+        if not self._navigation_map.has_binary:
+            logger.warning("Cannot find safe goal — global costmap not available yet")
+            return None
 
         costmap = self._navigation_map.binary_costmap
 

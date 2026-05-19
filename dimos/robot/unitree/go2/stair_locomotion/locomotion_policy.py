@@ -36,6 +36,9 @@ from dimos.utils.trigonometry import angle_diff
 
 logger = setup_logger()
 
+# MuJoCo: hold ALIGN this many control ticks before Sport mode (10 Hz → 0.8 s).
+_SIM_ALIGN_HOLD_TICKS = 8
+
 
 class StairLocomotionPolicy:
     """State machine for traversing a single stair corridor on Go2."""
@@ -51,12 +54,18 @@ class StairLocomotionPolicy:
         if config is not None:
             self._config = config
         elif global_config is not None and global_config.simulation:
-            # MuJoCo uses cmd_vel only (no FootRaiseHeight); need stronger forward drive.
+            # Gentle MuJoCo profile: Go1 ONNX + discrete treads tip easily if driven hard.
             self._config = StairLocomotionConfig(
-                min_linear_x=0.28,
-                max_linear_x=0.55,
-                riser_slowdown_factor=0.85,
-                yaw_gain_on_stair=0.2,
+                min_linear_x=0.14,
+                max_linear_x=0.26,
+                foot_raise_height_m=0.09,
+                riser_slowdown_factor=0.88,
+                yaw_gain_approach=0.45,
+                yaw_gain_align=0.65,
+                yaw_gain_on_stair=0.15,
+                align_yaw_tolerance_rad=math.radians(14.0),
+                max_pitch_rad=math.radians(22.0),
+                use_cross_step=True,
             )
         else:
             self._config = StairLocomotionConfig()
@@ -66,6 +75,8 @@ class StairLocomotionPolicy:
         self._path: Path | None = None
         self._path_index = 0
         self._finished = False
+        self._align_ticks = 0
+        self._on_stair_ticks = 0
 
     @property
     def phase(self) -> StairPhase:
@@ -83,6 +94,8 @@ class StairLocomotionPolicy:
         self._path = None
         self._path_index = 0
         self._finished = False
+        self._align_ticks = 0
+        self._on_stair_ticks = 0
 
     def start(self, corridor: StairCorridor, path: Path) -> None:
         if self._phase in (StairPhase.ALIGN, StairPhase.ON_STAIR):
@@ -101,6 +114,8 @@ class StairLocomotionPolicy:
         self._path_index = 0
         self._phase = StairPhase.APPROACH
         self._finished = False
+        self._align_ticks = 0
+        self._on_stair_ticks = 0
         logger.info(
             "Stair locomotion started",
             mean_riser=round(corridor.mean_riser, 3),
@@ -121,12 +136,33 @@ class StairLocomotionPolicy:
     def _set_phase(self, phase: StairPhase) -> None:
         if phase != self._phase:
             logger.info("Stair phase transition", from_phase=self._phase.value, to_phase=phase.value)
+            if phase == StairPhase.ALIGN:
+                self._align_ticks = 0
             self._phase = phase
 
-    def _sim_speed_scale(self) -> float:
+    def _sim_forward_floor(self) -> float | None:
         if self._global_config is not None and self._global_config.simulation:
-            return 1.0
-        return 1.0
+            return 0.4
+        return None
+
+    def _abort_if_tipped(self, odom: PoseStamped) -> bool:
+        """Abort only while climbing; ignore roll glitches during APPROACH/ALIGN."""
+        if self._phase != StairPhase.ON_STAIR:
+            return False
+        pitch = odom.pitch
+        roll = odom.roll
+        # Forward/back fall on stairs; ignore roll unless nearly inverted.
+        if abs(pitch) > self._config.max_pitch_rad or abs(roll) > math.radians(70.0):
+            logger.warning(
+                "Stair locomotion aborted — robot tipped",
+                pitch_deg=round(math.degrees(pitch), 1),
+                roll_deg=round(math.degrees(roll), 1),
+            )
+            self._sport.exit_stair_mode()
+            self._phase = StairPhase.IDLE
+            self._finished = True
+            return True
+        return False
 
     def _advance_path_index(self, odom: PoseStamped) -> None:
         if not self._path or self._path_index >= len(self._path.poses) - 1:
@@ -154,13 +190,11 @@ class StairLocomotionPolicy:
         if self._phase == StairPhase.IDLE or self._corridor is None or self._path is None:
             return Twist()
 
-        corridor = self._corridor
-        robot_yaw = odom.orientation.euler[2]
-        pitch = odom.orientation.euler[1]
-
-        if abs(pitch) > self._config.max_pitch_rad:
-            logger.warning("Stair locomotion paused: excessive pitch", pitch_deg=round(pitch, 2))
+        if self._abort_if_tipped(odom):
             return Twist()
+
+        corridor = self._corridor
+        robot_yaw = odom.yaw
 
         if self._phase == StairPhase.APPROACH:
             dist = self._distance_to_nearest_path_point(odom)
@@ -169,7 +203,7 @@ class StairLocomotionPolicy:
             )
             if at_stair_mouth:
                 self._set_phase(StairPhase.ALIGN)
-            speed = self._config.min_linear_x * 0.6 * self._sim_speed_scale()
+            speed = self._config.min_linear_x * 0.85
             twist = twist_along_corridor(
                 speed,
                 robot_yaw,
@@ -177,18 +211,31 @@ class StairLocomotionPolicy:
                 self._config,
                 yaw_gain=self._config.yaw_gain_approach,
                 on_stair=False,
+                sim_min_forward_ratio=self._sim_forward_floor(),
             )
             return self._apply_hardware_motion(twist)
 
         if self._phase == StairPhase.ALIGN:
             yaw_err = angle_diff(corridor.axis_yaw, robot_yaw)
-            if abs(yaw_err) < self._config.align_yaw_tolerance_rad:
+            aligned = abs(yaw_err) < self._config.align_yaw_tolerance_rad
+            if aligned:
+                self._align_ticks += 1
+            else:
+                self._align_ticks = 0
+
+            hold_ok = (
+                self._global_config is None
+                or not self._global_config.simulation
+                or self._align_ticks >= _SIM_ALIGN_HOLD_TICKS
+            )
+            if aligned and hold_ok:
                 self._set_phase(StairPhase.ON_STAIR)
                 self._sport.enter_stair_mode()
                 logger.info("Entering ON_STAIR — Sport gait configured for climbing")
+
             align_forward = 0.0
-            if abs(yaw_err) < math.radians(20.0):
-                align_forward = self._config.min_linear_x * 0.35 * self._sim_speed_scale()
+            if abs(yaw_err) < math.radians(18.0):
+                align_forward = self._config.min_linear_x * 0.4
             twist = twist_along_corridor(
                 align_forward,
                 robot_yaw,
@@ -196,18 +243,24 @@ class StairLocomotionPolicy:
                 self._config,
                 yaw_gain=self._config.yaw_gain_align,
                 on_stair=False,
+                sim_min_forward_ratio=self._sim_forward_floor(),
             )
             return self._apply_hardware_motion(twist)
 
         if self._phase == StairPhase.ON_STAIR:
+            self._on_stair_ticks += 1
+            # Let Sport SHM + policy settle before forward drive (10 Hz × 15 = 1.5 s).
+            if (
+                self._global_config is not None
+                and self._global_config.simulation
+                and self._on_stair_ticks < 15
+            ):
+                return Twist()
+
             self._advance_path_index(odom)
             if self._path_index >= len(self._path.poses) - 1:
                 self._set_phase(StairPhase.EXIT)
             speed = self._target_speed_mps()
-            if self._global_config is not None and self._global_config.simulation:
-                # Keep commanded forward speed high on discrete MuJoCo treads.
-                sign = 1.0 if speed >= 0.0 else -1.0
-                speed = sign * max(abs(speed), self._config.max_linear_x * 0.92)
             twist = twist_along_corridor(
                 speed,
                 robot_yaw,
@@ -215,6 +268,7 @@ class StairLocomotionPolicy:
                 self._config,
                 yaw_gain=self._config.yaw_gain_on_stair,
                 on_stair=True,
+                sim_min_forward_ratio=self._sim_forward_floor(),
             )
             return self._apply_hardware_motion(twist)
 

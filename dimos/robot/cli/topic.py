@@ -116,11 +116,26 @@ def topic_send(topic: str, message_expr: str) -> None:
     for module_name in modules_to_import:
         try:
             module = importlib.import_module(module_name)
-            for name in getattr(module, "__all__", dir(module)):
-                if not name.startswith("_"):
-                    obj = getattr(module, name, None)
-                    if obj is not None:
-                        eval_context[name] = obj
+            names = getattr(module, "__all__", None)
+            if names:
+                for name in names:
+                    if not name.startswith("_"):
+                        obj = getattr(module, name, None)
+                        if obj is not None:
+                            eval_context[name] = obj
+            else:
+                import pkgutil
+
+                for _finder, sub_name, _ispkg in pkgutil.iter_modules(module.__path__):
+                    if sub_name.startswith("_"):
+                        continue
+                    try:
+                        sub = importlib.import_module(f"{module_name}.{sub_name}")
+                        obj = getattr(sub, sub_name, None)
+                        if obj is not None:
+                            eval_context[sub_name] = obj
+                    except ImportError:
+                        continue
         except ImportError:
             continue
 

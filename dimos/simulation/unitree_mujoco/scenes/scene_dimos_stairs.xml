@@ -1,5 +1,5 @@
 <mujoco model="go2 dimos stairs">
-  <include file="../../../../../third_party/unitree_mujoco/unitree_robots/go2/go2.xml"/>
+  <include file="../../../../third_party/unitree_mujoco/unitree_robots/go2/go2.xml"/>
 
   <statistic center="3.5 0 0.5" extent="4.0"/>
 

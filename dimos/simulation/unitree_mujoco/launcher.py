@@ -33,10 +33,15 @@ import numpy as np
 from dimos.core.global_config import GlobalConfig
 from dimos.simulation.mujoco.model import _get_data_dir
 from dimos.simulation.mujoco.mujoco_process import MockController
+from dimos.simulation.mujoco.perception_publisher import MujocoPerceptionPublisher
 from dimos.simulation.mujoco.shared_memory import ShmReader
-from dimos.simulation.unitree_mujoco.constants import UNITREE_DDS_DOMAIN_ID, UNITREE_DDS_INTERFACE
+from dimos.simulation.unitree_mujoco.constants import (
+    UNITREE_DDS_DOMAIN_ID,
+    UNITREE_DDS_INTERFACE,
+    UNITREE_LIDAR_FPS,
+)
 from dimos.simulation.unitree_mujoco.dimos_bridge import DimosUnitreeBridge
-from dimos.simulation.unitree_mujoco.scenes import resolve_robot_scene
+from dimos.simulation.unitree_mujoco.scene_loader import mujoco_scene_path
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
 
@@ -47,7 +52,7 @@ locker = threading.Lock()
 
 def _run(config: GlobalConfig, shm: ShmReader) -> None:
     get_data("mujoco_sim")
-    scene_path = resolve_robot_scene(config)
+    scene_path = mujoco_scene_path(config)
     policy_path = _get_data_dir() / "unitree_go1_policy.onnx"
     if not policy_path.is_file():
         raise FileNotFoundError(f"Missing ONNX policy at {policy_path}")
@@ -68,6 +73,7 @@ def _run(config: GlobalConfig, shm: ShmReader) -> None:
     ChannelFactoryInitialize(UNITREE_DDS_DOMAIN_ID, UNITREE_DDS_INTERFACE)
 
     bridge = DimosUnitreeBridge(mj_model, mj_data, controller, policy_path)
+    perception = MujocoPerceptionPublisher(mj_model, shm, lidar_fps=UNITREE_LIDAR_FPS)
 
     viewer = mujoco.viewer.launch_passive(mj_model, mj_data)
     shm.signal_ready()
@@ -78,9 +84,7 @@ def _run(config: GlobalConfig, shm: ShmReader) -> None:
             locker.acquire()
             bridge.apply_locomotion()
             mujoco.mj_step(mj_model, mj_data)
-            pos_xyz = mj_data.qpos[0:3].copy()
-            quat = mj_data.qpos[3:7].copy()
-            shm.write_odom(pos_xyz, quat, time.time())
+            perception.tick(mj_data)
             locker.release()
             elapsed = time.perf_counter() - step_start
             sleep_t = mj_model.opt.timestep - elapsed
@@ -98,8 +102,11 @@ def _run(config: GlobalConfig, shm: ShmReader) -> None:
     view_thread = threading.Thread(target=viewer_loop, name="unitree-mujoco-viewer", daemon=True)
     sim_thread.start()
     view_thread.start()
-    sim_thread.join()
-    view_thread.join()
+    try:
+        sim_thread.join()
+        view_thread.join()
+    finally:
+        bridge.stop()
 
 
 def main() -> None:

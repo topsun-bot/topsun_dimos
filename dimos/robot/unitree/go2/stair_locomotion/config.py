@@ -34,6 +34,8 @@ class StairLocomotionConfig:
     gait_id: int = 0
     speed_level: int = 0
     use_economic_gait: bool = False
+    # SDK2 ``CrossStep`` / WebRTC ``CrossStep`` 1302 — higher foot clearance in sim.
+    use_cross_step: bool = False
     sport_settle_s: float = 0.25
     disable_obstacle_avoidance_on_stair: bool = True
     yaw_gain_approach: float = 0.5

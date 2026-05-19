@@ -103,7 +103,13 @@ class StairNavigatorModule(Module):
     def _corridor_changed(self, corridor: StairCorridor) -> bool:
         if self._active_corridor is None:
             return True
-        return abs(corridor.mean_riser - self._active_corridor.mean_riser) > 0.02
+        riser_delta = abs(corridor.mean_riser - self._active_corridor.mean_riser)
+        if riser_delta > 0.04:
+            return True
+        if len(corridor.centerline) != len(self._active_corridor.centerline):
+            return True
+        yaw_delta = abs(corridor.axis_yaw - self._active_corridor.axis_yaw)
+        return yaw_delta > 0.15
 
 
 stair_navigator_module = StairNavigatorModule.blueprint

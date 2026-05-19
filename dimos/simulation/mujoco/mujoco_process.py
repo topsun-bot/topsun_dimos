@@ -87,7 +87,7 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
 
     match robot_name:
         case "unitree_go1":
-            z = 0.3
+            z = 0.32
         case "unitree_g1":
             z = 0.8
         case _:
@@ -96,6 +96,13 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
     pos = config.mujoco_start_pos_float
 
     data.qpos[0:3] = [pos[0], pos[1], z]
+    if config.mujoco_room == "stairs":
+        # Face +x toward discrete treads (scene_stairs built along +x).
+        data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+        data.qvel[:] = 0.0
+        # Brief settle so the ONNX controller finds balance before navigation cmd_vel.
+        for _ in range(200):
+            mujoco.mj_step(model, data)
 
     mujoco.mj_forward(model, data)
 

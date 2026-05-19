@@ -21,6 +21,7 @@ from dimos.simulation.mujoco.sport_state import (
     SPORT_IDX_ACTIVE,
     SPORT_IDX_COMMAND_GAIN,
     SPORT_IDX_FOOT_RAISE_M,
+    SportExecMode,
     apply_sport_api_payload,
     default_sport_buffer,
     sport_array_to_gains,
@@ -37,6 +38,7 @@ def test_foot_raise_height_updates_sim_gains() -> None:
     gains = sport_array_to_gains(buf)
     assert gains.active
     assert abs(gains.foot_raise_m - 0.12) < 1e-5
+    assert gains.exec_mode == SportExecMode.STAIR
     assert float(buf[SPORT_IDX_ACTIVE]) == 1.0
     assert float(buf[SPORT_IDX_COMMAND_GAIN]) > 1.0
 
@@ -50,3 +52,20 @@ def test_cross_step_increases_command_gain() -> None:
     base_gain = float(buf[SPORT_IDX_COMMAND_GAIN])
     apply_sport_api_payload(buf, {"api_id": SPORT_CMD["CrossStep"], "parameter": {"data": True}})
     assert float(buf[SPORT_IDX_COMMAND_GAIN]) > base_gain
+    assert sport_array_to_gains(buf).exec_mode == SportExecMode.CROSS_STEP
+
+
+def test_cross_walk_sets_exec_mode() -> None:
+    buf = default_sport_buffer()
+    apply_sport_api_payload(buf, {"api_id": SPORT_CMD["CrossWalk"]})
+    assert sport_array_to_gains(buf).exec_mode == SportExecMode.CROSS_WALK
+
+
+def test_switch_gait_stair_id_sets_stair_mode() -> None:
+    buf = default_sport_buffer()
+    apply_sport_api_payload(
+        buf,
+        {"api_id": SPORT_CMD["SwitchGait"], "parameter": {"data": 1}},
+    )
+    assert sport_array_to_gains(buf).exec_mode == SportExecMode.STAIR
+

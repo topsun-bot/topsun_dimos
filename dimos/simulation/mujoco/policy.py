@@ -23,6 +23,7 @@ import numpy as np
 import onnxruntime as ort  # type: ignore[import-untyped]
 
 from dimos.simulation.mujoco.input_controller import InputController
+from dimos.simulation.mujoco.sport_state import SportExecMode
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -69,7 +70,11 @@ class OnnxController(ABC):
             onnx_input = {"obs": obs.reshape(1, -1)}
             onnx_pred = self._policy.run(self._output_names, onnx_input)[0][0]
             self._last_action = onnx_pred.copy()
-            data.ctrl[:] = onnx_pred * self._action_scale + self._default_angles
+            action_scale = self._action_scale
+            gains = self._sport_gains()
+            if gains is not None and gains.active:
+                action_scale *= gains.action_scale_boost
+            data.ctrl[:] = onnx_pred * action_scale + self._default_angles
             self._post_control_update()
 
     def _post_control_update(self) -> None:  # noqa: B027
@@ -77,10 +82,16 @@ class OnnxController(ABC):
 
 
 class Go1OnnxController(OnnxController):
+    # Gravity xy magnitude above this → policy command cleared (avoid flip on stairs).
+    _MAX_GRAVITY_TILT = 0.38
+    _SPORT_MAX_FORWARD_CMD = 0.32
+    _SPORT_MAX_LATERAL_CMD = 0.12
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._lift_phase = 0.0
-        self._lift_phase_dt = 2 * np.pi * 2.5 * (kwargs.get("ctrl_dt") or 0.02)
+        self._lift_phase_dt = 2 * np.pi * 1.8 * (kwargs.get("ctrl_dt") or 0.02)
+        self._last_gravity_tilt = 0.0
 
     def _sport_gains(self) -> Any:
         getter = getattr(self._input_controller, "get_sport_gains", None)
@@ -88,19 +99,36 @@ class Go1OnnxController(OnnxController):
             return None
         return getter()
 
+    @staticmethod
+    def _gravity_tilt(gravity: np.ndarray[Any, Any]) -> float:
+        return float(np.linalg.norm(gravity[0:2]))
+
+    def _stability_ok(self, gravity: np.ndarray[Any, Any]) -> bool:
+        return self._gravity_tilt(gravity) <= self._MAX_GRAVITY_TILT
+
     def get_obs(self, model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray[Any, Any]:
         linvel = data.sensor("local_linvel").data
         gyro = data.sensor("gyro").data
         imu_xmat = data.site_xmat[model.site("imu").id].reshape(3, 3)
         gravity = imu_xmat.T @ np.array([0, 0, -1])
+        self._last_gravity_tilt = self._gravity_tilt(gravity)
         joint_angles = data.qpos[7:] - self._default_angles
         joint_velocities = data.qvel[6:]
         command = self._input_controller.get_command().astype(np.float32, copy=True)
         gains = self._sport_gains()
-        if gains is not None and gains.active:
+        stable = self._last_gravity_tilt <= self._MAX_GRAVITY_TILT
+        if gains is not None and gains.active and stable:
             command[0] *= gains.command_gain
-            if gains.cross_step:
-                command[1] *= 1.15
+            command[0] = np.clip(command[0], -self._SPORT_MAX_FORWARD_CMD, self._SPORT_MAX_FORWARD_CMD)
+            if gains.cross_step or gains.exec_mode == SportExecMode.CROSS_STEP:
+                command[1] *= 1.08
+            if gains.exec_mode == SportExecMode.CROSS_WALK:
+                command[1] *= 1.1
+            if gains.exec_mode == SportExecMode.ONESIDED_STEP:
+                command[0] *= 1.03
+            command[1] = np.clip(command[1], -self._SPORT_MAX_LATERAL_CMD, self._SPORT_MAX_LATERAL_CMD)
+        elif not stable:
+            command[:] = 0.0
         obs = np.hstack(
             [
                 linvel,
@@ -116,7 +144,12 @@ class Go1OnnxController(OnnxController):
 
     def _post_control_update(self) -> None:
         gains = self._sport_gains()
-        if gains is not None and gains.active and gains.foot_raise_m > 0.05:
+        if (
+            gains is not None
+            and gains.active
+            and gains.foot_raise_m > 0.05
+            and self._last_gravity_tilt <= self._MAX_GRAVITY_TILT
+        ):
             self._lift_phase = float(
                 np.fmod(self._lift_phase + self._lift_phase_dt + np.pi, 2 * np.pi) - np.pi
             )
@@ -126,14 +159,28 @@ class Go1OnnxController(OnnxController):
     def get_control(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         super().get_control(model, data)
         gains = self._sport_gains()
-        if gains is None or not gains.active or gains.foot_raise_m <= 0.05:
+        if (
+            gains is None
+            or not gains.active
+            or gains.foot_raise_m <= 0.05
+            or self._last_gravity_tilt > self._MAX_GRAVITY_TILT
+        ):
             return
-        lift = gains.foot_raise_m * 4.0 * np.sin(self._lift_phase)
+        scale = gains.action_scale_boost
+        lift_base = gains.foot_raise_m * 2.2 * scale
         n_joints = len(self._default_angles)
-        if n_joints >= 12:
-            # Go1 leg order: FR(0-2), FL(3-5), RR(6-8), RL(9-11) — bias front thigh/calf.
-            for idx in (1, 2, 4, 5):
-                data.ctrl[idx] += lift
+        if n_joints < 12:
+            return
+        # Go1 leg order: FR(0-2), FL(3-5), RR(6-8), RL(9-11).
+        if gains.exec_mode == SportExecMode.ONESIDED_STEP:
+            data.ctrl[1] += lift_base * np.sin(self._lift_phase)
+            data.ctrl[2] += lift_base * 0.5 * np.sin(self._lift_phase)
+            data.ctrl[4] += lift_base * np.sin(self._lift_phase + np.pi)
+            data.ctrl[5] += lift_base * 0.5 * np.sin(self._lift_phase + np.pi)
+            return
+        lift = lift_base * np.sin(self._lift_phase)
+        for idx in (1, 2, 4, 5):
+            data.ctrl[idx] += lift
 
 
 class G1OnnxController(OnnxController):

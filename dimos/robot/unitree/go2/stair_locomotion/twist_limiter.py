@@ -54,11 +54,14 @@ def twist_along_corridor(
     *,
     yaw_gain: float,
     on_stair: bool,
+    sim_min_forward_ratio: float | None = None,
 ) -> Twist:
     """Body-frame cmd_vel with forward speed along the stair corridor axis."""
     yaw_err = angle_diff(corridor.axis_yaw, robot_yaw)
     # Project corridor-axis speed onto body forward (DimOS linear.x convention).
     forward = speed_mps * math.cos(yaw_err)
+    if sim_min_forward_ratio is not None and abs(yaw_err) < math.pi * 0.55:
+        forward = max(forward, speed_mps * sim_min_forward_ratio)
     twist = Twist(
         linear=Vector3(forward, 0.0, 0.0),
         angular=Vector3(0.0, 0.0, yaw_gain * yaw_err),

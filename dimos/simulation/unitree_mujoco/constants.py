@@ -14,8 +14,14 @@
 
 from pathlib import Path
 
-# CycloneDDS domain / interface — must match ``simulate_python/config.py``.
+import sys
+
+# CycloneDDS domain / interface — domain 1 matches ``simulate_python/config.py``.
 UNITREE_DDS_DOMAIN_ID = 1
-UNITREE_DDS_INTERFACE = "lo"
+# Linux: loopback is ``lo``; macOS/BSD: ``lo0``.
+UNITREE_DDS_INTERFACE = "lo0" if sys.platform == "darwin" else "lo"
 
 LAUNCHER_PATH = Path(__file__).parent / "launcher.py"
+
+# Faster than default LIDAR_FPS=2 so the first global_costmap appears sooner in sim.
+UNITREE_LIDAR_FPS = 5.0
