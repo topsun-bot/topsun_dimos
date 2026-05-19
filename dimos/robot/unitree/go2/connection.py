@@ -113,6 +113,142 @@ BASE_TO_OPTICAL: Transform = Transform(
 )
 
 
+def _resolve_robot_ip(
+    hint: str | None,
+    total_timeout: float = 20.0,
+    settle_after_first: float = 3.0,
+) -> str:
+    """Discover Go2 robots on the LAN and pick the right one.
+
+    Always scans because Go2 IPs change frequently — a stale ROBOT_IP
+    would otherwise silently lead to a wrong / failed connection.
+
+    Uses the same polling pattern as `dimos go2tool discover`: send a
+    multicast probe every 2 s and accumulate replies. UDP multicast
+    response can be very sparse (each Go2 replies on its own internal
+    timer; observed inter-reply gap up to ~10 s on congested networks),
+    so a single 2 s probe often returns nothing.
+
+    Exit conditions (whichever comes first):
+      - hint is set and the hint IP appears in discovered set
+      - we've seen any device AND `settle_after_first` seconds have passed
+        since the first sighting (gives stragglers a chance)
+      - `total_timeout` seconds elapsed
+
+    Resolution rules:
+      hint in discovered  -> use hint (validated, "still on LAN")
+      hint not in discovered, len(discovered) == 1 -> use the one (with notice)
+      hint not in discovered, len(discovered) >= 2 -> interactive prompt
+      hint not in discovered, len(discovered) == 0 -> RuntimeError
+    """
+    import asyncio
+    import sys
+    import time
+
+    import typer
+
+    from dimos.robot.unitree.go2.cli.landiscovery import Go2Device, discover_lan
+
+    if hint:
+        typer.echo(
+            f"ROBOT_IP={hint} — scanning LAN to validate "
+            f"(up to {total_timeout:.0f}s, returns early on hint hit) ..."
+        )
+    else:
+        typer.echo(
+            f"ROBOT_IP not set — scanning LAN for Go2 robots (up to {total_timeout:.0f}s) ..."
+        )
+
+    devices_by_serial: dict[str, Go2Device] = {}
+    first_seen_at: float | None = None
+
+    async def _collect() -> None:
+        nonlocal first_seen_at
+        async for d in discover_lan(tick=2.0, timeout=1.5):
+            if d.serial in devices_by_serial:
+                # keep most recent (IP could have changed mid-scan)
+                devices_by_serial[d.serial] = d
+                continue
+            devices_by_serial[d.serial] = d
+            if first_seen_at is None:
+                first_seen_at = time.monotonic()
+            typer.echo(f"  + saw serial={d.serial}, ip={d.ip} (via {d.iface})")
+
+            if hint and d.ip == hint:
+                return
+
+    async def _run_with_settle() -> None:
+        start = time.monotonic()
+        try:
+            task = asyncio.create_task(_collect())
+            while not task.done():
+                now = time.monotonic()
+                if now - start >= total_timeout:
+                    task.cancel()
+                    break
+                if first_seen_at is not None and (now - first_seen_at) >= settle_after_first:
+                    task.cancel()
+                    break
+                await asyncio.sleep(0.2)
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        except Exception:
+            pass
+
+    asyncio.run(_run_with_settle())
+
+    devices = list(devices_by_serial.values())
+
+    if not devices:
+        msg = "No Go2 robots discovered on the LAN."
+        if hint:
+            msg += f"\n  ROBOT_IP={hint} is also not on this LAN."
+        msg += (
+            "\n  Check:\n"
+            "    1. robot powered on and on the same network as this machine\n"
+            "    2. `dimos go2tool discover` can find it manually\n"
+            "    3. otherwise set ROBOT_IP=X.X.X.X explicitly"
+        )
+        raise RuntimeError(msg)
+
+    if hint and any(d.ip == hint for d in devices):
+        typer.echo(f"  -> ROBOT_IP={hint} is online, using it.")
+        return hint
+
+    if hint:
+        typer.echo(f"  Warning: ROBOT_IP={hint} not found on the LAN (stale).")
+
+    if len(devices) == 1:
+        d = devices[0]
+        typer.echo(f"  -> Found 1 Go2: serial={d.serial}, ip={d.ip} (via {d.iface}). Using it.")
+        return d.ip
+
+    typer.echo(f"\n  Found {len(devices)} Go2 robots:")
+    typer.echo("    #   SERIAL                  IP                IFACE")
+    for i, d in enumerate(devices, 1):
+        typer.echo(f"    {i:<3} {d.serial:<22}  {d.ip:<16}  {d.iface}")
+
+    if not sys.stdin.isatty():
+        # Should be unreachable for `dimos run` — the CLI pre-flight in
+        # dimos/robot/cli/dimos.py resolves the IP in the main process
+        # before workers spawn. If you hit this, you're probably using
+        # GO2Connection from a non-CLI entry point (e.g. a script).
+        ips = ", ".join(d.ip for d in devices)
+        raise RuntimeError(
+            f"Multiple Go2 robots found ({ips}) but stdin is not a TTY. "
+            "Set ROBOT_IP=X.X.X.X to pick one, or run from a terminal."
+        )
+
+    idx = typer.prompt("\n  Select robot by number", type=int)
+    if not 1 <= idx <= len(devices):
+        raise RuntimeError(f"Invalid selection: {idx}")
+    chosen = devices[idx - 1]
+    typer.echo(f"  -> Selected serial={chosen.serial}, ip={chosen.ip}")
+    return chosen.ip
+
+
 def make_connection(ip: str | None, cfg: GlobalConfig) -> Go2ConnectionProtocol:
     connection_type = cfg.unitree_connection_type
 
@@ -128,8 +264,12 @@ def make_connection(ip: str | None, cfg: GlobalConfig) -> Go2ConnectionProtocol:
 
         return DimSimConnection(cfg)
     elif connection_type == "webrtc":
-        assert ip is not None, "IP address must be provided"
-        return UnitreeWebRTCConnection(ip)
+        # Always discover, even if `ip` is provided — Go2 IPs change often,
+        # so validate `ip` is still on LAN; if not, fall through to picker.
+        # `ip == "auto"` is treated as "no hint".
+        hint = None if ip in (None, "auto") else ip
+        resolved = _resolve_robot_ip(hint)
+        return UnitreeWebRTCConnection(resolved)
     else:
         raise ValueError(f"Unknown simulator {cfg.simulation!r}. Choose from: mujoco, dimsim")
 

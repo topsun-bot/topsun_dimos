@@ -289,6 +289,22 @@ def run(
         print(arg_help(blueprint.config(), blueprint))
         return
 
+    # Pre-flight: Go2 needs a real on-LAN IP. GO2Connection is constructed
+    # inside a forkserver worker process which has no TTY (stdin detached),
+    # so an interactive picker can't run there. Resolve here in the main
+    # process — workers then just consume the validated IP via GlobalConfig.
+    if not global_config.simulation and not global_config.replay:
+        needs_go2 = any(
+            isinstance(atom.module, type) and atom.module.__name__ == "GO2Connection"
+            for atom in blueprint.blueprints
+        )
+        if needs_go2:
+            from dimos.robot.unitree.go2.connection import _resolve_robot_ip
+
+            resolved = _resolve_robot_ip(global_config.robot_ip)
+            global_config.robot_ip = resolved
+            cli_config_overrides["robot_ip"] = resolved
+
     blueprint_config = blueprint.config()
     kwargs = load_config_args(blueprint_config, blueprint_args, config_path)
     if cli_config_overrides:

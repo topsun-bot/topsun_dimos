@@ -93,12 +93,32 @@ def _resolve_mac(ip: str, retries: int = 3, retry_delay: float = 0.05) -> str | 
 
 def _candidate_ifaces() -> Iterator[tuple[str, str]]:
     """Yield (iface_name, ipv4_addr) for non-loopback, non-tun IPv4 interfaces."""
-    skip_prefixes = ("lo", "tailscale", "wg", "tun", "docker", "br-", "veth", "Meta")
+    # `utun` is macOS-style and also used by some Linux proxy clients
+    # (Shadowsocks/Clash/Surge etc. on 198.18.0.0/15). Including it as a
+    # standalone prefix because `tun` doesn't match it.
+    skip_prefixes = (
+        "lo",
+        "tailscale",
+        "wg",
+        "tun",
+        "utun",
+        "docker",
+        "br-",
+        "veth",
+        "Meta",
+    )
+    # Address-prefix blacklist for tunnel address ranges that occasionally show
+    # up on otherwise non-tun-named interfaces:
+    #   100.64.0.0/10   — RFC6598 carrier-grade NAT (Tailscale, some VPNs)
+    #   198.18.0.0/15   — RFC2544 benchmark range, repurposed by many proxy clients
+    skip_addr_prefixes = ("100.64.", "100.65.", "100.66.", "100.67.", "198.18.", "198.19.")
     for name, addrs in psutil.net_if_addrs().items():
         if name.startswith(skip_prefixes):
             continue
         for a in addrs:
             if a.family == socket.AF_INET and not a.address.startswith("127."):
+                if a.address.startswith(skip_addr_prefixes):
+                    continue
                 yield name, a.address
                 break
 
