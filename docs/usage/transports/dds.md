@@ -31,6 +31,19 @@ export LD_LIBRARY_PATH="\$CYCLONEDDS_HOME/lib:\${LD_LIBRARY_PATH:-}"
 EOF
 ```
 
+## macOS (no Homebrew formula)
+
+Homebrew does not provide `cyclonedds`. Either use **nix** (above) or build the C library from source:
+
+```bash
+./bin/install-cyclonedds
+export CYCLONEDDS_HOME="$PWD/.cyclonedds/install"
+export DYLD_LIBRARY_PATH="$CYCLONEDDS_HOME/lib:${DYLD_LIBRARY_PATH:-}"
+uv sync --extra go2-sim
+```
+
+See also [unitree MuJoCo sim](../../development/unitree_mujoco_sim.md).
+
 ## Alternative: Ubuntu apt + symlink shim
 
 ```bash

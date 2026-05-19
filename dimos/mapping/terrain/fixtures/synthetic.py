@@ -97,6 +97,57 @@ def negative_ramp_height_map(resolution: float = 0.05) -> SyntheticHeightMap:
     )
 
 
+def mujoco_scene_stairs_height_map(
+    *,
+    resolution: float = 0.05,
+    num_steps: int = 10,
+    riser_m: float = 0.15,
+    tread_m: float = 0.28,
+    stair_start_x: float = 3.0,
+    stair_width_m: float = 1.2,
+    floor_extent_m: float = 12.0,
+) -> SyntheticHeightMap:
+    """Large flat floor with a straight stair strip at +x (matches ``scene_stairs``)."""
+    half = floor_extent_m / 2.0
+    width_cells = int(np.ceil(floor_extent_m / resolution))
+    height_cells = int(np.ceil(floor_extent_m / resolution))
+    grid = np.full((height_cells, width_cells), np.nan, dtype=np.float64)
+
+    origin_x = -half
+    origin_y = -half
+
+    y_center = height_cells // 2
+    half_w_cells = max(1, int((stair_width_m / resolution) / 2))
+    y0 = max(0, y_center - half_w_cells)
+    y1 = min(height_cells, y_center + half_w_cells + 1)
+
+    # Open floor at z=0 (dominates occupancy — stresses profile search).
+    for iy in range(height_cells):
+        for ix in range(width_cells):
+            grid[iy, ix] = 0.0
+
+    for step in range(num_steps):
+        x0_m = stair_start_x + step * tread_m
+        x1_m = stair_start_x + (step + 1) * tread_m
+        ix0 = int((x0_m - origin_x) / resolution)
+        ix1 = int((x1_m - origin_x) / resolution) + 1
+        if ix1 <= ix0:
+            continue
+        ix0 = max(0, ix0)
+        ix1 = min(width_cells, ix1)
+        z_top = (step + 1) * riser_m
+        grid[y0:y1, ix0:ix1] = z_top
+
+    return SyntheticHeightMap(
+        height_map=grid,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        resolution=resolution,
+        expected_axis_yaw=0.0,
+        expected_mean_riser=riser_m,
+    )
+
+
 def negative_flat_height_map(resolution: float = 0.05) -> SyntheticHeightMap:
     width_cells = int(np.ceil(1.2 / resolution))
     length_cells = int(np.ceil(3.0 / resolution))

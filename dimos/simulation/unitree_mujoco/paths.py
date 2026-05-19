@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
-from dimos.robot.unitree.go2.stair_locomotion.locomotion_policy import StairLocomotionPolicy
-from dimos.robot.unitree.go2.stair_locomotion.sport_api import Go2StairSportController
-from dimos.robot.unitree.go2.stair_locomotion.twist_limiter import apply_stair_twist_limit
+"""Paths for the vendored Unitree MuJoCo simulator (``third_party/unitree_mujoco``)."""
 
-__all__ = [
-    "Go2StairSportController",
-    "StairLocomotionConfig",
-    "StairLocomotionPolicy",
-    "apply_stair_twist_limit",
-]
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def unitree_mujoco_root() -> Path:
+    return repo_root() / "third_party" / "unitree_mujoco"
+
+
+def unitree_simulate_python() -> Path:
+    return unitree_mujoco_root() / "simulate_python"

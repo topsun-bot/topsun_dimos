@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Copyright 2026 Dimensional Inc.
+# Build Eclipse CycloneDDS C library (0.10.x) for cyclonedds-python / unitree_sdk2py.
+# Homebrew does not ship a cyclonedds formula on macOS; use this script or nix (see docs).
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INSTALL_PREFIX="${CYCLONEDDS_INSTALL_PREFIX:-$REPO_ROOT/.cyclonedds/install}"
+SRC_DIR="${CYCLONEDDS_SRC_DIR:-$REPO_ROOT/.cyclonedds/src}"
+BRANCH="${CYCLONEDDS_BRANCH:-releases/0.10.x}"
+
+if ! command -v cmake >/dev/null 2>&1; then
+  echo "cmake is required. On macOS: xcode-select --install  (or brew install cmake)" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$SRC_DIR")"
+if [[ ! -d "$SRC_DIR/.git" ]]; then
+  echo "Cloning cyclonedds ($BRANCH) into $SRC_DIR ..."
+  git clone --depth 1 -b "$BRANCH" https://github.com/eclipse-cyclonedds/cyclonedds.git "$SRC_DIR"
+fi
+
+BUILD_DIR="$SRC_DIR/build"
+mkdir -p "$BUILD_DIR"
+cmake -S "$SRC_DIR" -B "$BUILD_DIR" \
+  -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
+  -DBUILD_EXAMPLES=OFF \
+  -DBUILD_TESTING=OFF
+cmake --build "$BUILD_DIR" --target install -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
+
+echo ""
+echo "CycloneDDS installed to: $INSTALL_PREFIX"
+echo ""
+echo "Add to your shell (or .venv/bin/activate) before uv sync --extra go2-sim:"
+echo "  export CYCLONEDDS_HOME=\"$INSTALL_PREFIX\""
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  echo "  export DYLD_LIBRARY_PATH=\"\$CYCLONEDDS_HOME/lib:\${DYLD_LIBRARY_PATH:-}\""
+else
+  echo "  export LD_LIBRARY_PATH=\"\$CYCLONEDDS_HOME/lib:\${LD_LIBRARY_PATH:-}\""
+fi
+echo ""
+echo "Then:"
+echo "  cd \"$REPO_ROOT\""
+echo "  uv sync --extra go2-sim"

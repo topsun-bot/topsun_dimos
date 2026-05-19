@@ -12,30 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Go2 stair climbing state machine: Sport API gait + corridor-aligned cmd_vel.
+
+Triggered by ``LocalPlanner`` after ``StairNavigatorModule`` arms a corridor and
+``GlobalPlanner`` publishes a centerline path.
+"""
+
 from __future__ import annotations
 
-from typing import Any, Protocol
+import math
 
+from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.stairs.contracts import StairCorridor, StairPhase
+from dimos.navigation.stairs.geometry import point_in_stair_corridor
 from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
-from dimos.robot.unitree.go2.stair_locomotion.twist_limiter import apply_stair_twist_limit
+from dimos.robot.unitree.go2.stair_locomotion.sport_api import Go2SportConnection, Go2StairSportController
+from dimos.robot.unitree.go2.stair_locomotion.twist_limiter import twist_along_corridor
+from dimos.utils.logging_config import setup_logger
 from dimos.utils.trigonometry import angle_diff
 
-
-class Go2SportConnection(Protocol):
-    def move(self, twist: Twist, duration: float = 0.0) -> bool: ...
-
-    def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]: ...
-
-
-# Unitree sport API ids from unitree_skill_container
-_FOOT_RAISE_HEIGHT_API = 1014
-_BODY_HEIGHT_API = 1013
-_SWITCH_GAIT_API = 1011
+logger = setup_logger()
 
 
 class StairLocomotionPolicy:
@@ -45,61 +44,89 @@ class StairLocomotionPolicy:
         self,
         connection: Go2SportConnection,
         config: StairLocomotionConfig | None = None,
+        global_config: GlobalConfig | None = None,
     ) -> None:
         self._connection = connection
-        self._config = config or StairLocomotionConfig()
+        self._global_config = global_config
+        if config is not None:
+            self._config = config
+        elif global_config is not None and global_config.simulation:
+            # MuJoCo uses cmd_vel only (no FootRaiseHeight); need stronger forward drive.
+            self._config = StairLocomotionConfig(
+                min_linear_x=0.28,
+                max_linear_x=0.55,
+                riser_slowdown_factor=0.85,
+                yaw_gain_on_stair=0.2,
+            )
+        else:
+            self._config = StairLocomotionConfig()
+        self._sport = Go2StairSportController(connection, self._config, global_config=global_config)
         self._phase = StairPhase.IDLE
         self._corridor: StairCorridor | None = None
         self._path: Path | None = None
         self._path_index = 0
-        self._sport_configured = False
+        self._finished = False
 
     @property
     def phase(self) -> StairPhase:
         return self._phase
 
+    @property
+    def finished(self) -> bool:
+        return self._finished
+
     def reset(self) -> None:
+        if self._phase == StairPhase.ON_STAIR:
+            self._sport.exit_stair_mode()
         self._phase = StairPhase.IDLE
         self._corridor = None
         self._path = None
         self._path_index = 0
-        self._sport_configured = False
+        self._finished = False
 
     def start(self, corridor: StairCorridor, path: Path) -> None:
+        if self._phase in (StairPhase.ALIGN, StairPhase.ON_STAIR):
+            self._corridor = corridor
+            self.update_path(path)
+            logger.info(
+                "Stair climb continuing",
+                mean_riser=round(corridor.mean_riser, 3),
+                path_poses=len(path.poses),
+                phase=self._phase.value,
+            )
+            return
+
         self._corridor = corridor
         self._path = path
         self._path_index = 0
         self._phase = StairPhase.APPROACH
-        self._sport_configured = False
+        self._finished = False
+        logger.info(
+            "Stair locomotion started",
+            mean_riser=round(corridor.mean_riser, 3),
+            path_poses=len(path.poses),
+            phase=self._phase.value,
+        )
 
-    def _configure_sport_for_stairs(self) -> None:
-        if self._sport_configured:
-            return
-        self._connection.publish_request(
-            "rt/api/sport/request",
-            {"api_id": _FOOT_RAISE_HEIGHT_API, "parameter": {"data": self._config.foot_raise_height_m}},
-        )
-        self._connection.publish_request(
-            "rt/api/sport/request",
-            {"api_id": _BODY_HEIGHT_API, "parameter": {"data": self._config.body_height_delta_m}},
-        )
-        self._connection.publish_request(
-            "rt/api/sport/request",
-            {"api_id": _SWITCH_GAIT_API, "parameter": {"data": 0}},
-        )
-        self._sport_configured = True
+    def update_path(self, path: Path) -> None:
+        """Refresh centerline waypoints without restarting the climb state machine."""
+        self._path = path
 
-    def _distance_to_path_start(self, odom: PoseStamped) -> float:
+    def _distance_to_nearest_path_point(self, odom: PoseStamped) -> float:
         if not self._path or not self._path.poses:
             return float("inf")
-        p = self._path.poses[0].position
-        return odom.position.distance(p)
+        pos = odom.position
+        return min(pos.distance(pose.position) for pose in self._path.poses)
 
-    def _yaw_error_to_corridor(self, odom: PoseStamped) -> float:
-        if self._corridor is None:
-            return 0.0
-        robot_yaw = odom.orientation.euler[2]
-        return angle_diff(self._corridor.axis_yaw, robot_yaw)
+    def _set_phase(self, phase: StairPhase) -> None:
+        if phase != self._phase:
+            logger.info("Stair phase transition", from_phase=self._phase.value, to_phase=phase.value)
+            self._phase = phase
+
+    def _sim_speed_scale(self) -> float:
+        if self._global_config is not None and self._global_config.simulation:
+            return 1.0
+        return 1.0
 
     def _advance_path_index(self, odom: PoseStamped) -> None:
         if not self._path or self._path_index >= len(self._path.poses) - 1:
@@ -108,68 +135,94 @@ class StairLocomotionPolicy:
         if odom.position.distance(target.position) < 0.12:
             self._path_index += 1
 
-    def _target_linear_x(self) -> float:
+    def _target_speed_mps(self) -> float:
         cfg = self._config
         base = cfg.max_linear_x
         if self._corridor and self._path and self._path_index < len(self._path.poses):
-            # slow near riser crossings (every ~tread)
             if self._path_index > 0 and self._path_index % 2 == 0:
                 base *= cfg.riser_slowdown_factor
-        if not self._corridor or self._corridor.ascending:
-            return max(cfg.min_linear_x, min(cfg.max_linear_x, base))
-        return -max(cfg.min_linear_x, min(cfg.max_linear_x, base))
+        signed = base if (self._corridor is None or self._corridor.ascending) else -base
+        return max(-cfg.max_linear_x, min(cfg.max_linear_x, signed))
+
+    def _apply_hardware_motion(self, twist: Twist) -> Twist:
+        """Send cmd_vel to the connection (MuJoCo SHM + hardware WebRTC)."""
+        self._connection.move(twist, duration=0.0)
+        return twist
 
     def step(self, odom: PoseStamped) -> Twist:
         """Compute the next cmd_vel for the current phase."""
         if self._phase == StairPhase.IDLE or self._corridor is None or self._path is None:
             return Twist()
 
+        corridor = self._corridor
+        robot_yaw = odom.orientation.euler[2]
         pitch = odom.orientation.euler[1]
+
         if abs(pitch) > self._config.max_pitch_rad:
-            self._connection.move(Twist(), duration=0.0)
+            logger.warning("Stair locomotion paused: excessive pitch", pitch_deg=round(pitch, 2))
             return Twist()
 
         if self._phase == StairPhase.APPROACH:
-            dist = self._distance_to_path_start(odom)
-            if dist <= self._config.approach_distance_m:
-                self._phase = StairPhase.ALIGN
-            yaw_err = self._yaw_error_to_corridor(odom)
-            return apply_stair_twist_limit(
-                Twist(
-                    linear=Vector3(self._config.min_linear_x * 0.5, 0.0, 0.0),
-                    angular=Vector3(0.0, 0.0, 0.5 * yaw_err),
-                ),
+            dist = self._distance_to_nearest_path_point(odom)
+            at_stair_mouth = point_in_stair_corridor(odom.position, corridor) or dist <= (
+                self._config.approach_distance_m + corridor.safe_half_width
+            )
+            if at_stair_mouth:
+                self._set_phase(StairPhase.ALIGN)
+            speed = self._config.min_linear_x * 0.6 * self._sim_speed_scale()
+            twist = twist_along_corridor(
+                speed,
+                robot_yaw,
+                corridor,
                 self._config,
+                yaw_gain=self._config.yaw_gain_approach,
                 on_stair=False,
             )
+            return self._apply_hardware_motion(twist)
 
         if self._phase == StairPhase.ALIGN:
-            yaw_err = self._yaw_error_to_corridor(odom)
+            yaw_err = angle_diff(corridor.axis_yaw, robot_yaw)
             if abs(yaw_err) < self._config.align_yaw_tolerance_rad:
-                self._phase = StairPhase.ON_STAIR
-                self._configure_sport_for_stairs()
-            return apply_stair_twist_limit(
-                Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.8 * yaw_err)),
+                self._set_phase(StairPhase.ON_STAIR)
+                self._sport.enter_stair_mode()
+                logger.info("Entering ON_STAIR — Sport gait configured for climbing")
+            align_forward = 0.0
+            if abs(yaw_err) < math.radians(20.0):
+                align_forward = self._config.min_linear_x * 0.35 * self._sim_speed_scale()
+            twist = twist_along_corridor(
+                align_forward,
+                robot_yaw,
+                corridor,
                 self._config,
+                yaw_gain=self._config.yaw_gain_align,
                 on_stair=False,
             )
+            return self._apply_hardware_motion(twist)
 
         if self._phase == StairPhase.ON_STAIR:
             self._advance_path_index(odom)
             if self._path_index >= len(self._path.poses) - 1:
-                self._phase = StairPhase.EXIT
-            lin_x = self._target_linear_x()
-            yaw_err = self._yaw_error_to_corridor(odom)
-            twist = Twist(
-                linear=Vector3(lin_x, 0.0, 0.0),
-                angular=Vector3(0.0, 0.0, 0.3 * yaw_err),
+                self._set_phase(StairPhase.EXIT)
+            speed = self._target_speed_mps()
+            if self._global_config is not None and self._global_config.simulation:
+                # Keep commanded forward speed high on discrete MuJoCo treads.
+                sign = 1.0 if speed >= 0.0 else -1.0
+                speed = sign * max(abs(speed), self._config.max_linear_x * 0.92)
+            twist = twist_along_corridor(
+                speed,
+                robot_yaw,
+                corridor,
+                self._config,
+                yaw_gain=self._config.yaw_gain_on_stair,
+                on_stair=True,
             )
-            cmd = apply_stair_twist_limit(twist, self._config, on_stair=True)
-            self._connection.move(cmd, duration=0.0)
-            return cmd
+            return self._apply_hardware_motion(twist)
 
         if self._phase == StairPhase.EXIT:
-            self.reset()
+            self._sport.exit_stair_mode()
+            self._finished = True
+            self._phase = StairPhase.IDLE
+            logger.info("Stair locomotion finished")
             return Twist()
 
         return Twist()

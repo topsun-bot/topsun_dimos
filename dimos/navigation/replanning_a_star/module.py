@@ -29,6 +29,7 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.base import NavigationInterface, NavigationState
 from dimos.navigation.replanning_a_star.global_planner import GlobalPlanner
 from dimos.navigation.stairs.contracts import StairCorridor
+from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 
 
 class ReplanningAStarPlanner(Module, NavigationInterface):
@@ -45,6 +46,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
     navigation_costmap: Out[OccupancyGrid]
 
     _planner: GlobalPlanner
+    _go2: GO2ConnectionSpec
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -53,6 +55,8 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
     @rpc
     def start(self) -> None:
         super().start()
+
+        self._planner.set_sport_connection(self._go2)
 
         self.register_disposable(Disposable(self.odom.subscribe(self._planner.handle_odom)))
         self.register_disposable(

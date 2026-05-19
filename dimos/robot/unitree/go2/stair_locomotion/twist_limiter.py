@@ -14,9 +14,13 @@
 
 from __future__ import annotations
 
+import math
+
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.navigation.stairs.contracts import StairCorridor
 from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
+from dimos.utils.trigonometry import angle_diff
 
 
 def apply_stair_twist_limit(
@@ -25,7 +29,7 @@ def apply_stair_twist_limit(
     *,
     on_stair: bool,
 ) -> Twist:
-    """Clamp linear.x for stair traversal; zero lateral velocity on stairs."""
+    """Clamp body-forward speed; zero lateral velocity while on stairs."""
     lin_x = twist.linear.x
     if on_stair:
         if lin_x >= 0:
@@ -40,6 +44,26 @@ def apply_stair_twist_limit(
     max_abs = config.max_linear_x
     lin_x = max(-max_abs, min(max_abs, lin_x))
     return Twist(linear=Vector3(lin_x, twist.linear.y, twist.linear.z), angular=twist.angular)
+
+
+def twist_along_corridor(
+    speed_mps: float,
+    robot_yaw: float,
+    corridor: StairCorridor,
+    config: StairLocomotionConfig,
+    *,
+    yaw_gain: float,
+    on_stair: bool,
+) -> Twist:
+    """Body-frame cmd_vel with forward speed along the stair corridor axis."""
+    yaw_err = angle_diff(corridor.axis_yaw, robot_yaw)
+    # Project corridor-axis speed onto body forward (DimOS linear.x convention).
+    forward = speed_mps * math.cos(yaw_err)
+    twist = Twist(
+        linear=Vector3(forward, 0.0, 0.0),
+        angular=Vector3(0.0, 0.0, yaw_gain * yaw_err),
+    )
+    return apply_stair_twist_limit(twist, config, on_stair=on_stair)
 
 
 def stair_aware_limit(

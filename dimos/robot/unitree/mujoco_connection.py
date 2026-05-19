@@ -21,6 +21,7 @@ from collections.abc import Callable
 import functools
 import json
 import pickle
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -44,7 +45,7 @@ from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.robot.unitree.type.odometry import Odometry
 from dimos.simulation.mujoco.constants import (
-    LAUNCHER_PATH,
+    LAUNCHER_PATH as DIMOS_LAUNCHER_PATH,
     LIDAR_FPS,
     VIDEO_CAMERA_FOV,
     VIDEO_FPS,
@@ -65,11 +66,18 @@ T = TypeVar("T")
 class MujocoConnection:
     """MuJoCo simulator connection that runs in a separate subprocess."""
 
-    def __init__(self, global_config: GlobalConfig) -> None:
+    def __init__(
+        self,
+        global_config: GlobalConfig,
+        *,
+        launcher_path: Path | None = None,
+    ) -> None:
         try:
             import mujoco  # noqa: F401
         except ImportError:
             raise ImportError("'mujoco' is not installed. Use `pip install -e .[sim]`")
+
+        self._launcher_path = launcher_path or DIMOS_LAUNCHER_PATH
 
         # Pre-download the mujoco_sim data.
         get_data("mujoco_sim")
@@ -130,7 +138,7 @@ class MujocoConnection:
             executable = sys.executable if sys.platform != "darwin" else "mjpython"
 
             self.process = subprocess.Popen(
-                [executable, str(LAUNCHER_PATH), config_pickle, shm_names_json],
+                [executable, str(self._launcher_path), config_pickle, shm_names_json],
                 stderr=subprocess.PIPE,
             )
 
@@ -236,6 +244,9 @@ class MujocoConnection:
         return True
 
     def balance_stand(self) -> bool:
+        return True
+
+    def free_walk(self) -> bool:
         return True
 
     def set_obstacle_avoidance(self, enabled: bool = True) -> None:
@@ -365,6 +376,16 @@ class MujocoConnection:
             self._stop_timer.start()
         return True
 
+    def clear_sim_sport_state(self) -> None:
+        if self.shm_data is not None:
+            self.shm_data.clear_sport_state()
+
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
-        print(f"publishing request, topic={topic}, data={data}")
+        from unitree_webrtc_connect.constants import RTC_TOPIC
+
+        if self.shm_data is not None and topic == RTC_TOPIC["SPORT_MOD"]:
+            if self.shm_data.write_sport_payload(data):
+                logger.debug("MuJoCo sport SHM updated", payload=data)
+            return {}
+        logger.debug("MuJoCo publish_request (no SHM)", topic=topic, data=data)
         return {}

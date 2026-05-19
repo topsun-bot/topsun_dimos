@@ -33,6 +33,9 @@ class GlobalConfig(BaseSettings):
     xarm6_ip: str | None = None
     can_port: str | None = None
     simulation: bool = False
+    # ``unitree``: official https://github.com/unitreerobotics/unitree_mujoco (DDS + Go2 MJCF).
+    # ``dimos``: legacy DimOS MuJoCo (lidars, head camera, custom rooms).
+    mujoco_backend: Literal["dimos", "unitree"] = "unitree"
     replay: bool = False
     replay_db: str = "go2_short"
     new_memory: bool = False
@@ -76,6 +79,8 @@ class GlobalConfig(BaseSettings):
         if self.replay:
             return "replay"
         if self.simulation:
+            if self.mujoco_backend == "unitree":
+                return "unitree_mujoco"
             return "mujoco"
         return "webrtc"
 

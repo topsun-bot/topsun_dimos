@@ -20,11 +20,22 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class StairLocomotionConfig:
+    """Stair climb tuning for 15 cm risers (Go2 Sport API + cmd_vel)."""
+
     min_linear_x: float = 0.15
-    max_linear_x: float = 0.35
-    riser_slowdown_factor: float = 0.5
-    max_pitch_rad: float = math.radians(25.0)
+    max_linear_x: float = 0.30
+    riser_slowdown_factor: float = 0.55
+    max_pitch_rad: float = math.radians(28.0)
     align_yaw_tolerance_rad: float = math.radians(12.0)
-    approach_distance_m: float = 0.6
+    approach_distance_m: float = 0.85
+    # Sport API (FootRaiseHeight 1014) — ~12 cm for 15 cm riser stairs
     foot_raise_height_m: float = 0.12
     body_height_delta_m: float = -0.02
+    gait_id: int = 0
+    speed_level: int = 0
+    use_economic_gait: bool = False
+    sport_settle_s: float = 0.25
+    disable_obstacle_avoidance_on_stair: bool = True
+    yaw_gain_approach: float = 0.5
+    yaw_gain_align: float = 0.8
+    yaw_gain_on_stair: float = 0.35

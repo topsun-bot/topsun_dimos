@@ -13,6 +13,7 @@ __pycache__/
 .venv*/
 .ssh/
 .direnv/
+.cyclonedds/
 
 # Ignore python tooling dirs
 *.egg-info/

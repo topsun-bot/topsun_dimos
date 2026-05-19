@@ -303,6 +303,14 @@ sim = [
     "mujoco>=3.3.4",
     "playground>=0.0.5",
     "pygame>=2.6.1",
+    # Official unitree_mujoco bridge (DDS) + Go1 ONNX policy in sim subprocess
+    "dimos[unitree-dds,cpu,unitree]",
+]
+
+# Go2 blueprints with mapping (VoxelGridMapper → memory2 embeddings need torch/transformers).
+go2-sim = [
+    "dimos[sim]",
+    "transformers[torch]>=4.53.0,<4.54",
 ]
 
 # NOTE: jetson-jp6-cuda126 extra is disabled due to 404 errors from wheel URLs

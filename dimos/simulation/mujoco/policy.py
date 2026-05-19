@@ -77,6 +77,17 @@ class OnnxController(ABC):
 
 
 class Go1OnnxController(OnnxController):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._lift_phase = 0.0
+        self._lift_phase_dt = 2 * np.pi * 2.5 * (kwargs.get("ctrl_dt") or 0.02)
+
+    def _sport_gains(self) -> Any:
+        getter = getattr(self._input_controller, "get_sport_gains", None)
+        if getter is None:
+            return None
+        return getter()
+
     def get_obs(self, model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray[Any, Any]:
         linvel = data.sensor("local_linvel").data
         gyro = data.sensor("gyro").data
@@ -84,6 +95,12 @@ class Go1OnnxController(OnnxController):
         gravity = imu_xmat.T @ np.array([0, 0, -1])
         joint_angles = data.qpos[7:] - self._default_angles
         joint_velocities = data.qvel[6:]
+        command = self._input_controller.get_command().astype(np.float32, copy=True)
+        gains = self._sport_gains()
+        if gains is not None and gains.active:
+            command[0] *= gains.command_gain
+            if gains.cross_step:
+                command[1] *= 1.15
         obs = np.hstack(
             [
                 linvel,
@@ -92,10 +109,31 @@ class Go1OnnxController(OnnxController):
                 joint_angles,
                 joint_velocities,
                 self._last_action,
-                self._input_controller.get_command(),
+                command,
             ]
         )
         return obs.astype(np.float32)
+
+    def _post_control_update(self) -> None:
+        gains = self._sport_gains()
+        if gains is not None and gains.active and gains.foot_raise_m > 0.05:
+            self._lift_phase = float(
+                np.fmod(self._lift_phase + self._lift_phase_dt + np.pi, 2 * np.pi) - np.pi
+            )
+        else:
+            self._lift_phase = 0.0
+
+    def get_control(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        super().get_control(model, data)
+        gains = self._sport_gains()
+        if gains is None or not gains.active or gains.foot_raise_m <= 0.05:
+            return
+        lift = gains.foot_raise_m * 4.0 * np.sin(self._lift_phase)
+        n_joints = len(self._default_angles)
+        if n_joints >= 12:
+            # Go1 leg order: FR(0-2), FL(3-5), RR(6-8), RL(9-11) — bias front thigh/calf.
+            for idx in (1, 2, 4, 5):
+                data.ctrl[idx] += lift
 
 
 class G1OnnxController(OnnxController):

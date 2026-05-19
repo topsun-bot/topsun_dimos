@@ -17,6 +17,9 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
+
+from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -45,6 +48,20 @@ class MockGo2Connection:
         self.requests.append({"topic": topic, "data": data})
         return {}
 
+    def balance_stand(self) -> bool:
+        self.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": SPORT_CMD["BalanceStand"]})
+        return True
+
+    def free_walk(self) -> bool:
+        self.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": SPORT_CMD["FreeWalk"]})
+        return True
+
+    def set_obstacle_avoidance(self, enabled: bool = True) -> None:
+        self.publish_request(
+            RTC_TOPIC["OBSTACLES_AVOID"],
+            {"api_id": 1001, "parameter": {"enable": int(enabled)}},
+        )
+
 
 def _odom_at(x: float, y: float, yaw: float = 0.0, pitch: float = 0.0) -> PoseStamped:
     return PoseStamped(
@@ -64,17 +81,19 @@ def test_on_stair_linear_speed_bounded() -> None:
     assert path is not None
 
     conn = MockGo2Connection()
-    cfg = StairLocomotionConfig()
-    policy = StairLocomotionPolicy(conn, cfg)
+    cfg = StairLocomotionConfig(sport_settle_s=0.0)
+    policy = StairLocomotionPolicy(
+        conn,
+        cfg,
+        global_config=GlobalConfig(simulation=True),
+    )
     policy.start(corridor, path)
-
     policy._phase = StairPhase.ON_STAIR
-    policy._configure_sport_for_stairs()
+    policy._sport.enter_stair_mode()
 
     odom = _odom_at(cl[0][0], cl[0][1], yaw=corridor.axis_yaw)
     twist = policy.step(odom)
     assert cfg.min_linear_x <= twist.linear.x <= cfg.max_linear_x
-    assert len(conn.moves) >= 1
 
 
 def test_descending_negative_linear_x() -> None:
@@ -88,7 +107,7 @@ def test_descending_negative_linear_x() -> None:
     assert path is not None
 
     conn = MockGo2Connection()
-    policy = StairLocomotionPolicy(conn)
+    policy = StairLocomotionPolicy(conn, global_config=GlobalConfig(simulation=True))
     policy.start(corridor, path)
     policy._phase = StairPhase.ON_STAIR
 
@@ -108,7 +127,7 @@ def test_pitch_exceeds_threshold_stops() -> None:
     assert path is not None
 
     conn = MockGo2Connection()
-    policy = StairLocomotionPolicy(conn)
+    policy = StairLocomotionPolicy(conn, global_config=GlobalConfig(simulation=True))
     policy.start(corridor, path)
     policy._phase = StairPhase.ON_STAIR
 
@@ -116,7 +135,28 @@ def test_pitch_exceeds_threshold_stops() -> None:
     twist = policy.step(odom)
     assert twist.linear.x == 0.0
     assert twist.angular.z == 0.0
-    assert conn.moves[-1].linear.x == 0.0
+
+
+def test_approach_skips_to_align_when_already_in_corridor() -> None:
+    corridor = synthetic_stair_corridor_ascending()
+    cl = corridor.centerline
+    mid = len(cl) // 2
+    path = plan_in_corridor(
+        Vector3(cl[0][0], cl[0][1], 0.0),
+        Vector3(cl[-1][0], cl[-1][1], 0.0),
+        corridor,
+    )
+    assert path is not None
+
+    conn = MockGo2Connection()
+    policy = StairLocomotionPolicy(conn, global_config=GlobalConfig(simulation=True))
+    policy.start(corridor, path)
+    assert policy._phase == StairPhase.APPROACH
+
+    odom = _odom_at(cl[mid][0], cl[mid][1], yaw=corridor.axis_yaw)
+    twist = policy.step(odom)
+    assert policy._phase == StairPhase.ALIGN
+    assert twist.linear.x != 0.0
 
 
 def test_sport_apis_called_on_enter_on_stair() -> None:
@@ -130,9 +170,12 @@ def test_sport_apis_called_on_enter_on_stair() -> None:
     assert path is not None
 
     conn = MockGo2Connection()
-    policy = StairLocomotionPolicy(conn)
+    cfg = StairLocomotionConfig(sport_settle_s=0.0)
+    policy = StairLocomotionPolicy(conn, cfg)
     policy.start(corridor, path)
-    policy._configure_sport_for_stairs()
+    policy._sport.enter_stair_mode()
     api_ids = [r["data"]["api_id"] for r in conn.requests]
-    assert 1014 in api_ids
-    assert 1013 in api_ids
+    assert SPORT_CMD["FootRaiseHeight"] in api_ids
+    assert SPORT_CMD["BodyHeight"] in api_ids
+    assert SPORT_CMD["FreeWalk"] in api_ids
+    assert SPORT_CMD["BalanceStand"] in api_ids

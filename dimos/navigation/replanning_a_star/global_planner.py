@@ -37,6 +37,12 @@ from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
 from dimos.navigation.replanning_a_star.position_tracker import PositionTracker
 from dimos.navigation.replanning_a_star.replan_limiter import ReplanLimiter
 from dimos.navigation.stairs.contracts import StairCorridor
+from dimos.navigation.stairs.geometry import (
+    goal_requests_stair_corridor,
+    point_in_stair_corridor,
+    snap_goal_to_corridor,
+)
+from dimos.robot.unitree.go2.stair_locomotion.sport_api import Go2SportConnection
 from dimos.navigation.stairs.plan_in_corridor import plan_in_corridor
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.trigonometry import angle_diff
@@ -76,6 +82,7 @@ class GlobalPlanner(Resource):
     _replanning_enabled: bool = True
     _stair_corridor: StairCorridor | None = None
     _following_stair_path: bool = False
+    _sport_connection: Go2SportConnection | None = None
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self.path = Subject()
@@ -135,6 +142,36 @@ class GlobalPlanner(Resource):
         self._navigation_map_near.update(msg)
 
     def handle_goal_request(self, goal: PoseStamped) -> None:
+        with self._lock:
+            prev_goal = self._current_goal
+            following_stair = self._following_stair_path
+            stair_corridor = self._stair_corridor
+
+        in_stair_corridor = (
+            stair_corridor is not None
+            and self._global_config.stair_navigation
+            and (
+                point_in_stair_corridor(goal.position, stair_corridor)
+                or goal_requests_stair_corridor(goal.position, stair_corridor)
+            )
+        )
+
+        climbing = self._local_planner.is_stair_climbing()
+
+        if (
+            (following_stair or climbing)
+            and in_stair_corridor
+            and prev_goal is not None
+            and prev_goal.position.distance(goal.position) < 0.35
+        ):
+            logger.info(
+                "Stair climb in progress — ignoring micro goal update",
+                dist_m=round(prev_goal.position.distance(goal.position), 2),
+            )
+            with self._lock:
+                self._current_goal = goal
+            return
+
         logger.info("Got new goal", goal=str(goal))
         with self._lock:
             self._current_goal = goal
@@ -158,6 +195,7 @@ class GlobalPlanner(Resource):
             if not but_will_try_again:
                 self._current_goal = None
                 self._goal_reached = arrived
+                self._following_stair_path = False
                 self._replan_limiter.reset()
 
         self.path.on_next(Path())
@@ -228,17 +266,22 @@ class GlobalPlanner(Resource):
                 self.cancel_goal(arrived=True)
                 continue
 
-            # Check if robot has veered too far off the path
-            deviation = self._local_planner.get_distance_to_path()
-            if deviation is not None and deviation > self._max_path_deviation:
-                logger.info(
-                    "Robot veered off track. Replanning.",
-                    deviation=round(deviation, 2),
-                    threshold=self._max_path_deviation,
-                )
-                self._replan_path()
-                last_stuck_check = time.perf_counter()
-                continue
+            with self._lock:
+                following_stair = self._following_stair_path
+
+            # Stair centerline following uses StairLocomotionPolicy, not path tracking.
+            # The approach segment can be >0.9 m from the polyline start — skip veer replans.
+            if not following_stair:
+                deviation = self._local_planner.get_distance_to_path()
+                if deviation is not None and deviation > self._max_path_deviation:
+                    logger.info(
+                        "Robot veered off track. Replanning.",
+                        deviation=round(deviation, 2),
+                        threshold=self._max_path_deviation,
+                    )
+                    self._replan_path()
+                    last_stuck_check = time.perf_counter()
+                    continue
 
             _, new_id = self._local_planner.get_unique_state()
 
@@ -248,7 +291,8 @@ class GlobalPlanner(Resource):
                 continue
 
             if (
-                time.perf_counter() - last_stuck_check > self._stuck_time_window
+                not following_stair
+                and time.perf_counter() - last_stuck_check > self._stuck_time_window
                 and self._position_tracker.is_stuck()
             ):
                 logger.info("Robot is stuck. Replanning.")
@@ -281,6 +325,10 @@ class GlobalPlanner(Resource):
             self.cancel_goal()
 
     def _replan_path(self) -> None:
+        if self._local_planner.is_stair_climbing():
+            logger.info("Replan suppressed — stair locomotion active")
+            return
+
         with self._lock:
             current_odom = self._current_odom
             current_goal = self._current_goal
@@ -306,15 +354,39 @@ class GlobalPlanner(Resource):
 
         self._plan_path()
 
+    def set_sport_connection(self, connection: Go2SportConnection | None) -> None:
+        self._sport_connection = connection
+        self._local_planner.set_sport_connection(connection)
+
     def set_stair_corridor(self, corridor: StairCorridor | None) -> bool:
         with self._lock:
             self._stair_corridor = corridor
             if corridor is None:
                 self._following_stair_path = False
+        self._navigation_map.set_stair_corridor(corridor)
+        self._navigation_map_near.set_stair_corridor(corridor)
         return True
 
     def _plan_path(self) -> None:
-        self.cancel_goal(but_will_try_again=True)
+        with self._lock:
+            current_goal = self._current_goal
+            stair_corridor = self._stair_corridor
+            climbing = self._local_planner.is_stair_climbing()
+            soft_stair_update = (
+                (self._following_stair_path or climbing)
+                and stair_corridor is not None
+                and current_goal is not None
+                and self._global_config.stair_navigation
+                and (
+                    point_in_stair_corridor(current_goal.position, stair_corridor)
+                    or goal_requests_stair_corridor(current_goal.position, stair_corridor)
+                )
+            )
+
+        if soft_stair_update:
+            logger.info("Soft-updating stair centerline path (keeping locomotion state)")
+        else:
+            self.cancel_goal(but_will_try_again=True)
 
         with self._lock:
             current_odom = self._current_odom
@@ -327,20 +399,22 @@ class GlobalPlanner(Resource):
             logger.warning("Cannot handle goal request: missing odometry.")
             return
 
-        safe_goal = self._find_safe_goal(current_goal.position)
-
-        if not safe_goal:
-            logger.warning(
-                "No safe goal found.", x=round(current_goal.x, 3), y=round(current_goal.y, 3)
-            )
-            self.cancel_goal()
-            return
-
         path: Path | None = None
-        if self._global_config.stair_navigation and stair_corridor is not None:
+        safe_goal: Vector3 | None = None
+
+        use_stair_corridor = (
+            self._global_config.stair_navigation
+            and stair_corridor is not None
+            and (
+                goal_requests_stair_corridor(current_goal.position, stair_corridor)
+                or point_in_stair_corridor(current_goal.position, stair_corridor)
+            )
+        )
+        if use_stair_corridor:
+            corridor_goal = snap_goal_to_corridor(current_goal.position, stair_corridor)
             path = plan_in_corridor(
                 current_odom.position,
-                safe_goal,
+                corridor_goal,
                 stair_corridor,
                 step_m=0.1,
                 frame_id=current_goal.frame_id or "map",
@@ -349,6 +423,24 @@ class GlobalPlanner(Resource):
                 logger.info("Using stair corridor centerline path.")
                 with self._lock:
                     self._following_stair_path = True
+                safe_goal = corridor_goal
+            else:
+                logger.info(
+                    "Stair corridor plan unavailable; falling back to grid planner.",
+                    goal_x=round(current_goal.position.x, 2),
+                    goal_y=round(current_goal.position.y, 2),
+                )
+
+        if path is None or not path.poses:
+            safe_goal = self._find_safe_goal(current_goal.position)
+            if not safe_goal:
+                logger.warning(
+                    "No safe goal found.",
+                    x=round(current_goal.x, 3),
+                    y=round(current_goal.y, 3),
+                )
+                self.cancel_goal()
+                return
 
         if path is None or not path.poses:
             with self._lock:
@@ -368,8 +460,12 @@ class GlobalPlanner(Resource):
 
         with self._lock:
             on_stair = self._following_stair_path
+            active_corridor = stair_corridor if on_stair else None
         self._local_planner.set_following_stair(on_stair)
-        self._local_planner.start_planning(resampled_path)
+        self._local_planner.start_planning(
+            resampled_path,
+            stair_corridor=active_corridor,
+        )
 
     def _find_wide_path(self, goal: Vector3, robot_pos: Vector3) -> Path | None:
         #        sizes_to_try: list[float] = [2.2, 1.7, 1.3, 1]
@@ -387,6 +483,21 @@ class GlobalPlanner(Resource):
         return None
 
     def _find_safe_goal(self, goal: Vector3) -> Vector3 | None:
+        with self._lock:
+            stair_corridor = self._stair_corridor
+        if (
+            self._global_config.stair_navigation
+            and stair_corridor is not None
+            and point_in_stair_corridor(goal, stair_corridor)
+        ):
+            snapped = snap_goal_to_corridor(goal, stair_corridor)
+            logger.info(
+                "Stair corridor goal accepted.",
+                x=round(snapped.x, 2),
+                y=round(snapped.y, 2),
+            )
+            return snapped
+
         costmap = self._navigation_map.binary_costmap
 
         if costmap.cell_value(goal) == CostValues.UNKNOWN:

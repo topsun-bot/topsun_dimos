@@ -21,6 +21,17 @@ Run with stair navigation (enabled by default in this blueprint)::
     dimos run unitree-go2-stairs --stair-navigation
     dimos --stair-navigation run unitree-go2
     dimos --replay run unitree-go2-stairs
+
+Install once: ``uv sync --extra go2-sim`` (MuJoCo + Unitree DDS + torch for mapping).
+
+MuJoCo (default: Unitree official ``unitree_mujoco`` in ``third_party/``)::
+
+    dimos --simulation run unitree-go2-stairs
+    # --mujoco-room stairs --mujoco-start-pos 2.5, 0.0
+
+Legacy DimOS MuJoCo (lidars + head camera for perception)::
+
+    dimos --simulation --mujoco-backend dimos run unitree-go2-stairs
 """
 
 from dimos.core.coordination.blueprints import autoconnect
@@ -30,6 +41,12 @@ from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 unitree_go2_stairs = autoconnect(
     unitree_go2,
     StairNavigatorModule.blueprint(),
-).global_config(stair_navigation=True, n_workers=10)
+).global_config(
+    stair_navigation=True,
+    n_workers=10,
+    mujoco_room="stairs",
+    # Slightly closer to the first tread; idle rest is disabled when stair_navigation=True.
+    mujoco_start_pos="2.85, 0.0",
+)
 
 __all__ = ["unitree_go2_stairs"]

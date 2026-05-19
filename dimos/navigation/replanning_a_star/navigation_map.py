@@ -18,18 +18,35 @@ from dimos.core.global_config import GlobalConfig
 from dimos.mapping.occupancy.gradient import GradientStrategy
 from dimos.mapping.occupancy.path_map import make_navigation_map
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+from dimos.navigation.stairs.contracts import StairCorridor
+from dimos.navigation.stairs.geometry import clear_corridor_in_costmap
 
 
 class NavigationMap:
     _global_config: GlobalConfig
     _gradient_strategy: GradientStrategy
     _binary: OccupancyGrid | None = None
+    _stair_corridor: StairCorridor | None = None
     _lock: RLock
 
     def __init__(self, global_config: GlobalConfig, gradient_strategy: GradientStrategy) -> None:
         self._global_config = global_config
         self._gradient_strategy = gradient_strategy
         self._lock = RLock()
+
+    def set_stair_corridor(self, corridor: StairCorridor | None) -> None:
+        with self._lock:
+            self._stair_corridor = corridor
+
+    def _effective_binary(self) -> OccupancyGrid:
+        with self._lock:
+            binary = self._binary
+            corridor = self._stair_corridor
+        if binary is None:
+            raise ValueError("No current global costmap available")
+        if corridor is not None and self._global_config.stair_navigation:
+            return clear_corridor_in_costmap(binary, corridor)
+        return binary
 
     def update(self, occupancy_grid: OccupancyGrid) -> None:
         with self._lock:
@@ -41,11 +58,7 @@ class NavigationMap:
         Get the latest binary costmap received from the global costmap source.
         """
 
-        with self._lock:
-            if self._binary is None:
-                raise ValueError("No current global costmap available")
-
-            return self._binary
+        return self._effective_binary()
 
     @property
     def gradient_costmap(self) -> OccupancyGrid:
@@ -57,10 +70,7 @@ class NavigationMap:
         gradient to the binary costmap.
         """
 
-        with self._lock:
-            binary = self._binary
-            if binary is None:
-                raise ValueError("No current global costmap available")
+        binary = self._effective_binary()
 
         return make_navigation_map(
             binary,

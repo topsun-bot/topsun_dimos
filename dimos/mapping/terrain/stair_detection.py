@@ -14,7 +14,8 @@
 
 """Detect single-segment straight stairs from height maps or point clouds.
 
-v0 scope: one straight run, map-frame axis aligned or inferred via PCA on occupied cells.
+Samples multiple height profiles (not only the map center) so stairs on a large
+flat floor — e.g. MuJoCo ``scene_stairs`` — still trigger detection.
 """
 
 from __future__ import annotations
@@ -34,6 +35,9 @@ from dimos.navigation.stairs.contracts import (
 
 if TYPE_CHECKING:
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
+PeriodicSteps = tuple[list[float], list[float], float, float]
+ProfileHit = tuple[float, float, float, PeriodicSteps]
 
 
 def build_height_map_from_points(
@@ -72,19 +76,17 @@ def build_height_map_from_points(
     return effective.astype(np.float64), min_x, min_y
 
 
-def _profile_along_axis(
+def _profile_along_axis_at(
     height_map: NDArray[np.float64],
     origin_x: float,
     origin_y: float,
     resolution: float,
     axis_yaw: float,
+    center_x: float,
+    center_y: float,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Sample mean height along axis through grid center."""
+    """Sample height along ``axis_yaw`` through ``(center_x, center_y)``."""
     gy, gx = height_map.shape
-    cy, cx = gy // 2, gx // 2
-    center_x = origin_x + cx * resolution
-    center_y = origin_y + cy * resolution
-
     cos_a = math.cos(axis_yaw)
     sin_a = math.sin(axis_yaw)
     length_m = max(gx, gy) * resolution
@@ -110,7 +112,7 @@ def _find_periodic_steps(
     distances: NDArray[np.float64],
     heights: NDArray[np.float64],
     config: StairDetectionConfig,
-) -> tuple[list[float], list[float], float, float] | None:
+) -> PeriodicSteps | None:
     """Find riser jumps in 1D height profile."""
     valid = ~np.isnan(heights)
     if np.sum(valid) < config.min_steps * 2:
@@ -132,7 +134,6 @@ def _find_periodic_steps(
     if not (config.min_riser <= mean_riser <= config.max_riser):
         return None
 
-    # estimate tread from median spacing along axis between risers
     if len(riser_positions) >= 2:
         spacings = np.diff(sorted(riser_positions))
         mean_tread = float(np.median(spacings))
@@ -145,17 +146,165 @@ def _find_periodic_steps(
     return riser_heights, riser_positions, mean_riser, mean_tread
 
 
-def _infer_axis_yaw(height_map: NDArray[np.float64]) -> float:
+def _grid_center_world(
+    height_map: NDArray[np.float64],
+    origin_x: float,
+    origin_y: float,
+    resolution: float,
+) -> tuple[float, float]:
+    gy, gx = height_map.shape
+    return origin_x + (gx / 2.0) * resolution, origin_y + (gy / 2.0) * resolution
+
+
+def _occupied_centroid_world(
+    height_map: NDArray[np.float64],
+    origin_x: float,
+    origin_y: float,
+    resolution: float,
+) -> tuple[float, float] | None:
     occupied = np.argwhere(~np.isnan(height_map))
     if len(occupied) < 10:
+        return None
+    cy_mean = float(np.mean(occupied[:, 0]))
+    cx_mean = float(np.mean(occupied[:, 1]))
+    return origin_x + cx_mean * resolution, origin_y + cy_mean * resolution
+
+
+def _step_gradient_centroid_world(
+    height_map: NDArray[np.float64],
+    origin_x: float,
+    origin_y: float,
+    resolution: float,
+    min_step_m: float,
+) -> tuple[float, float] | None:
+    """Centroid of cells with a neighbor height jump typical of a stair riser."""
+    gy, gx = height_map.shape
+    threshold = min_step_m * 0.55
+    iys: list[float] = []
+    ixs: list[float] = []
+    weights: list[float] = []
+
+    for iy in range(1, gy - 1):
+        for ix in range(1, gx - 1):
+            center = height_map[iy, ix]
+            if np.isnan(center):
+                continue
+            max_jump = 0.0
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                neighbor = height_map[iy + dy, ix + dx]
+                if np.isnan(neighbor):
+                    continue
+                max_jump = max(max_jump, abs(center - neighbor))
+            if max_jump >= threshold:
+                iys.append(float(iy))
+                ixs.append(float(ix))
+                weights.append(max_jump)
+
+    if len(weights) < 5:
+        return None
+
+    cy = float(np.average(iys, weights=weights))
+    cx = float(np.average(ixs, weights=weights))
+    return origin_x + cx * resolution, origin_y + cy * resolution
+
+
+def _infer_axis_yaw(height_map: NDArray[np.float64], *, step_biased: bool = True) -> float:
+    """PCA on occupied cells; optionally weight cells near stair-like height jumps."""
+    gy, gx = height_map.shape
+    coords_list: list[tuple[float, float, float]] = []
+
+    for iy in range(gy):
+        for ix in range(gx):
+            if np.isnan(height_map[iy, ix]):
+                continue
+            weight = 1.0
+            if step_biased and 0 < iy < gy - 1 and 0 < ix < gx - 1:
+                center = height_map[iy, ix]
+                max_jump = 0.0
+                for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    neighbor = height_map[iy + dy, ix + dx]
+                    if not np.isnan(neighbor):
+                        max_jump = max(max_jump, abs(center - neighbor))
+                if max_jump >= 0.08:
+                    weight = 1.0 + max_jump * 8.0
+            coords_list.append((float(iy), float(ix), weight))
+
+    if len(coords_list) < 10:
         return 0.0
-    coords = occupied.astype(np.float64)
-    coords -= coords.mean(axis=0)
-    cov = coords.T @ coords / len(coords)
+
+    coords = np.array([(c[0], c[1]) for c in coords_list], dtype=np.float64)
+    weights = np.array([c[2] for c in coords_list], dtype=np.float64)
+    centroid = np.average(coords, axis=0, weights=weights)
+    centered = coords - centroid
+    cov = (centered * weights[:, None]).T @ centered / max(np.sum(weights), 1e-9)
     eigvals, eigvecs = np.linalg.eigh(cov)
     principal = eigvecs[:, int(np.argmax(eigvals))]
-    # grid index y,x -> map x,y
     return math.atan2(principal[0], principal[1])
+
+
+def _search_best_profile(
+    height_map: NDArray[np.float64],
+    origin_x: float,
+    origin_y: float,
+    config: StairDetectionConfig,
+) -> ProfileHit | None:
+    """Try multiple axes and profile anchors; return the strongest periodic-stair match."""
+    resolution = config.resolution
+    primary_yaw = _infer_axis_yaw(height_map, step_biased=True)
+    axis_candidates = [primary_yaw, primary_yaw + math.pi / 2.0]
+
+    anchor_candidates: list[tuple[float, float]] = []
+    grid_center = _grid_center_world(height_map, origin_x, origin_y, resolution)
+    anchor_candidates.append(grid_center)
+
+    occupied = _occupied_centroid_world(height_map, origin_x, origin_y, resolution)
+    if occupied is not None:
+        anchor_candidates.append(occupied)
+
+    step_center = _step_gradient_centroid_world(
+        height_map, origin_x, origin_y, resolution, config.min_riser
+    )
+    if step_center is not None:
+        anchor_candidates.append(step_center)
+
+    # Deduplicate anchors (~10 cm)
+    unique_anchors: list[tuple[float, float]] = []
+    for ax, ay in anchor_candidates:
+        if all(math.hypot(ax - ux, ay - uy) > 0.1 for ux, uy in unique_anchors):
+            unique_anchors.append((ax, ay))
+
+    perp_offsets_m = np.linspace(-2.5, 2.5, 11)
+    best: ProfileHit | None = None
+    best_riser_count = 0
+
+    for axis_yaw in axis_candidates:
+        cos_a = math.cos(axis_yaw)
+        sin_a = math.sin(axis_yaw)
+        perp = (-sin_a, cos_a)
+
+        for center_x, center_y in unique_anchors:
+            for off in perp_offsets_m:
+                wx = center_x + off * perp[0]
+                wy = center_y + off * perp[1]
+                distances, heights = _profile_along_axis_at(
+                    height_map,
+                    origin_x,
+                    origin_y,
+                    resolution,
+                    axis_yaw,
+                    wx,
+                    wy,
+                )
+                periodic = _find_periodic_steps(distances, heights, config)
+                if periodic is None:
+                    continue
+                _risers, riser_positions, _mean_riser, _mean_tread = periodic
+                count = len(riser_positions)
+                if count > best_riser_count:
+                    best_riser_count = count
+                    best = (axis_yaw, wx, wy, periodic)
+
+    return best
 
 
 def detect_stairs_from_height_map(
@@ -169,22 +318,14 @@ def detect_stairs_from_height_map(
     if height_map.size == 0 or np.all(np.isnan(height_map)):
         return []
 
-    axis_yaw = _infer_axis_yaw(height_map)
-    distances, heights = _profile_along_axis(
-        height_map, origin_x, origin_y, cfg.resolution, axis_yaw
-    )
-    periodic = _find_periodic_steps(distances, heights, cfg)
-    if periodic is None:
+    hit = _search_best_profile(height_map, origin_x, origin_y, cfg)
+    if hit is None:
         return []
 
+    axis_yaw, anchor_x, anchor_y, periodic = hit
     _risers, riser_positions, mean_riser, mean_tread = periodic
     cos_a = math.cos(axis_yaw)
     sin_a = math.sin(axis_yaw)
-
-    gy, gx = height_map.shape
-    cy, cx = gy // 2, gx // 2
-    center_x = origin_x + cx * cfg.resolution
-    center_y = origin_y + cy * cfg.resolution
 
     d_min = min(riser_positions) - mean_tread
     d_max = max(riser_positions) + mean_tread
@@ -194,14 +335,26 @@ def detect_stairs_from_height_map(
     for i in range(n_pts + 1):
         t = i / n_pts
         d = d_min + t * (d_max - d_min)
-        centerline.append((center_x + d * cos_a, center_y + d * sin_a))
+        centerline.append((anchor_x + d * cos_a, anchor_y + d * sin_a))
 
     half_w = 0.5
     polygon = [
-        (center_x + d_min * cos_a - half_w * sin_a, center_y + d_min * sin_a + half_w * cos_a),
-        (center_x + d_max * cos_a - half_w * sin_a, center_y + d_max * sin_a + half_w * cos_a),
-        (center_x + d_max * cos_a + half_w * sin_a, center_y + d_max * sin_a - half_w * cos_a),
-        (center_x + d_min * cos_a + half_w * sin_a, center_y + d_min * sin_a - half_w * cos_a),
+        (
+            anchor_x + d_min * cos_a - half_w * sin_a,
+            anchor_y + d_min * sin_a + half_w * cos_a,
+        ),
+        (
+            anchor_x + d_max * cos_a - half_w * sin_a,
+            anchor_y + d_max * sin_a + half_w * cos_a,
+        ),
+        (
+            anchor_x + d_max * cos_a + half_w * sin_a,
+            anchor_y + d_max * sin_a - half_w * cos_a,
+        ),
+        (
+            anchor_x + d_min * cos_a + half_w * sin_a,
+            anchor_y + d_min * sin_a - half_w * cos_a,
+        ),
     ]
 
     confidence = min(1.0, len(riser_positions) / (cfg.min_steps + 1))

@@ -17,6 +17,7 @@ import math
 import pytest
 
 from dimos.mapping.terrain.fixtures.synthetic import (
+    mujoco_scene_stairs_height_map,
     negative_flat_height_map,
     negative_ramp_height_map,
     straight_stair_5_steps_15cm,
@@ -61,6 +62,19 @@ def test_negative_ramp_no_stairs() -> None:
         StairDetectionConfig(resolution=synth.resolution),
     )
     assert len(candidates) == 0
+
+
+def test_detect_mujoco_like_sparse_floor_stairs_15cm() -> None:
+    """Regression: stairs on a large flat floor (scene_stairs) must still be detected."""
+    synth = mujoco_scene_stairs_height_map()
+    candidates = detect_stairs_from_height_map(
+        synth.height_map,
+        synth.origin_x,
+        synth.origin_y,
+        StairDetectionConfig(resolution=synth.resolution),
+    )
+    assert len(candidates) == 1
+    assert candidates[0].mean_riser == pytest.approx(0.15, abs=0.03)
 
 
 def test_negative_flat_no_stairs() -> None:

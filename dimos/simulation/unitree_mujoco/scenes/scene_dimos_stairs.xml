@@ -1,0 +1,35 @@
+<mujoco model="go2 dimos stairs">
+  <include file="../../../../../third_party/unitree_mujoco/unitree_robots/go2/go2.xml"/>
+
+  <statistic center="3.5 0 0.5" extent="4.0"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="mat_stair" rgba="0.55 0.45 0.35 1.0"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1" directional="true"/>
+    <geom name="floor" type="plane" size="0 0 0.05" material="groundplane"/>
+    <!-- 10 treads, 15 cm riser, 28 cm tread (+x), matches dimos build_scene_stairs -->
+    <geom name="stair_step_0" type="box" pos="3.1400 0.0000 0.0750" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_1" type="box" pos="3.4200 0.0000 0.2250" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_2" type="box" pos="3.7000 0.0000 0.3750" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_3" type="box" pos="3.9800 0.0000 0.5250" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_4" type="box" pos="4.2600 0.0000 0.6750" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_5" type="box" pos="4.5400 0.0000 0.8250" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_6" type="box" pos="4.8200 0.0000 0.9750" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_7" type="box" pos="5.1000 0.0000 1.1250" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_8" type="box" pos="5.3800 0.0000 1.2750" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+    <geom name="stair_step_9" type="box" pos="5.6600 0.0000 1.4250" size="0.1400 0.6000 0.0750" material="mat_stair"/>
+  </worldbody>
+</mujoco>

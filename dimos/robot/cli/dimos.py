@@ -243,7 +243,7 @@ def run(
 
     setup_exception_handler()
 
-    cli_config_overrides: dict[str, Any] = ctx.obj
+    cli_config_overrides: dict[str, Any] = ctx.obj or {}
 
     # Apply CLI overrides to global_config before importing blueprint modules
     global_config.update(**cli_config_overrides)
@@ -605,7 +605,7 @@ def restart(
 def show_config(ctx: typer.Context) -> None:
     """Show current config settings and their values."""
 
-    cli_config_overrides: dict[str, Any] = ctx.obj
+    cli_config_overrides: dict[str, Any] = ctx.obj or {}
     global_config.update(**cli_config_overrides)
 
     for field_name, value in global_config.model_dump().items():

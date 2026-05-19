@@ -151,6 +151,11 @@ def load_scene_xml(config: GlobalConfig) -> str:
         return generate_mujoco_scene(OccupancyGrid.from_path(path))
 
     mujoco_room = config.mujoco_room or "office1"
+    if mujoco_room == "stairs":
+        from dimos.simulation.mujoco.build_scene_stairs import build_scene_stairs_xml
+
+        build_scene_stairs_xml(force=True)
+
     xml_file = (_get_data_dir() / f"scene_{mujoco_room}.xml").as_posix()
     with open(xml_file) as f:
         return f.read()

@@ -22,6 +22,7 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.stairs.contracts import StairCorridor
+from dimos.navigation.stairs.geometry import project_point_to_centerline
 
 
 def _project_on_polyline(
@@ -30,34 +31,19 @@ def _project_on_polyline(
     centerline: list[tuple[float, float]],
 ) -> tuple[float, int]:
     """Return (distance_along_polyline, segment_index)."""
+    _, _, along = project_point_to_centerline(x, y, centerline)
     if len(centerline) < 2:
-        return 0.0, 0
+        return along, 0
 
-    best_d = 0.0
-    best_idx = 0
     accumulated = 0.0
-
     for i in range(len(centerline) - 1):
         ax, ay = centerline[i]
         bx, by = centerline[i + 1]
         seg_len = math.hypot(bx - ax, by - ay)
-        if seg_len < 1e-9:
-            continue
-        t = max(
-            0.0,
-            min(1.0, ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / (seg_len * seg_len)),
-        )
-        px = ax + t * (bx - ax)
-        py = ay + t * (by - ay)
-        dist_to_pt = math.hypot(x - px, y - py)
-        if i == 0 or dist_to_pt < 1e6:
-            along = accumulated + t * seg_len
-            if i == 0 or along >= 0:
-                best_d = along
-                best_idx = i
+        if accumulated + seg_len >= along - 1e-9:
+            return along, i
         accumulated += seg_len
-
-    return best_d, best_idx
+    return along, max(0, len(centerline) - 2)
 
 
 def _point_at_distance(

@@ -12,14 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
-from dimos.robot.unitree.go2.stair_locomotion.locomotion_policy import StairLocomotionPolicy
-from dimos.robot.unitree.go2.stair_locomotion.sport_api import Go2StairSportController
-from dimos.robot.unitree.go2.stair_locomotion.twist_limiter import apply_stair_twist_limit
+"""Deprecated alias — use ``dimos.robot.unitree.go2.stair_locomotion``."""
 
-__all__ = [
-    "Go2StairSportController",
-    "StairLocomotionConfig",
-    "StairLocomotionPolicy",
-    "apply_stair_twist_limit",
-]
+from dimos.robot.unitree.go2.stair_locomotion import *  # noqa: F403

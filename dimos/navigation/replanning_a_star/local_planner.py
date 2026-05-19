@@ -32,6 +32,11 @@ from dimos.navigation.replanning_a_star.controllers import Controller, PControll
 from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
 from dimos.navigation.replanning_a_star.path_clearance import PathClearance
 from dimos.navigation.replanning_a_star.path_distancer import PathDistancer
+from dimos.navigation.stairs.contracts import StairCorridor, StairPhase
+from dimos.robot.unitree.go2.stair_locomotion.locomotion_policy import (
+    Go2SportConnection,
+    StairLocomotionPolicy,
+)
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.trigonometry import angle_diff
 
@@ -63,6 +68,8 @@ class LocalPlanner(Resource):
     _navigation_map: NavigationMap
     _goal_tolerance: float
     _controller: Controller
+    _stair_policy: StairLocomotionPolicy | None = None
+    _use_stair_locomotion: bool = False
 
     _speed: float = 0.55
     _control_frequency: float = 10
@@ -109,7 +116,64 @@ class LocalPlanner(Resource):
     def set_following_stair(self, on_stair: bool) -> None:
         self._controller.set_on_stair(on_stair)
 
-    def start_planning(self, path: Path) -> None:
+    def set_sport_connection(self, connection: Go2SportConnection | None) -> None:
+        if connection is None:
+            self._stair_policy = None
+        else:
+            self._stair_policy = StairLocomotionPolicy(
+                connection,
+                global_config=self._global_config,
+            )
+
+    def is_stair_climbing(self) -> bool:
+        with self._lock:
+            policy = self._stair_policy
+            if policy is None or not self._use_stair_locomotion:
+                return False
+            return policy.phase in (
+                StairPhase.APPROACH,
+                StairPhase.ALIGN,
+                StairPhase.ON_STAIR,
+            )
+
+    def start_planning(
+        self,
+        path: Path,
+        *,
+        stair_corridor: StairCorridor | None = None,
+    ) -> None:
+        use_stair = (
+            stair_corridor is not None
+            and self._stair_policy is not None
+            and self._global_config.stair_navigation
+        )
+
+        with self._lock:
+            climbing = self.is_stair_climbing()
+            continuing_stair = (
+                use_stair
+                and self._stair_policy is not None
+                and (
+                    climbing
+                    or (
+                        self._use_stair_locomotion
+                        and self._thread is not None
+                        and not self._stop_planning_event.is_set()
+                    )
+                )
+            )
+
+        if continuing_stair:
+            assert self._stair_policy is not None
+            assert stair_corridor is not None
+            with self._lock:
+                self._path = path
+                self._path_clearance = PathClearance(self._global_config, self._path)
+                self._path_distancer = PathDistancer(self._path)
+            self._stair_policy.update_path(path)
+            logger.info("Stair path updated without resetting climb state")
+            return
+
         self.stop_planning()
 
         self._stop_planning_event = Event()
@@ -119,6 +183,12 @@ class LocalPlanner(Resource):
             self._path_clearance = PathClearance(self._global_config, self._path)
             self._path_distancer = PathDistancer(self._path)
             self._pose_index = 0
+            self._use_stair_locomotion = use_stair
+            if self._use_stair_locomotion:
+                assert self._stair_policy is not None
+                assert stair_corridor is not None
+                self._stair_policy.start(stair_corridor, path)
+                self._change_state("path_following")
             self._thread = Thread(target=self._thread_entrypoint, daemon=True)
             self._thread.start()
 
@@ -128,6 +198,9 @@ class LocalPlanner(Resource):
 
         with self._lock:
             self._thread = None
+            if self._stair_policy is not None:
+                self._stair_policy.reset()
+            self._use_stair_locomotion = False
 
         self._reset_state()
 
@@ -170,9 +243,15 @@ class LocalPlanner(Resource):
             path = self._path
             path_clearance = self._path_clearance
             current_odom = self._current_odom
+            use_stair = self._use_stair_locomotion
+            stair_policy = self._stair_policy
 
         if path is None or path_clearance is None:
             raise RuntimeError("No path set for local planner.")
+
+        if use_stair and stair_policy is not None:
+            self._stair_locomotion_loop(stop_event, path, path_clearance, stair_policy)
+            return
 
         # Determine initial state: skip initial_rotation if already aligned.
         new_state: PlannerState = "initial_rotation"
@@ -233,6 +312,38 @@ class LocalPlanner(Resource):
         if stop_event.is_set():
             logger.info("Local planner loop exited due to stop event.")
 
+    def _stair_locomotion_loop(
+        self,
+        stop_event: Event,
+        path: Path,
+        path_clearance: PathClearance,
+        stair_policy: StairLocomotionPolicy,
+    ) -> None:
+        """Follow a stair centerline using sport gait settings and limited cmd_vel."""
+        while not stop_event.is_set():
+            start_time = time.perf_counter()
+
+            self._send_navigation_costmap(path, path_clearance)
+
+            with self._lock:
+                current_odom = self._current_odom
+
+            if current_odom is None:
+                stop_event.wait(1.0 / self._control_frequency)
+                continue
+
+            cmd_vel = stair_policy.step(current_odom)
+            self.cmd_vel.on_next(cmd_vel)
+
+            if stair_policy.finished:
+                logger.info("Stair traversal complete.")
+                self.stopped_navigating.on_next("arrived")
+                break
+
+            elapsed = time.perf_counter() - start_time
+            sleep_time = max(0.0, (1.0 / self._control_frequency) - elapsed)
+            stop_event.wait(sleep_time)
+
     def _compute_initial_rotation(self) -> Twist:
         with self._lock:
             path = self._path
@@ -257,8 +368,9 @@ class LocalPlanner(Resource):
         with self._lock:
             path_distancer = self._path_distancer
             current_odom = self._current_odom
+            use_stair = self._use_stair_locomotion
 
-        if path_distancer is None or current_odom is None:
+        if use_stair or path_distancer is None or current_odom is None:
             return None
 
         current_pos = np.array([current_odom.position.x, current_odom.position.y])

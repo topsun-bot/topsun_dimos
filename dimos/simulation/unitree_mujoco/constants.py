@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
-from dimos.robot.unitree.go2.stair_locomotion.locomotion_policy import StairLocomotionPolicy
-from dimos.robot.unitree.go2.stair_locomotion.sport_api import Go2StairSportController
-from dimos.robot.unitree.go2.stair_locomotion.twist_limiter import apply_stair_twist_limit
+from pathlib import Path
 
-__all__ = [
-    "Go2StairSportController",
-    "StairLocomotionConfig",
-    "StairLocomotionPolicy",
-    "apply_stair_twist_limit",
-]
+# CycloneDDS domain / interface — must match ``simulate_python/config.py``.
+UNITREE_DDS_DOMAIN_ID = 1
+UNITREE_DDS_INTERFACE = "lo"
+
+LAUNCHER_PATH = Path(__file__).parent / "launcher.py"

@@ -18,6 +18,8 @@ from multiprocessing.shared_memory import SharedMemory
 import pickle
 from typing import Any
 
+from dimos.simulation.mujoco.sport_state import SPORT_SEQ_INDEX, SPORT_SHM_FLOATS
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -35,6 +37,7 @@ _depth_size = VIDEO_WIDTH * VIDEO_HEIGHT * 4  # float32 = 4 bytes
 _odom_size = 8 * 8  # 8 float64 values
 # Command buffer: linear(3) + angular(3) = 6 floats
 _cmd_size = 6 * 4  # 6 float32 values
+_sport_size = SPORT_SHM_FLOATS * 4
 # Lidar message buffer: for serialized lidar data
 _lidar_size = 1024 * 1024 * 4  # 4MB should be enough for point cloud
 # Sequence/version numbers for detecting updates
@@ -49,6 +52,7 @@ _shm_sizes = {
     "depth_right": _depth_size,
     "odom": _odom_size,
     "cmd": _cmd_size,
+    "sport": _sport_size,
     "lidar": _lidar_size,
     "lidar_len": 4,
     "seq": _seq_size,
@@ -72,6 +76,7 @@ class ShmSet:
     depth_right: SharedMemory
     odom: SharedMemory
     cmd: SharedMemory
+    sport: SharedMemory
     lidar: SharedMemory
     lidar_len: SharedMemory
     seq: SharedMemory
@@ -95,10 +100,12 @@ class ShmSet:
 class ShmReader:
     shm: ShmSet
     _last_cmd_seq: int
+    _last_sport_seq: int
 
     def __init__(self, shm_names: dict[str, str]) -> None:
         self.shm = ShmSet.from_names(shm_names)
         self._last_cmd_seq = 0
+        self._last_sport_seq = 0
 
     def signal_ready(self) -> None:
         control_array: NDArray[Any] = np.ndarray((2,), dtype=np.int32, buffer=self.shm.control.buf)
@@ -177,6 +184,14 @@ class ShmReader:
             return linear, angular
         return None
 
+    def read_sport_gains(self) -> "SportSimGains":
+        from dimos.simulation.mujoco.sport_state import sport_array_to_gains
+
+        sport_view: NDArray[Any] = np.ndarray(
+            (SPORT_SHM_FLOATS,), dtype=np.float32, buffer=self.shm.sport.buf
+        )
+        return sport_array_to_gains(sport_view)
+
     def _increment_seq(self, index: int) -> None:
         seq_array: NDArray[Any] = np.ndarray((8,), dtype=np.int64, buffer=self.shm.seq.buf)
         seq_array[index] += 1
@@ -204,6 +219,13 @@ class ShmWriter:
 
         cmd_array: NDArray[Any] = np.ndarray((6,), dtype=np.float32, buffer=self.shm.cmd.buf)
         cmd_array[:] = 0
+
+        from dimos.simulation.mujoco.sport_state import default_sport_buffer
+
+        sport_array: NDArray[Any] = np.ndarray(
+            (SPORT_SHM_FLOATS,), dtype=np.float32, buffer=self.shm.sport.buf
+        )
+        sport_array[:] = default_sport_buffer()
 
         control_array: NDArray[Any] = np.ndarray((2,), dtype=np.int32, buffer=self.shm.control.buf)
         control_array[:] = 0  # [ready_flag, stop_flag]
@@ -240,6 +262,26 @@ class ShmWriter:
         cmd_array[0:3] = linear
         cmd_array[3:6] = angular
         self._increment_seq(3)
+
+    def write_sport_payload(self, payload: dict[str, Any]) -> bool:
+        from dimos.simulation.mujoco.sport_state import apply_sport_api_payload
+
+        sport_array: NDArray[Any] = np.ndarray(
+            (SPORT_SHM_FLOATS,), dtype=np.float32, buffer=self.shm.sport.buf
+        )
+        if apply_sport_api_payload(sport_array, payload):
+            self._increment_seq(SPORT_SEQ_INDEX)
+            return True
+        return False
+
+    def clear_sport_state(self) -> None:
+        from dimos.simulation.mujoco.sport_state import clear_sport_buffer
+
+        sport_array: NDArray[Any] = np.ndarray(
+            (SPORT_SHM_FLOATS,), dtype=np.float32, buffer=self.shm.sport.buf
+        )
+        clear_sport_buffer(sport_array)
+        self._increment_seq(SPORT_SEQ_INDEX)
 
     def read_lidar(self) -> tuple[PointCloud2 | None, int]:
         seq = self._get_seq(4)

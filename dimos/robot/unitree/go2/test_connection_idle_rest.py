@@ -21,6 +21,7 @@ from typing import Any
 
 from unitree_webrtc_connect.constants import RTC_TOPIC
 
+from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.robot.unitree.go2.connection import (
     GO2_RISE_SIT_API_ID,
@@ -61,6 +62,7 @@ def make_connection_under_test() -> GO2Connection:
         idle_rest_after_startup_s=0.05,
         idle_rest_poll_s=0.005,
         idle_rest_resume_s=0.001,
+        g=GlobalConfig.model_construct(simulation=False, stair_navigation=False),
     )
     connection.connection = FakeGo2Connection()
     connection._last_action_at = time.monotonic()
@@ -110,7 +112,8 @@ def test_mark_action_resets_idle_rest_timer() -> None:
         connection._stop_idle_rest_monitor()
 
 
-def test_zero_cmd_vel_counts_as_human_teleop() -> None:
+def test_zero_cmd_vel_does_not_postpone_idle_sit() -> None:
+    """Zero twists are not activity; idle Sit should still fire after the timeout."""
     connection = make_connection_under_test()
     fake = connection.connection
     assert isinstance(fake, FakeGo2Connection)
@@ -119,9 +122,24 @@ def test_zero_cmd_vel_counts_as_human_teleop() -> None:
     try:
         time.sleep(0.03)
         assert connection.move(Twist.zero())
-        time.sleep(0.03)
-        assert (RTC_TOPIC["SPORT_MOD"], {"api_id": GO2_SIT_API_ID}) not in fake.requests
         assert wait_for_request(fake, GO2_SIT_API_ID)
+    finally:
+        connection._stop_idle_rest_monitor()
+
+
+def test_stair_navigation_disables_idle_rest_monitor() -> None:
+    connection = make_connection_under_test()
+    connection.config.g.update(stair_navigation=True)
+    fake = connection.connection
+    assert isinstance(fake, FakeGo2Connection)
+
+    connection._start_idle_rest_monitor()
+    try:
+        time.sleep(0.15)
+        assert not any(
+            topic == RTC_TOPIC["SPORT_MOD"] and data.get("api_id") == GO2_SIT_API_ID
+            for topic, data in fake.requests
+        )
     finally:
         connection._stop_idle_rest_monitor()
 

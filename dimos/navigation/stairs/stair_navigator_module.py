@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
@@ -23,6 +25,7 @@ from dimos.mapping.terrain.stair_detection import (
 )
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.stairs.contracts import StairCorridor, StairDetectionConfig
+from dimos.navigation.stairs.geometry import extend_centerline_approach
 from dimos.navigation.stairs.navigation_stair_spec import NavigationStairSpec
 from dimos.utils.logging_config import setup_logger
 
@@ -70,6 +73,12 @@ class StairNavigatorModule(Module):
             if self._active_corridor is not None:
                 logger.info("Stair lost — clearing corridor")
                 self._clear_corridor()
+            else:
+                points, _ = cloud.as_numpy()
+                logger.debug(
+                    "Stair detection: no candidate",
+                    point_count=len(points),
+                )
             return
 
         corridors = candidates_to_corridors(
@@ -78,6 +87,10 @@ class StairNavigatorModule(Module):
             ascending=True,
         )
         corridor = corridors[0]
+        corridor = replace(
+            corridor,
+            centerline=extend_centerline_approach(corridor.centerline, margin_m=2.5),
+        )
         if self._active_corridor is None or self._corridor_changed(corridor):
             self._active_corridor = corridor
             self._navigator.set_stair_corridor(corridor)

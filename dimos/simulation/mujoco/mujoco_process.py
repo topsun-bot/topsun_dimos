@@ -54,6 +54,9 @@ class MockController:
         self.shm = shm_interface
         self._command = np.zeros(3, dtype=np.float32)
 
+    def get_sport_gains(self) -> Any:
+        return self.shm.read_sport_gains()
+
     def get_command(self) -> NDArray[Any]:
         """Get the current movement command."""
         cmd_data = self.shm.read_command()

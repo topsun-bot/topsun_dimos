@@ -87,6 +87,7 @@ class Go2ConnectionProtocol(Protocol):
     def standup(self) -> bool: ...
     def liedown(self) -> bool: ...
     def balance_stand(self) -> bool: ...
+    def free_walk(self) -> bool: ...
     def set_obstacle_avoidance(self, enabled: bool = True) -> None: ...
     def enable_rage_mode(self) -> bool: ...
     def publish_request(self, topic: str, data: dict) -> dict: ...  # type: ignore[type-arg]
@@ -131,6 +132,19 @@ def make_connection(ip: str | None, cfg: GlobalConfig) -> Go2ConnectionProtocol:
     if ip in ("fake", "mock", "replay") or connection_type == "replay":
         dataset = cfg.replay_db
         return ReplayConnection(dataset=dataset)
+    elif connection_type == "unitree_mujoco":
+        from dimos.robot.unitree.unitree_mujoco_connection import UnitreeMujocoConnection
+        from dimos.simulation.unitree_mujoco.paths import unitree_mujoco_root
+
+        if not unitree_mujoco_root().is_dir():
+            logger.warning(
+                "third_party/unitree_mujoco missing — falling back to DimOS MuJoCo. "
+                "Clone unitree_mujoco into third_party/ or set --mujoco-backend dimos."
+            )
+            from dimos.robot.unitree.mujoco_connection import MujocoConnection
+
+            return MujocoConnection(cfg)
+        return UnitreeMujocoConnection(cfg)
     elif ip == "mujoco" or connection_type == "mujoco":
         from dimos.robot.unitree.mujoco_connection import MujocoConnection
 
@@ -167,6 +181,9 @@ class ReplayConnection(UnitreeWebRTCConnection):
         return True
 
     def balance_stand(self) -> bool:
+        return True
+
+    def free_walk(self) -> bool:
         return True
 
     def set_obstacle_avoidance(self, enabled: bool = True) -> None:
@@ -390,7 +407,7 @@ class GO2Connection(Module, Camera, Pointcloud):
             self._idle_rest_agent_idle_transport = None
 
     def _start_idle_rest_monitor(self) -> None:
-        if not self.config.idle_rest_enabled:
+        if not self.config.idle_rest_enabled or self.config.g.stair_navigation:
             return
         if self._idle_rest_thread and self._idle_rest_thread.is_alive():
             return
@@ -456,6 +473,10 @@ class GO2Connection(Module, Camera, Pointcloud):
                 return
             self._idle_resting = False
 
+        if self.config.g.simulation:
+            logger.info("Cleared idle rest (simulation — no RiseSit delay)")
+            return
+
         logger.info("Resuming Go2 from idle rest before movement")
         try:
             self._send_idle_rest_sport_command(GO2_RISE_SIT_API_ID)
@@ -469,11 +490,9 @@ class GO2Connection(Module, Camera, Pointcloud):
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         """Send movement command to robot."""
-        self._touch_idle_activity_timer()
         self._resume_from_idle_rest_if_needed(twist, duration)
         if self._is_motion_command(twist, duration):
-            with self._idle_rest_lock:
-                self._idle_resting = False
+            self._mark_action()
         return self.connection.move(twist, duration)
 
     @rpc
@@ -493,6 +512,18 @@ class GO2Connection(Module, Camera, Pointcloud):
         """Enter BalanceStand: neutral state for switching locomotion modes"""
         self._mark_action()
         return self.connection.balance_stand()
+
+    @rpc
+    def free_walk(self) -> bool:
+        """Activate FreeWalk locomotion — required before stair Sport API + cmd_vel."""
+        self._mark_action()
+        return self.connection.free_walk()
+
+    @rpc
+    def set_obstacle_avoidance(self, enabled: bool = True) -> None:
+        """Enable or disable onboard obstacle avoidance (WebRTC sport)."""
+        self._mark_action()
+        self.connection.set_obstacle_avoidance(enabled)
 
     @rpc
     def enable_rage_mode(self) -> bool:
