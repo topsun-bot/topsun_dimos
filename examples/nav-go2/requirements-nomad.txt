@@ -1,0 +1,18 @@
+# NoMaD inference deps for DimOS .venv (Python 3.12).
+# visualnav train/ and diffusion_policy repo are installed separately (see DEPENDENCIES.md).
+#
+#   uv pip install -r examples/nav-go2/requirements-nomad.txt
+#   uv pip install -e "$VISUALNAV_ROOT/train/"
+
+diffusers>=0.27,<0.32
+wandb
+prettytable
+tqdm
+opencv-python
+h5py
+efficientnet-pytorch
+vit-pytorch
+positional-encodings
+lmdb
+matplotlib
+pyyaml
