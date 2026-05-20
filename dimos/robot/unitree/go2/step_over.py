@@ -97,11 +97,15 @@ def _extract_roi_height_map(
 
 
 def _estimate_ground_z(height_map: np.ndarray) -> float:
-    """Estimate local ground height as the 10th percentile of valid cell max-z."""
+    """Estimate local ground height as the 2nd percentile of valid cell max-z.
+
+    Uses a very low percentile so that obstacle-top points do not
+    contaminate the ground reference when ROI is dominated by obstacles.
+    """
     valid = height_map[height_map > -np.inf]
     if len(valid) == 0:
         return 0.0
-    return float(np.percentile(valid, 10))
+    return float(np.percentile(valid, 2))
 
 
 def _morphological_open(height_map: np.ndarray, iterations: int = 1) -> np.ndarray:
