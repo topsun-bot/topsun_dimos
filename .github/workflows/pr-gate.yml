@@ -42,10 +42,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install fast-path test deps
+      - name: Install deps
         run: |
           pip install --upgrade pip
-          pip install pytest pytest-asyncio pytest-timeout
+          pip install numpy scipy pytest pytest-asyncio pytest-timeout
 
       - name: Syntax check
         run: |

@@ -277,6 +277,7 @@ class StepOverModule(Module):
         forward = dx * cos_yaw + dy * sin_yaw
         in_analyze_range = (forward >= 0.0) & (forward <= cfg.analyze_distance_m)
         if not np.any(in_analyze_range):
+            self._reset_debounce()
             return
 
         roi_half_width = (self.config.g.robot_width / 2) + cfg.roi_width_margin_m
@@ -284,6 +285,7 @@ class StepOverModule(Module):
             xyz, robot_pose, cfg.roi_start_m, cfg.roi_end_m, roi_half_width
         )
         if height_map is None:
+            self._reset_debounce()
             return
 
         height_map = _morphological_open(height_map, cfg.morph_open_iterations)
@@ -341,6 +343,12 @@ class StepOverModule(Module):
         if not passable and self._blocked_count >= cfg.stable_frames_required:
             if obstacle_in_execute:
                 self._handle_blocked()
+
+    def _reset_debounce(self) -> None:
+        """Reset temporal filters so counts don't accumulate across skipped frames."""
+        self._stable_count = 0
+        self._blocked_count = 0
+        self._last_passable = True
 
     def _handle_blocked(self) -> None:
         """Cancel navigation every call; speak only throttled."""
