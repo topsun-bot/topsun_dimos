@@ -124,7 +124,7 @@ def make_connection(ip: str | None, cfg: GlobalConfig) -> Go2ConnectionProtocol:
         from dimos.robot.unitree.mujoco_connection import MujocoConnection
 
         return MujocoConnection(cfg)
-    elif connection_type == "dimsim":
+    elif ip == "dimsim" or connection_type == "dimsim":
         from dimos.robot.unitree.dimsim_connection import DimSimConnection
 
         return DimSimConnection(cfg)

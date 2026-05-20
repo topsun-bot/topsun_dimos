@@ -51,33 +51,53 @@ class DimSimConnection:
     def __init__(self, global_config: GlobalConfig) -> None:
         self._dimsim_process: DimSimProcess = DimSimProcess(global_config)
         self._odom_transport: LCMTransport[PoseStamped] = LCMTransport("/odom", PoseStamped)
+        self._lidar_transport: LCMTransport[PointCloud2] = LCMTransport("/lidar", PointCloud2)
+        self._video_transport: LCMTransport[Image] = LCMTransport("/color_image", Image)
         self._unsubscribe_odom: Callable[[], None] | None = None
+        self._unsubscribe_lidar: Callable[[], None] | None = None
+        self._unsubscribe_video: Callable[[], None] | None = None
+        self._lidar_subject: Subject[PointCloud2] = Subject()
+        self._odom_subject: Subject[PoseStamped] = Subject()
+        self._video_subject: Subject[Image] = Subject()
         self._tf = LCMTF()
 
     def start(self) -> None:
         self._dimsim_process.start()
         self._odom_transport.start()
+        self._lidar_transport.start()
+        self._video_transport.start()
         self._unsubscribe_odom = self._odom_transport.subscribe(self._handle_odom)
+        self._unsubscribe_lidar = self._lidar_transport.subscribe(self._lidar_subject.on_next)
+        self._unsubscribe_video = self._video_transport.subscribe(self._video_subject.on_next)
         self._tf.start()
 
     def stop(self) -> None:
         self._tf.stop()
         if self._unsubscribe_odom is not None:
             self._unsubscribe_odom()
+        if self._unsubscribe_lidar is not None:
+            self._unsubscribe_lidar()
+        if self._unsubscribe_video is not None:
+            self._unsubscribe_video()
         self._odom_transport.stop()
+        self._lidar_transport.stop()
+        self._video_transport.stop()
+        self._lidar_subject.on_completed()
+        self._odom_subject.on_completed()
+        self._video_subject.on_completed()
         self._dimsim_process.stop()
 
     @functools.cache
     def lidar_stream(self) -> Observable[PointCloud2]:
-        return Subject()
+        return self._lidar_subject
 
     @functools.cache
     def odom_stream(self) -> Observable[PoseStamped]:
-        return Subject()
+        return self._odom_subject
 
     @functools.cache
     def video_stream(self) -> Observable[Image]:
-        return Subject()
+        return self._video_subject
 
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         return True
@@ -101,6 +121,7 @@ class DimSimConnection:
         return {}
 
     def _handle_odom(self, msg: PoseStamped) -> None:
+        self._odom_subject.on_next(msg)
         self._tf.publish(*_odom_to_tf(msg))
 
 

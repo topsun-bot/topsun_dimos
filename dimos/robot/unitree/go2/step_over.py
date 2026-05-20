@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+import time
 
 import numpy as np
 from scipy.ndimage import grey_opening, label
@@ -112,7 +113,10 @@ def _morphological_open(height_map: np.ndarray, iterations: int = 1) -> np.ndarr
     if iterations <= 0:
         return height_map
     valid = height_map > -np.inf
-    work = np.where(valid, height_map, -1e6)
+    if not valid.any():
+        return height_map
+    fill_value = float(np.median(height_map[valid]))
+    work = np.where(valid, height_map, fill_value)
     footprint = np.ones((3, 3))
     for _ in range(iterations):
         work = grey_opening(work, footprint=footprint, mode="nearest")
@@ -358,7 +362,7 @@ class StepOverModule(Module):
         self._planner.cancel_goal()
 
         # Throttle speech: speak at most once per 3 seconds.
-        now = self._current_pose.ts if self._current_pose else 0.0
+        now = time.monotonic()
         if self._speak_skill is not None and (now - self._last_spoke_at > 3.0):
             self._last_spoke_at = now
             self._speak_skill.speak(self.config.blocked_speech_text, blocking=False)

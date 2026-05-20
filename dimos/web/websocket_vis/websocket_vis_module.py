@@ -106,6 +106,7 @@ class WebsocketVisModule(Module):
     explore_cmd: Out[Bool]
     stop_explore_cmd: Out[Bool]
     tele_cmd_vel: Out[Twist]
+    cmd_vel: Out[Twist]
     movecmd_stamped: Out[TwistStamped]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -339,6 +340,7 @@ class WebsocketVisModule(Module):
                     ),
                 )
                 self.tele_cmd_vel.publish(twist)
+                self.cmd_vel.publish(twist)
 
             # Publish TwistStamped if transport is configured
             if self.movecmd_stamped and self.movecmd_stamped.transport:
