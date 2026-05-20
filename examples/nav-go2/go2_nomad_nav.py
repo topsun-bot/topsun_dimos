@@ -30,6 +30,8 @@ from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_g
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from controller import WaypointFollowerConfig, WaypointFollowerModule
+from dimos.mapping.costmapper import CostMapper
 from engine.nomad import NoMaDConfig, NoMaDTrajectoryLocalPlannerModule
 
 
@@ -58,26 +60,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--visualnav-root",
         type=str,
-        default=os.environ.get("VISUALNAV_ROOT"),
-        help="Path to visualnav-transformer (vint_release) root",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=str,
-        default=os.environ.get("NOMAD_CHECKPOINT"),
-        help="Path to nomad.pth weights",
+        default=None,
+        help="Override visualnav-transformer root from config file",
     )
     parser.add_argument(
         "--num-samples",
         type=int,
         default=8,
         help="Diffusion trajectory samples per frame (default: 8)",
-    )
-    parser.add_argument(
-        "--inference-hz",
-        type=float,
-        default=4.0,
-        help="Max NoMaD inference rate (default: 4 Hz)",
     )
     return parser
 
@@ -103,12 +93,11 @@ def parse_nav_go2_config(argv: list[str] | None = None) -> NavGo2RunConfig:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    nomad_config = NoMaDConfig(
-        visualnav_root=args.visualnav_root,
-        checkpoint_path=args.checkpoint,
-        num_samples=args.num_samples,
-        min_inference_interval_s=1.0 / max(args.inference_hz, 0.1),
-    )
+    nomad_config = NoMaDConfig.load_default()
+    overrides: dict[str, object] = {"num_samples": args.num_samples}
+    if args.visualnav_root is not None:
+        overrides["visualnav_root"] = args.visualnav_root
+    nomad_config = nomad_config.model_copy(update=overrides)
 
     return NavGo2RunConfig(
         robot_ip=resolve_robot_ip(args),
@@ -121,9 +110,14 @@ def print_run_summary(config: NavGo2RunConfig) -> None:
     print("Blueprint: unitree_go2_basic + NoMaDTrajectoryLocalPlannerModule")
     print("  In:  color_image (from Go2 connection)")
     print("  Out: local_waypoints (base_link Path)")
+    print("  Out: candidate_paths (list[Path], all diffusion samples)")
+    print("  Follower: local_waypoints -> cmd_vel (WaypointFollowerModule)")
     print("  Debug: traversability_map (base_link OccupancyGrid, 0=traversable)")
     if config.nomad_config.visualnav_root:
         print(f"  VISUALNAV_ROOT: {config.nomad_config.visualnav_root}")
+    ckpt = config.nomad_config.resolved_checkpoint()
+    if ckpt:
+        print(f"  checkpoint: {ckpt}")
     print()
 
 
@@ -141,9 +135,17 @@ def run(config: NavGo2RunConfig) -> None:
         _apply_viewer_cli(config.viewer)
 
     print_run_summary(config)
+    follower_config = WaypointFollowerConfig.load_default()
     blueprint = autoconnect(
         unitree_go2_basic,
+        CostMapper.blueprint(),
         NoMaDTrajectoryLocalPlannerModule.blueprint(**config.nomad_config.model_dump()),
+        WaypointFollowerModule.blueprint(**follower_config.model_dump()),
+    ).remappings(
+        [
+            (CostMapper, "global_map", "lidar"),
+            (CostMapper, "global_costmap", "navigation_costmap"),
+        ]
     ).global_config(
         n_workers=4,
         robot_model="unitree_go2",

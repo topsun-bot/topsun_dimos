@@ -11,6 +11,8 @@ unitree_go2_basic
                            ├─ TrajectoryLocalPlannerModule (shared DimOS I/O + route selection)
                            ├─ NoMaDEngine (goal-masked diffusion, N samples)
                            ├─ local_waypoints  (Path, base_link)
+                           │       └─► WaypointFollowerModule ──► cmd_vel ──► Go2
+                           ├─ candidate_paths  (list[Path], all samples)
                            └─ traversability_map  (OccupancyGrid, base_link)
 ```
 
@@ -18,6 +20,8 @@ unitree_go2_basic
 |--------|------|-------------|
 | `color_image` | `sensor_msgs.Image` | RGB from Go2 (auto-connected) |
 | `local_waypoints` | `nav_msgs.Path` | Selected egocentric local route in `base_link` |
+| `cmd_vel` | `geometry_msgs.Twist` | Velocity commands from `WaypointFollowerModule` |
+| `candidate_paths` | `list[nav_msgs.Path]` | All diffusion trajectory samples in `base_link` |
 | `traversability_map` | `nav_msgs.OccupancyGrid` | Debug egocentric traversability in `base_link` |
 
 **Grid semantics (ROS cost convention):**
@@ -36,10 +40,11 @@ unitree_go2_basic
 
 ```bash
 export VISUALNAV_ROOT=/path/to/visualnav-transformer
-export NOMAD_CHECKPOINT=$VISUALNAV_ROOT/deployment/model_weights/nomad.pth
 # optional:
 export NOMAD_MODEL_CONFIG=$VISUALNAV_ROOT/train/config/nomad.yaml
 ```
+
+Edit `examples/nav-go2/config/nomad_nav.yaml` to set `checkpoint_path` (and optionally `visualnav_root`). Paths may be relative to that file.
 
 Use the same Python environment that has `torch`, `diffusers>=0.27`, `vint_train`, and `diffusion_policy` installed (do **not** use upstream `diffusers==0.11.1` in the DimOS venv).
 
@@ -64,11 +69,10 @@ uv run python examples/nav-go2/go2_nomad_nav.py --simulation --viewer rerun
 export ROBOT_IP=192.168.123.161
 uv run python examples/nav-go2/go2_nomad_nav.py --viewer rerun
 
-# Custom paths
+# CLI overrides (paths and inference_hz are in config/nomad_nav.yaml)
 uv run python examples/nav-go2/go2_nomad_nav.py --replay \
   --visualnav-root ~/visualnav-transformer \
-  --checkpoint ~/visualnav-transformer/deployment/model_weights/nomad.pth \
-  --num-samples 8 --inference-hz 2
+  --num-samples 8
 ```
 
 This example runs through the script entrypoint above, not `dimos --simulation
@@ -79,6 +83,8 @@ run ...`. The `--simulation` flag maps the Go2 connection to MuJoCo.
 | File | Role |
 |------|------|
 | `go2_nomad_nav.py` | Blueprint entry script and argument parsing (`NavGo2RunConfig`) |
+| `config/nomad_nav.yaml` | NoMaD paths, inference, and follower (`control_*`) settings |
+| `controller.py` | Pure-pursuit follower: `local_waypoints` → `cmd_vel` (path update gating) |
 | `trajectory_local_planner_module.py` | Shared DimOS `Module` (subscribe/select/publish/debug-rasterize) |
 | `engine/nomad/local_planner_module.py` | NoMaD adapter for `TrajectoryLocalPlannerModule` |
 | `engine/nomad/inference.py` | NoMaD exploration inference wrapper |

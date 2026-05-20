@@ -38,7 +38,7 @@ git clone https://github.com/robodhruv/visualnav-transformer.git ~/work/visualna
 ```bash
 export VISUALNAV_ROOT=/home/sgk/work/visualnav-transformer
 export DIFFUSION_POLICY_ROOT=/home/sgk/work/diffusion_policy
-export NOMAD_CHECKPOINT=$VISUALNAV_ROOT/deployment/model_weights/nomad.pth
+# 权重路径写在 examples/nav-go2/config/nomad_nav.yaml 的 checkpoint_path（也可用 NOMAD_CHECKPOINT 环境变量兜底）
 # 可选，默认会找 $VISUALNAV_ROOT/train/config/nomad.yaml
 export NOMAD_MODEL_CONFIG=$VISUALNAV_ROOT/train/config/nomad.yaml
 ```

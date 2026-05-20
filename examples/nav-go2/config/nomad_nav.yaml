@@ -1,0 +1,19 @@
+# Runtime configuration for go2_nomad_nav.py
+# Paths below are relative to this file unless absolute.
+
+visualnav_root: null
+checkpoint_path: ../models/nomad/nomad.pth
+model_config_path: null
+
+num_samples: 8
+inference_hz: 1.0
+
+# WaypointFollower (controller.py) — set control_enabled: false for viz-only runs
+control_enabled: true
+control_speed: 0.4
+lookahead_distance: 0.5
+control_hz: 10.0
+goal_tolerance: 0.15
+# Latch path until hold time and estimated travel are met (0 = accept every message)
+min_path_hold_s: 0.25
+min_path_progress_m: 0.08

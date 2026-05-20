@@ -18,8 +18,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, Self
+
+import yaml
 
 from trajectory_planner_config import TrajectoryLocalPlannerConfig
+
+NAV_GO2_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_NAV_CONFIG = NAV_GO2_ROOT / "config" / "nomad_nav.yaml"
 
 
 def _path_from_env(name: str) -> Path | None:
@@ -75,3 +81,39 @@ class NoMaDConfig(TrajectoryLocalPlannerConfig):
             if candidate.is_file():
                 return candidate
         return None
+
+    @classmethod
+    def from_yaml(cls, path: Path | str) -> Self:
+        """Load NoMaD settings from a YAML file (e.g. ``nomad_nav.yaml``)."""
+        config_path = Path(path).expanduser().resolve()
+        raw: dict[str, Any] = yaml.safe_load(config_path.read_text()) or {}
+
+        inference_hz = raw.pop("inference_hz", None)
+        if inference_hz is not None:
+            raw["min_inference_interval_s"] = 1.0 / max(float(inference_hz), 0.1)
+
+        for key in ("checkpoint_path", "model_config_path"):
+            value = raw.get(key)
+            if not value:
+                continue
+            resolved = Path(str(value)).expanduser()
+            if not resolved.is_absolute():
+                resolved = (config_path.parent / resolved).resolve()
+            raw[key] = str(resolved)
+
+        visualnav = raw.get("visualnav_root")
+        if visualnav:
+            p = Path(str(visualnav)).expanduser()
+            if not p.is_absolute():
+                p = (config_path.parent / p).resolve()
+            raw["visualnav_root"] = str(p)
+
+        # nomad_nav.yaml also holds WaypointFollower keys; ignore unknown fields.
+        allowed = set(cls.model_fields.keys())
+        filtered = {k: v for k, v in raw.items() if k in allowed}
+        return cls.model_validate(filtered)
+
+    @classmethod
+    def load_default(cls) -> Self:
+        """Load settings from ``config/nomad_nav.yaml`` under the nav-go2 example."""
+        return cls.from_yaml(DEFAULT_NAV_CONFIG)

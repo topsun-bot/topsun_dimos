@@ -22,14 +22,17 @@ import time
 import numpy as np
 
 from dimos.core.core import rpc
+from dimos.core.global_config import global_config
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
 from dimos.utils.logging_config import setup_logger
 
+from path_selector import TrajectoryPathSelector
 from trajectory_inference import (
     TrajectoryNavigationEngine,
     TrajectoryNavigationRuntimeError,
@@ -50,6 +53,7 @@ class TrajectoryLocalPlannerModule(Module):
 
     Outputs:
         local_waypoints: Selected robot-centric route in ``base_link``.
+        candidate_paths: All sampled trajectories as separate paths in ``base_link``.
         traversability_map: Robot-centric grid in ``base_link``. Value 0 = highly
             traversable (many sampled trajectories agree); 100 = no sample passed through.
             Intended as a debug artifact.
@@ -57,7 +61,9 @@ class TrajectoryLocalPlannerModule(Module):
 
     config: TrajectoryLocalPlannerConfig
     color_image: In[Image]
+    navigation_costmap: In[OccupancyGrid]
     local_waypoints: Out[Path]
+    candidate_paths: Out[list[Path]]
     traversability_map: Out[OccupancyGrid]
     engine_name = "trajectory model"
 
@@ -68,7 +74,18 @@ class TrajectoryLocalPlannerModule(Module):
         self._last_infer_monotonic = 0.0
         self._frame_count = 0
         self._last_waypoints: Path | None = None
+        self._last_candidate_paths: list[Path] | None = None
         self._last_map: OccupancyGrid | None = None
+        self._latest_navigation_costmap: OccupancyGrid | None = None
+        self._selector = TrajectoryPathSelector(
+            grid_lateral_m=self.config.grid_lateral_m,
+            grid_resolution_m=self.config.grid_resolution_m,
+            preferred_index=self.config.selected_trajectory_index,
+        )
+        self._navigation_map = NavigationMap(
+            global_config,
+            self.config.navigation_map_gradient_strategy,
+        )
 
     def _make_engine(self) -> TrajectoryNavigationEngine:
         raise NotImplementedError
@@ -77,6 +94,7 @@ class TrajectoryLocalPlannerModule(Module):
     def start(self) -> None:
         super().start()
         self.color_image.subscribe(self._on_image)
+        self.navigation_costmap.subscribe(self._on_navigation_costmap)
         try:
             self._engine.initialize()
             logger.info("%s engine initialized", self.engine_name)
@@ -112,11 +130,31 @@ class TrajectoryLocalPlannerModule(Module):
                     logger.warning("%s inference skipped: %s", self.engine_name, exc)
                 return
 
+            grid = rasterize_trajectories_to_costmap(
+                result.trajectories,
+                forward_m=self.config.grid_forward_m,
+                lateral_m=self.config.grid_lateral_m,
+                resolution_m=self.config.grid_resolution_m,
+                frame_id="base_link",
+                ts=image.ts,
+            )
+            if self.config.publish_debug_traversability_map:
+                self._last_map = grid
+                self.traversability_map.publish(grid)
+
+            if self._latest_navigation_costmap is None:
+                logger.warning(
+                    "%s path selection skipped: no latest navigation costmap available",
+                    self.engine_name,
+                )
+                return
+
             try:
                 local_waypoints = self._select_local_waypoints(
                     result.trajectories,
                     frame_id="base_link",
                     ts=image.ts,
+                    navigation_map=self._navigation_map,
                 )
             except TrajectoryNavigationRuntimeError as exc:
                 logger.warning("%s route selection skipped: %s", self.engine_name, exc)
@@ -126,36 +164,28 @@ class TrajectoryLocalPlannerModule(Module):
             self._last_infer_monotonic = now
             self.local_waypoints.publish(local_waypoints)
 
-            grid: OccupancyGrid | None = None
-            if self.config.publish_debug_traversability_map:
-                grid = rasterize_trajectories_to_costmap(
-                    result.trajectories,
-                    forward_m=self.config.grid_forward_m,
-                    lateral_m=self.config.grid_lateral_m,
-                    resolution_m=self.config.grid_resolution_m,
-                    frame_id="base_link",
-                    ts=image.ts,
-                )
-                self._last_map = grid
-                self.traversability_map.publish(grid)
+            candidates = self._trajectories_to_paths(
+                result.trajectories,
+                frame_id="base_link",
+                ts=image.ts,
+            )
+            self._last_candidate_paths = candidates
+            self.candidate_paths.publish(candidates)
 
             if self._frame_count % 20 == 0:
                 free_cells = int((grid.grid == 0).sum()) if grid is not None else -1
+                n_candidates = len(self._last_candidate_paths or [])
                 logger.info(
-                    "Published local_waypoints (%d poses, free_cells=%d, waypoint=%.2f, %.2f)",
+                    "Published local_waypoints (%d poses, candidates=%d, free_cells=%d, "
+                    "waypoint=%.2f, %.2f)",
                     len(local_waypoints.poses),
+                    n_candidates,
                     free_cells,
                     result.chosen_waypoint[0],
                     result.chosen_waypoint[1],
                 )
 
-    def _select_local_waypoints(
-        self,
-        trajectories: np.ndarray,
-        *,
-        frame_id: str,
-        ts: float,
-    ) -> Path:
+    def _validate_trajectories(self, trajectories: np.ndarray) -> None:
         if trajectories.ndim != 3 or trajectories.shape[-1] != 2:
             raise TrajectoryNavigationRuntimeError(
                 f"Expected (N, T, 2) trajectories, got {trajectories.shape}"
@@ -163,17 +193,70 @@ class TrajectoryLocalPlannerModule(Module):
         if trajectories.shape[0] == 0:
             raise TrajectoryNavigationRuntimeError("No candidate trajectories available")
 
-        index = min(max(self.config.selected_trajectory_index, 0), trajectories.shape[0] - 1)
+    def _trajectory_to_path(
+        self,
+        trajectory: np.ndarray,
+        *,
+        frame_id: str,
+        ts: float,
+    ) -> Path:
         poses = [
             PoseStamped(ts=ts, frame_id=frame_id, position=[float(x), float(y), 0.0])
-            for x, y in trajectories[index]
+            for x, y in trajectory
         ]
         return Path(ts=ts, frame_id=frame_id, poses=poses)
+
+    def _trajectories_to_paths(
+        self,
+        trajectories: np.ndarray,
+        *,
+        frame_id: str,
+        ts: float,
+    ) -> list[Path]:
+        self._validate_trajectories(trajectories)
+        return [
+            self._trajectory_to_path(trajectories[i], frame_id=frame_id, ts=ts)
+            for i in range(trajectories.shape[0])
+        ]
+
+    def _select_local_waypoints(
+        self,
+        trajectories: np.ndarray,
+        *,
+        frame_id: str,
+        ts: float,
+        navigation_map: NavigationMap,
+    ) -> Path:
+        self._validate_trajectories(trajectories)
+        best_index = self._selector.select_best_index(
+            trajectories,
+            navigation_map,
+        )
+        return self._trajectory_to_path(
+            trajectories[best_index],
+            frame_id=frame_id,
+            ts=ts,
+        )
+
+    def _on_navigation_costmap(self, costmap: OccupancyGrid) -> None:
+        if costmap.frame_id != "base_link":
+            logger.warning(
+                "Received navigation costmap in %s, expected base_link; skipping.",
+                costmap.frame_id,
+            )
+            # return
+        self._latest_navigation_costmap = costmap
+        self._navigation_map.update(costmap)
 
     @rpc
     def get_last_local_waypoints(self) -> Path | None:
         """Return the most recently published local waypoint path."""
         return self._last_waypoints
+
+    @rpc
+    def get_last_candidate_paths(self) -> list[Path] | None:
+        """Return the most recently published candidate trajectory paths."""
+        return self._last_candidate_paths
 
     @rpc
     def get_last_traversability_map(self) -> OccupancyGrid | None:

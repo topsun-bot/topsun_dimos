@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from dimos.core.module import ModuleConfig
 
 
@@ -23,7 +25,7 @@ class TrajectoryLocalPlannerConfig(ModuleConfig):
     """Model-independent trajectory local planner parameters."""
 
     # Candidate trajectory selected for the main local_waypoints output.
-    selected_trajectory_index: int = 0
+    selected_trajectory_index: int = 4
 
     # Publish traversability_map as a debug artifact derived from candidate paths.
     publish_debug_traversability_map: bool = True
@@ -32,5 +34,6 @@ class TrajectoryLocalPlannerConfig(ModuleConfig):
     grid_forward_m: float = 4.0
     grid_lateral_m: float = 3.0
     grid_resolution_m: float = 0.05
+    navigation_map_gradient_strategy: Literal["gradient", "voronoi"] = "gradient"
 
     min_inference_interval_s: float = 0.25
