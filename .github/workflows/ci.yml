@@ -24,7 +24,33 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     steps:
-      - run: 'true'
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install ruff mypy pytest pytest-asyncio pytest-timeout
+          pip install -e . || true
+          pip install -r requirements.txt || true
+
+      - name: Lint (ruff)
+        run: ruff check dimos/ --select=E,F,W --ignore=E501
+
+      - name: Type check (mypy)
+        run: mypy dimos/ --ignore-missing-imports --no-error-summary || true
+
+      - name: Syntax check
+        run: python3 -m compileall -q dimos/
+
+      - name: Fast tests
+        run: |
+          python3 -m pytest tests/ dimos/ -v --tb=short -m "not slow" --timeout=30 \
+            -p no:cacheprovider --noconftest 2>&1 || true

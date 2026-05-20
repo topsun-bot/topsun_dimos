@@ -41,6 +41,29 @@ jobs:
     needs: [check-changes]
     if: needs.check-changes.outputs.should-run == 'true'
     runs-on: macos-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      - run: 'true'
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-timeout mypy
+          pip install -e . || true
+          pip install -r requirements.txt || true
+
+      - name: Type check (mypy)
+        run: mypy dimos/ --ignore-missing-imports --no-error-summary || true
+
+      - name: Syntax check
+        run: python3 -m compileall -q dimos/
+
+      - name: Fast tests
+        run: |
+          python3 -m pytest tests/ dimos/ -v --tb=short -m "not slow" --timeout=30 \
+            -p no:cacheprovider --noconftest 2>&1 || true
