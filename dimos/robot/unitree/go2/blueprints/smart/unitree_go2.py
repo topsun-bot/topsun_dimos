@@ -30,6 +30,7 @@ from dimos.navigation.patrolling.module import PatrollingModule
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
 from dimos.robot.unitree.go2.go_home import GoHome
+from dimos.robot.unitree.go2.step_over import StepOverModule
 
 unitree_go2 = autoconnect(
     unitree_go2_basic,
@@ -39,6 +40,7 @@ unitree_go2 = autoconnect(
     WavefrontFrontierExplorer.blueprint(),
     PatrollingModule.blueprint(),
     GoHome.blueprint(),
+    StepOverModule.blueprint(),
 ).global_config(n_workers=10, robot_model="unitree_go2")
 
 

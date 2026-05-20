@@ -72,6 +72,8 @@ class GlobalPlanner(Resource):
     _stuck_threshold: float = 0.4
     _max_path_deviation: float = 0.9
     _replanning_enabled: bool = True
+    _using_near_map: bool = False
+    """Hysteresis state: True when using gradient (near) map, False when using voronoi (far)."""
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self.path = Subject()
@@ -340,12 +342,19 @@ class GlobalPlanner(Resource):
         self._local_planner.start_planning(resampled_path)
 
     def _find_wide_path(self, goal: Vector3, robot_pos: Vector3) -> Path | None:
-        #        sizes_to_try: list[float] = [2.2, 1.7, 1.3, 1]
         sizes_to_try: list[float] = [1.1]
 
         for size in sizes_to_try:
             distance = robot_pos.distance(goal)
-            navigation_map = self._navigation_map if distance > 1.5 else self._navigation_map_near
+            # Hysteresis: use gradient (near) map below near_enter_m, voronoi (far) above far_exit_m,
+            # and keep the previous choice in between to prevent map-flip oscillation.
+            near_enter = getattr(self._global_config, "planner_near_enter_m", 1.3)
+            far_exit = getattr(self._global_config, "planner_far_exit_m", 1.7)
+            if distance > far_exit:
+                self._using_near_map = False
+            elif distance < near_enter:
+                self._using_near_map = True
+            navigation_map = self._navigation_map_near if self._using_near_map else self._navigation_map
             costmap = navigation_map.make_gradient_costmap(size)
             path = min_cost_astar(costmap, goal, robot_pos)
             if path and path.poses:
