@@ -36,7 +36,7 @@ class GlobalConfig(BaseSettings):
     xarm7_ip: str | None = None
     xarm6_ip: str | None = None
     can_port: str | None = None
-    simulation: str = ""
+    simulation: bool = False
     replay: bool = False
     replay_db: str = "go2_short"
     new_memory: bool = False

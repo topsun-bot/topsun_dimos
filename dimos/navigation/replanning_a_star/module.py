@@ -43,7 +43,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
 
     goal_reached: Out[Bool]
     navigation_state: Out[String]  # TODO: set it
-    nav_cmd_vel: Out[Twist]
+    cmd_vel: Out[Twist]
     path: Out[Path]
     navigation_costmap: Out[OccupancyGrid]
 
@@ -83,7 +83,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
 
         self.register_disposable(self._planner.path.subscribe(self.path.publish))
 
-        self.register_disposable(self._planner.cmd_vel.subscribe(self.nav_cmd_vel.publish))
+        self.register_disposable(self._planner.cmd_vel.subscribe(self.cmd_vel.publish))
 
         self.register_disposable(self._planner.goal_reached.subscribe(self.goal_reached.publish))
 
