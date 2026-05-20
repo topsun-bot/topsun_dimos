@@ -179,16 +179,16 @@ def compute_step_over_geometry(
     labeled, n_obs = label(above_noise)
     result["num_obstacles"] = int(n_obs)
     if n_obs >= 2:
-        col_ranges = []
+        row_ranges = []
         for lbl in range(1, n_obs + 1):
-            obs_cols = np.where(np.any(labeled == lbl, axis=0))[0]
-            if len(obs_cols) > 0:
-                col_ranges.append((obs_cols[0], obs_cols[-1]))
-        col_ranges.sort(key=lambda r: r[0])
+            obs_rows = np.where(np.any(labeled == lbl, axis=1))[0]
+            if len(obs_rows) > 0:
+                row_ranges.append((obs_rows[0], obs_rows[-1]))
+        row_ranges.sort(key=lambda r: r[0])
         gaps = []
-        for i in range(len(col_ranges) - 1):
-            left_end = col_ranges[i][1]
-            right_start = col_ranges[i + 1][0]
+        for i in range(len(row_ranges) - 1):
+            left_end = row_ranges[i][1]
+            right_start = row_ranges[i + 1][0]
             gaps.append(float(right_start - left_end - 1) * cell_size)
         if gaps:
             result["gap"] = min(gaps)

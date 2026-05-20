@@ -194,9 +194,9 @@ class TestComputeGeometry:
         assert g["width"] <= 0.05
 
     def test_two_obstacles_with_gap(self) -> None:
-        hm = _make_flat_ground(10, 15)
-        hm = _add_obstacle(hm, 0, 10, 0, 3, 0.08)
-        hm = _add_obstacle(hm, 0, 10, 9, 12, 0.08)  # 6 cols gap = 30cm
+        hm = _make_flat_ground(15, 10)
+        hm = _add_obstacle(hm, 0, 3, 0, 10, 0.08)
+        hm = _add_obstacle(hm, 9, 12, 0, 10, 0.08)  # 6 rows gap = 30cm lateral
         g = compute_step_over_geometry(hm, 0.0)
         assert g["num_obstacles"] == 2
         assert g["gap"] == pytest.approx(0.30, abs=0.05)
