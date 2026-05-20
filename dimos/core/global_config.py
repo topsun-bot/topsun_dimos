@@ -61,6 +61,11 @@ class GlobalConfig(BaseSettings):
     # api_id=1001) — both can be enabled simultaneously.
     free_avoid: bool = True
     detection_model: VlModelName = "moondream"
+    # Hysteresis thresholds for GlobalPlanner map-type switching.
+    # < planner_near_enter_m → gradient (near), > planner_far_exit_m → voronoi (far),
+    # in between → keep previous. Prevents path flipping near the 1.5 m boundary.
+    planner_near_enter_m: float = 1.3
+    planner_far_exit_m: float = 1.7
     listen_host: str = "127.0.0.1"
 
     model_config = SettingsConfigDict(

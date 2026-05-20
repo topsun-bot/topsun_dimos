@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import numpy as np
 from scipy.ndimage import grey_opening, label
 
@@ -26,6 +28,13 @@ from dimos.robot.unitree.go2.step_over_config import StepOverConfig
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+
+def _quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
+    """Proper quaternion to yaw conversion, handling non-zero roll/pitch."""
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    return math.atan2(siny_cosp, cosy_cosp)
 
 
 def _pointcloud2_to_xyz(cloud: PointCloud2) -> np.ndarray:
@@ -70,8 +79,9 @@ def _extract_roi_height_map(
     lat_roi = lateral[in_roi]
     z_roi = xyz[in_roi, 2]
 
-    n_cols = max(1, int((roi_end - roi_start) / cell_size))
-    n_rows = max(1, int(2 * roi_half_width / cell_size))
+    # Use ceil to avoid losing a cell on floating-point truncation.
+    n_cols = max(1, math.ceil((roi_end - roi_start) / cell_size))
+    n_rows = max(1, math.ceil(2 * roi_half_width / cell_size))
     height_map = np.full((n_rows, n_cols), -np.inf, dtype=np.float32)
 
     col_idx = np.clip(((fwd_roi - roi_start) / cell_size).astype(np.int32), 0, n_cols - 1)
@@ -102,12 +112,12 @@ def _morphological_open(height_map: np.ndarray, iterations: int = 1) -> np.ndarr
     if iterations <= 0:
         return height_map
     valid = height_map > -np.inf
-    # Temporarily replace -inf with a very negative sentinel for the morphological ops
     work = np.where(valid, height_map, -1e6)
-    # footprint=(3,3) works as a 3x3 structuring element
-    opened = grey_opening(work, footprint=np.ones((3, 3)), mode="nearest")
+    footprint = np.ones((3, 3))
+    for _ in range(iterations):
+        work = grey_opening(work, footprint=footprint, mode="nearest")
     result = height_map.copy()
-    result[valid] = opened[valid]
+    result[valid] = work[valid]
     return result
 
 
@@ -151,7 +161,6 @@ def compute_step_over_geometry(
     # Continuous obstacle depth from the first occupied column.
     occupied = np.where(col_has_obs)[0]
     if len(occupied) > 0:
-        # Find the first gap after the leading obstacle, or the full ROI length
         first_col = occupied[0]
         gaps_after = np.where(~col_has_obs[first_col:])[0]
         if len(gaps_after) > 0:
@@ -166,8 +175,6 @@ def compute_step_over_geometry(
     labeled, n_obs = label(above_noise)
     result["num_obstacles"] = int(n_obs)
     if n_obs >= 2:
-        # Compute edge-to-edge gap: for each pair of adjacent obstacles,
-        # gap = (start of right obstacle) - (end of left obstacle)
         col_ranges = []
         for lbl in range(1, n_obs + 1):
             obs_cols = np.where(np.any(labeled == lbl, axis=0))[0]
@@ -210,6 +217,8 @@ def is_passable(
     w = geometry["width"]
     if w < cfg.isolated_obstacle_width_min_m:
         return True  # narrow spike — filtered as noise
+    if w > cfg.isolated_obstacle_width_max_m:
+        return False  # too wide — beyond isolated obstacle envelope
 
     return True
 
@@ -219,9 +228,9 @@ class StepOverModule(Module):
 
     Subscribes to *global_map* (voxel PointCloud2) and *odom* (PoseStamped).
     Every incoming point cloud triggers a 2.5D geometric analysis of a forward
-    ROI strip. When the step-over condition holds for *stable_frames_required*
-    consecutive frames, the module allows passage. Otherwise it cancels the
-    current navigation goal and speaks the configured warning phrase.
+    ROI strip. The module requires *stable_frames_required* consecutive passable
+    frames before allowing passage, and *blocked_stable_frames* consecutive
+    non-passable frames before canceling the goal.
 
     This is an **automatic** navigation component — not an LLM-callable skill.
     """
@@ -230,40 +239,48 @@ class StepOverModule(Module):
     odom: In[PoseStamped]
 
     _planner: ReplanningAStarPlannerSpec
-    _speak_skill: SpeakSkillSpec
+    _speak_skill: SpeakSkillSpec | None = None  # optional — only in agentic blueprints
     config: StepOverConfig
 
     _current_pose: PoseStamped | None = None
+    _enabled: bool = True
     _stable_count: int = 0
+    _blocked_count: int = 0
     _last_passable: bool = True
-    _blocked_spoken: bool = False
+    _last_spoke_at: float = 0.0  # monotonic timestamp to throttle speech
 
     async def handle_odom(self, msg: PoseStamped) -> None:
         self._current_pose = msg
 
     async def handle_global_map(self, msg: PointCloud2) -> None:
-        cfg = self.config
-        if self._current_pose is None:
+        if not self._enabled or self._current_pose is None:
             return
 
+        cfg = self.config
         xyz = _pointcloud2_to_xyz(msg)
         if len(xyz) == 0:
             return
 
         pose = self._current_pose.pose
-        # quaternion to yaw
-        qz, qw = pose.orientation.z, pose.orientation.w
-        yaw = 2.0 * np.arctan2(qz, qw)
+        qx = pose.orientation.x
+        qy = pose.orientation.y
+        qz = pose.orientation.z
+        qw = pose.orientation.w
+        yaw = _quat_to_yaw(qx, qy, qz, qw)
         robot_pose = (pose.position.x, pose.position.y, float(yaw))
 
-        # Skip analysis if no voxels within analyze_distance ahead of robot
+        # Early skip: no voxels within analyze_distance ahead.
         rx, ry, ryaw = robot_pose
         cos_yaw, sin_yaw = np.cos(ryaw), np.sin(ryaw)
         dx = xyz[:, 0] - rx
         dy = xyz[:, 1] - ry
         forward = dx * cos_yaw + dy * sin_yaw
-        if not np.any((forward >= 0.0) & (forward <= cfg.analyze_distance_m)):
+        in_analyze_range = (forward >= 0.0) & (forward <= cfg.analyze_distance_m)
+        if not np.any(in_analyze_range):
             return
+
+        # Check if any obstacle is within execute_distance_m for blocking gating.
+        in_execute_range = (forward >= cfg.roi_start_m) & (forward <= cfg.execute_distance_m)
 
         roi_half_width = (self.config.g.robot_width / 2) + cfg.roi_width_margin_m
         height_map = _extract_roi_height_map(
@@ -287,10 +304,10 @@ class StepOverModule(Module):
             f"StepOver: h={geometry['h']:.3f} d={geometry['d']:.3f} "
             f"g={belly_clearance:.3f} width={geometry['width']:.3f} "
             f"n_obs={geometry['num_obstacles']} passable={passable} "
-            f"stable={self._stable_count}"
+            f"stable={self._stable_count} blocked={self._blocked_count}"
         )
 
-        # Temporal filter: require N consecutive passable frames
+        # Temporal filter on passable side.
         if not self._last_passable and passable:
             self._stable_count = 1
         elif passable:
@@ -298,33 +315,48 @@ class StepOverModule(Module):
         else:
             self._stable_count = 0
 
+        # Temporal filter on blocked side: debounce before canceling.
+        if self._last_passable and not passable:
+            self._blocked_count = 1
+        elif not passable:
+            self._blocked_count += 1
+        else:
+            self._blocked_count = 0
+
         self._last_passable = passable
 
+        # Passable and stable: allow passage.
         if passable and self._stable_count >= cfg.stable_frames_required:
-            self._blocked_spoken = False
-            return  # allow passage
+            return  # allow passage — obstacle is step-overable
 
-        if not passable:
-            self._handle_blocked()
+        # Not passable and stable: block, but only within execute_distance.
+        if not passable and self._blocked_count >= cfg.stable_frames_required:
+            if np.any(in_execute_range):
+                self._handle_blocked()
 
     def _handle_blocked(self) -> None:
-        """Cancel navigation and speak — once per blocking event."""
-        if self._blocked_spoken:
-            return
-        self._blocked_spoken = True
+        """Cancel navigation every call; speak only throttled."""
         logger.warning(f"StepOver: blocked — '{self.config.blocked_speech_text}'")
         self._planner.cancel_goal()
-        self._speak_skill.speak(self.config.blocked_speech_text, blocking=False)
+
+        # Throttle speech: speak at most once per 3 seconds.
+        now = self._current_pose.ts if self._current_pose else 0.0
+        if self._speak_skill is not None and (now - self._last_spoke_at > 3.0):
+            self._last_spoke_at = now
+            self._speak_skill.speak(self.config.blocked_speech_text, blocking=False)
 
     @rpc
     def enable(self) -> str:
         """Enable step-over detection (on by default)."""
+        self._enabled = True
         self._stable_count = 0
-        self._blocked_spoken = False
+        self._blocked_count = 0
         return "StepOverModule enabled"
 
     @rpc
     def disable(self) -> str:
         """Disable step-over detection."""
+        self._enabled = False
         self._stable_count = 0
+        self._blocked_count = 0
         return "StepOverModule disabled"

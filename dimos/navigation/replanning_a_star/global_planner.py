@@ -348,8 +348,8 @@ class GlobalPlanner(Resource):
             distance = robot_pos.distance(goal)
             # Hysteresis: use gradient (near) map below near_enter_m, voronoi (far) above far_exit_m,
             # and keep the previous choice in between to prevent map-flip oscillation.
-            near_enter = getattr(self._global_config, "planner_near_enter_m", 1.3)
-            far_exit = getattr(self._global_config, "planner_far_exit_m", 1.7)
+            near_enter = self._global_config.planner_near_enter_m
+            far_exit = self._global_config.planner_far_exit_m
             if distance > far_exit:
                 self._using_near_map = False
             elif distance < near_enter:
