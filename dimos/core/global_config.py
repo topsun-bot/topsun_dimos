@@ -97,7 +97,7 @@ class GlobalConfig(BaseSettings):
         if self.replay:
             return "replay"
         if self.simulation:
-            return self.simulation
+            return "mujoco"
         return "webrtc"
 
     @property

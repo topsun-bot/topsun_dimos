@@ -33,17 +33,26 @@ from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_g
 from dimos.robot.unitree.go2.go_home import GoHome
 from dimos.robot.unitree.go2.step_over import StepOverModule
 
-unitree_go2 = autoconnect(
-    unitree_go2_basic,
-    VoxelGridMapper.blueprint(),
-    CostMapper.blueprint(),
-    ReplanningAStarPlanner.blueprint(),
-    WavefrontFrontierExplorer.blueprint(),
-    PatrollingModule.blueprint(),
-    MovementManager.blueprint(),
-    GoHome.blueprint(),
-    StepOverModule.blueprint(),
-).global_config(n_workers=10, robot_model="unitree_go2")
+unitree_go2 = (
+    autoconnect(
+        unitree_go2_basic,
+        VoxelGridMapper.blueprint(),
+        CostMapper.blueprint(),
+        ReplanningAStarPlanner.blueprint(),
+        WavefrontFrontierExplorer.blueprint(),
+        PatrollingModule.blueprint(),
+        MovementManager.blueprint(),
+        GoHome.blueprint(),
+        StepOverModule.blueprint(),
+    )
+    .remappings(
+        [
+            # Route planner velocity through MovementManager for arbitration
+            (ReplanningAStarPlanner, "cmd_vel", "nav_cmd_vel"),
+        ]
+    )
+    .global_config(n_workers=10, robot_model="unitree_go2")
+)
 
 
 class Go2MemoryConfig(RecorderConfig):
