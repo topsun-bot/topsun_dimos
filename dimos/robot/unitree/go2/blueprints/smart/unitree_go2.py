@@ -49,6 +49,8 @@ unitree_go2 = (
         [
             # Route planner velocity through MovementManager for arbitration
             (ReplanningAStarPlanner, "cmd_vel", "nav_cmd_vel"),
+            # Route clicks through MovementManager for validation (range/finite checks)
+            (ReplanningAStarPlanner, "clicked_point", "way_point"),
         ]
     )
     .global_config(n_workers=10, robot_model="unitree_go2")
