@@ -215,10 +215,12 @@ def is_passable(
         return False
 
     w = geometry["width"]
-    if w < cfg.isolated_obstacle_width_min_m:
-        return True  # narrow spike — filtered as noise
-    if w > cfg.isolated_obstacle_width_max_m:
-        return False  # too wide — beyond isolated obstacle envelope
+    if geometry["num_obstacles"] <= 1:
+        # Width envelope applies only to isolated obstacles.
+        if w < cfg.isolated_obstacle_width_min_m:
+            return True  # narrow spike — filtered as noise
+        if w > cfg.isolated_obstacle_width_max_m:
+            return False  # too wide — beyond isolated obstacle envelope
 
     return True
 
