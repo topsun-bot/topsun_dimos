@@ -190,6 +190,7 @@ all_modules = {
     "semantic-search": "dimos.memory2.module.SemanticSearch",
     "simple-phone-teleop": "dimos.teleop.phone.phone_extensions.SimplePhoneTeleop",
     "spatial-memory": "dimos.perception.spatial_perception.SpatialMemory",
+    "step-over-module": "dimos.robot.unitree.go2.step_over.StepOverModule",
     "speak-skill": "dimos.agents.skills.speak_skill.SpeakSkill",
     "temporal-memory": "dimos.perception.experimental.temporal_memory.temporal_memory.TemporalMemory",
     "twist-teleop-module": "dimos.teleop.quest.quest_extensions.TwistTeleopModule",
