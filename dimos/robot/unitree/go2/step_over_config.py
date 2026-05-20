@@ -74,13 +74,6 @@ class StepOverConfig(ModuleConfig):
     Calibrate on real hardware.
     """
 
-    # ── Planner hysteresis (constraint 2) ────────────────────────────
-    planner_near_enter_m: float = 1.3
-    """Distance to goal below which the planner switches to gradient (near) cost map."""
-
-    planner_far_exit_m: float = 1.7
-    """Distance to goal above which the planner switches back to voronoi (far) cost map."""
-
     # ── Speech ───────────────────────────────────────────────────────
     blocked_speech_text: str = "前方障碍无法通过"
     """Fixed phrase spoken when an obstacle cannot be stepped over and no detour exists."""
