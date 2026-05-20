@@ -279,9 +279,6 @@ class StepOverModule(Module):
         if not np.any(in_analyze_range):
             return
 
-        # Check if any obstacle is within execute_distance_m for blocking gating.
-        in_execute_range = (forward >= cfg.roi_start_m) & (forward <= cfg.execute_distance_m)
-
         roi_half_width = (self.config.g.robot_width / 2) + cfg.roi_width_margin_m
         height_map = _extract_roi_height_map(
             xyz, robot_pose, cfg.roi_start_m, cfg.roi_end_m, roi_half_width
@@ -307,6 +304,17 @@ class StepOverModule(Module):
             f"stable={self._stable_count} blocked={self._blocked_count}"
         )
 
+        # Gate blocking actions: only trigger when the obstacle's leading edge
+        # is within execute_distance_m, measured from obstacle cells (not raw points).
+        above_noise = (height_map - z_ground) > cfg.ignore_noise_m
+        col_has_obs = np.any(above_noise, axis=0) if above_noise.any() else np.array([])
+        obstacle_in_execute = False
+        if col_has_obs.any():
+            occupied = np.where(col_has_obs)[0]
+            cell_size = 0.05
+            leading_forward = cfg.roi_start_m + occupied[0] * cell_size
+            obstacle_in_execute = leading_forward <= cfg.execute_distance_m
+
         # Temporal filter on passable side.
         if not self._last_passable and passable:
             self._stable_count = 1
@@ -331,7 +339,7 @@ class StepOverModule(Module):
 
         # Not passable and stable: block, but only within execute_distance.
         if not passable and self._blocked_count >= cfg.stable_frames_required:
-            if np.any(in_execute_range):
+            if obstacle_in_execute:
                 self._handle_blocked()
 
     def _handle_blocked(self) -> None:
