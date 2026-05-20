@@ -26,6 +26,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector import (
     WavefrontFrontierExplorer,
 )
+from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.patrolling.module import PatrollingModule
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
@@ -39,6 +40,7 @@ unitree_go2 = autoconnect(
     ReplanningAStarPlanner.blueprint(),
     WavefrontFrontierExplorer.blueprint(),
     PatrollingModule.blueprint(),
+    MovementManager.blueprint(),
     GoHome.blueprint(),
     StepOverModule.blueprint(),
 ).global_config(n_workers=10, robot_model="unitree_go2")
@@ -58,6 +60,6 @@ class Go2Memory(Recorder):
 unitree_go2_memory = autoconnect(
     unitree_go2,
     Go2Memory.blueprint(),
-).global_config(n_workers=10)
+).global_config(n_workers=11)
 
 __all__ = ["unitree_go2", "unitree_go2_memory"]
