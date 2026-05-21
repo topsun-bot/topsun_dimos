@@ -43,6 +43,19 @@ MAX_CLICK_HORIZONTAL_M = 500.0
 MAX_CLICK_VERTICAL_M = 50.0
 
 
+def _is_zero_twist(msg: Twist) -> bool:
+    """Return True if all linear and angular components are zero."""
+    return (
+        msg.linear.x == 0.0
+        and msg.linear.y == 0.0
+        and msg.linear.z == 0.0
+        and msg.angular.x == 0.0
+        and msg.angular.y == 0.0
+        and msg.angular.z == 0.0
+    )
+
+
+
 class MovementManagerConfig(ModuleConfig):
     tele_cooldown_sec: float = 1.0
     tele_cmd_vel_scaling: Twist = Twist(Vector3(1, 1, 1), Vector3(1, 1, 1))
@@ -124,7 +137,10 @@ class MovementManager(Module):
             self._teleop_active = True
             self._last_teleop_time = time.monotonic()
 
-        self._cancel_goal()
+        # Only cancel autonomous goals when the operator is actively
+        # commanding a non-zero velocity, not on idle/stop updates.
+        if not _is_zero_twist(msg):
+            self._cancel_goal()
 
         scale = self.config.tele_cmd_vel_scaling
         scaled = Twist(
