@@ -14,10 +14,12 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
-from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
+from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
 
 
 class TrajectoryPathSelector:
@@ -25,13 +27,12 @@ class TrajectoryPathSelector:
 
     def __init__(
         self,
-        grid_lateral_m: float,
-        grid_resolution_m: float,
         preferred_index: int = 0,
+        navigation_map_robot_increase: float = 2.0,
+        **_: object,
     ) -> None:
-        self._half_lateral = grid_lateral_m / 2.0
-        self._resolution_m = grid_resolution_m
         self._preferred_index = preferred_index
+        self._navigation_map_robot_increase = navigation_map_robot_increase
 
     def select_best_index(
         self,
@@ -39,7 +40,7 @@ class TrajectoryPathSelector:
         navigation_map: NavigationMap,
     ) -> int:
         self._validate_trajectories(trajectories)
-        costmap = navigation_map.gradient_costmap
+        costmap = navigation_map.make_gradient_costmap(self._navigation_map_robot_increase)
         costs = [
             self._score_trajectory(trajectory, costmap, index)
             for index, trajectory in enumerate(trajectories)
@@ -51,11 +52,10 @@ class TrajectoryPathSelector:
         trajectory: np.ndarray,
         navigation_map: NavigationMap,
     ) -> float:
-        costmap = navigation_map.gradient_costmap
-        return (
-            self._trajectory_traversability_cost(trajectory, costmap)
-            + self._trajectory_goal_cost(trajectory)
-        )
+        costmap = navigation_map.make_gradient_costmap(self._navigation_map_robot_increase)
+        return self._trajectory_traversability_cost(
+            trajectory, costmap
+        ) + self._trajectory_goal_cost(trajectory)
 
     def is_high_quality(
         self,
@@ -72,10 +72,9 @@ class TrajectoryPathSelector:
         costmap: OccupancyGrid,
         index: int,
     ) -> float:
-        cost = (
-            self._trajectory_traversability_cost(trajectory, costmap)
-            + self._trajectory_goal_cost(trajectory)
-        )
+        cost = self._trajectory_traversability_cost(
+            trajectory, costmap
+        ) + self._trajectory_goal_cost(trajectory)
         return cost + self._preferred_index_bias(index)
 
     def _trajectory_traversability_cost(
@@ -87,8 +86,7 @@ class TrajectoryPathSelector:
         total_cost = 0.0
 
         for x_fwd, y_lat in trajectory:
-            row = int(x_fwd / self._resolution_m)
-            col = int((y_lat + self._half_lateral) / self._resolution_m)
+            row, col = self._costmap_cell(float(x_fwd), float(y_lat), costmap)
             if row < 0 or row >= height or col < 0 or col >= width:
                 total_cost += float(CostValues.OCCUPIED)
                 continue
@@ -97,6 +95,13 @@ class TrajectoryPathSelector:
             total_cost += float(CostValues.OCCUPIED) if cell == CostValues.UNKNOWN else float(cell)
 
         return total_cost / max(len(trajectory), 1)
+
+    @staticmethod
+    def _costmap_cell(x_fwd: float, y_lat: float, costmap: OccupancyGrid) -> tuple[int, int]:
+        origin = costmap.origin.position
+        col = math.floor((x_fwd - origin.x) / costmap.resolution)
+        row = math.floor((y_lat - origin.y) / costmap.resolution)
+        return row, col
 
     def _trajectory_goal_cost(self, trajectory: np.ndarray) -> float:
         """Placeholder for future goal-based path scoring.

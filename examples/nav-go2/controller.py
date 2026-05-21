@@ -21,9 +21,10 @@ import threading
 import time
 from typing import Any, Self
 
+from engine.nomad.config import DEFAULT_NAV_CONFIG
 import numpy as np
-import yaml
 from numpy.typing import NDArray
+import yaml
 
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
@@ -34,8 +35,6 @@ from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.replanning_a_star.controllers import PController
 from dimos.utils.logging_config import setup_logger
-
-from engine.nomad.config import DEFAULT_NAV_CONFIG
 
 logger = setup_logger()
 
@@ -48,12 +47,6 @@ class WaypointFollowerConfig(ModuleConfig):
     control_hz: float = 10.0
     goal_tolerance: float = 0.15
     control_enabled: bool = True
-    # Ignore new local_waypoints until the current path is held long enough and/or
-    # the robot has moved at least this far (dead-reckoned from published cmd_vel).
-    min_path_hold_s: float = 0.25
-    min_path_progress_m: float = 0.08
-    # When true, always accept the latest published local_waypoints.
-    accept_latest_path: bool = True
 
     @classmethod
     def load_default(cls) -> Self:
@@ -65,18 +58,14 @@ class WaypointFollowerConfig(ModuleConfig):
             control_hz=float(raw.get("control_hz", 10.0)),
             goal_tolerance=float(raw.get("goal_tolerance", 0.15)),
             control_enabled=bool(raw.get("control_enabled", True)),
-            min_path_hold_s=float(raw.get("min_path_hold_s", 0.25)),
-            min_path_progress_m=float(raw.get("min_path_progress_m", 0.08)),
-            accept_latest_path=bool(raw.get("accept_latest_path", True)),
         )
 
 
 class WaypointFollowerModule(Module):
     """Track ``local_waypoints`` and command the robot via ``cmd_vel``.
 
-    Paths are in ``base_link`` (egocentric). New paths can arrive faster than the
-    robot moves; :meth:`_should_accept_path` gates updates so the current segment
-    is executed for at least ``min_path_hold_s`` and ``min_path_progress_m``.
+    Paths are in ``base_link`` (egocentric). The latest path is always accepted;
+    the follower dead-reckons the robot pose relative to the accepted path frame.
     """
 
     config: WaypointFollowerConfig
@@ -87,14 +76,11 @@ class WaypointFollowerModule(Module):
         super().__init__(**kwargs)
         self._lock = threading.Lock()
         self._path: Path | None = None
-        self._path_accepted_mono: float = 0.0
-        self._progress_m: float = 0.0
         # Pose of the robot in the path frame (body pose when the path was accepted).
         self._path_frame_x: float = 0.0
         self._path_frame_y: float = 0.0
         self._path_frame_yaw: float = 0.0
-        self._last_cmd: Twist = Twist()
-        self._path_reject_count = 0
+        self._control_count = 0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._controller = PController(
@@ -130,45 +116,21 @@ class WaypointFollowerModule(Module):
         if not path.poses:
             return
         with self._lock:
-            if self._path is not None and not self.config.accept_latest_path:
-                if not self._should_accept_path_locked():
-                    self._path_reject_count += 1
-                    if self._path_reject_count % 20 == 1:
-                        logger.debug(
-                            "Holding current path (hold=%.2fs, progress=%.2fm / %.2fm)",
-                            time.monotonic() - self._path_accepted_mono,
-                            self._progress_m,
-                            self.config.min_path_progress_m,
-                        )
-                    return
             self._path = path
-            self._path_accepted_mono = time.monotonic()
-            self._progress_m = 0.0
             self._path_frame_x = 0.0
             self._path_frame_y = 0.0
             self._path_frame_yaw = 0.0
-            self._path_reject_count = 0
             self._controller.reset_errors()
-
-    def _should_accept_path_locked(self) -> bool:
-        """True if the latched path may be replaced by a newer local_waypoints message."""
-        hold_s = self.config.min_path_hold_s
-        progress_m = self.config.min_path_progress_m
-        if hold_s <= 0.0 and progress_m <= 0.0:
-            return True
-        elapsed = time.monotonic() - self._path_accepted_mono
-        hold_ok = hold_s <= 0.0 or elapsed >= hold_s
-        progress_ok = progress_m <= 0.0 or self._progress_m >= progress_m
-        return hold_ok and progress_ok
 
     def _control_loop(self) -> None:
         interval = 1.0 / max(self.config.control_hz, 1.0)
         while not self._stop_event.wait(interval):
             if not self.config.control_enabled:
                 continue
+            with self._lock:
+                self._control_count += 1
             twist = self._compute_cmd()
             with self._lock:
-                self._last_cmd = twist
                 self._integrate_path_frame_pose(twist, interval)
             self.cmd_vel.publish(twist)
 
@@ -186,7 +148,6 @@ class WaypointFollowerModule(Module):
         self._path_frame_x += dx
         self._path_frame_y += dy
         self._path_frame_yaw += wz * dt
-        self._progress_m += float(np.hypot(dx, dy))
 
     def _compute_cmd(self) -> Twist:
         with self._lock:
@@ -207,7 +168,19 @@ class WaypointFollowerModule(Module):
         if lookahead is None:
             return Twist()
 
-        return self._controller.advance(lookahead, self._path_frame_odom())
+        twist = self._controller.advance(lookahead, self._path_frame_odom())
+        if self._control_count % 10 == 0:
+            logger.info(
+                "WaypointFollower current=(%.2f, %.2f) lookahead=(%.2f, %.2f) "
+                "cmd=(linear.x=%.2f, angular.z=%.2f)",
+                current[0],
+                current[1],
+                lookahead[0],
+                lookahead[1],
+                twist.linear.x,
+                twist.angular.z,
+            )
+        return twist
 
     def _lookahead_point(
         self,
@@ -219,12 +192,10 @@ class WaypointFollowerModule(Module):
         if not points:
             return None
 
-        closest = self._closest_point_on_polyline(current, points)
+        closest, segment_idx = self._closest_point_on_polyline(current, points)
         remaining = distance
-        pos = closest
-        start_idx = int(np.argmin([np.linalg.norm(p - closest) for p in points]))
-        prev = pos
-        for idx in range(start_idx, len(points)):
+        prev = closest
+        for idx in range(segment_idx + 1, len(points)):
             point = points[idx]
             segment = float(np.linalg.norm(point - prev))
             if segment < 1e-6:
@@ -240,9 +211,10 @@ class WaypointFollowerModule(Module):
     def _closest_point_on_polyline(
         current: NDArray[np.float64],
         points: list[NDArray[np.float64]],
-    ) -> NDArray[np.float64]:
+    ) -> tuple[NDArray[np.float64], int]:
         best = points[0]
         best_dist = float(np.linalg.norm(best - current))
+        best_segment_idx = 0
         for i in range(len(points) - 1):
             a, b = points[i], points[i + 1]
             ab = b - a
@@ -256,7 +228,8 @@ class WaypointFollowerModule(Module):
             if dist < best_dist:
                 best_dist = dist
                 best = candidate
-        return best
+                best_segment_idx = i
+        return best, best_segment_idx
 
     def _path_frame_odom(self) -> PoseStamped:
         """Robot pose in the latched path frame (same frame as ``local_waypoints``)."""

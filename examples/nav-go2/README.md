@@ -6,20 +6,25 @@ Go2 navigation experiments on DimOS: subscribe to live `color_image`, run [NoMaD
 
 ```
 unitree_go2_basic
+    lidar  ──► VoxelGridMapper ──► CostMapper ──► global_costmap
+                                                   │
     color_image  ──►  NoMaDTrajectoryLocalPlannerModule
                            │
-                           ├─ TrajectoryLocalPlannerModule (shared DimOS I/O + route selection)
                            ├─ NoMaDEngine (goal-masked diffusion, N samples)
+                           ├─ LocalNavigationMapModule (global_costmap-backed route scoring)
                            ├─ local_waypoints  (Path, base_link)
                            │       └─► WaypointFollowerModule ──► cmd_vel ──► Go2
+                           ├─ odom_waypoints  (Path, odom by default)
                            ├─ candidate_paths  (list[Path], all samples)
-                           └─ traversability_map  (OccupancyGrid, base_link)
+                           └─ traversability_map  (OccupancyGrid, base_link, debug)
 ```
 
 | Stream | Type | Description |
 |--------|------|-------------|
 | `color_image` | `sensor_msgs.Image` | RGB from Go2 (auto-connected) |
+| `global_costmap` | `nav_msgs.OccupancyGrid` | Costmap for `LocalNavigationMapModule` trajectory scoring |
 | `local_waypoints` | `nav_msgs.Path` | Selected egocentric local route in `base_link` |
+| `odom_waypoints` | `nav_msgs.Path` | Selected route transformed into `waypoints_output_frame_id` (`odom` by default) |
 | `cmd_vel` | `geometry_msgs.Twist` | Velocity commands from `WaypointFollowerModule` |
 | `candidate_paths` | `list[nav_msgs.Path]` | All diffusion trajectory samples in `base_link` |
 | `traversability_map` | `nav_msgs.OccupancyGrid` | Debug egocentric traversability in `base_link` |
@@ -84,20 +89,23 @@ run ...`. The `--simulation` flag maps the Go2 connection to MuJoCo.
 |------|------|
 | `go2_nomad_nav.py` | Blueprint entry script and argument parsing (`NavGo2RunConfig`) |
 | `config/nomad_nav.yaml` | NoMaD paths, inference, and follower (`control_*`) settings |
-| `controller.py` | Pure-pursuit follower: `local_waypoints` → `cmd_vel` (path update gating) |
-| `trajectory_local_planner_module.py` | Shared DimOS `Module` (subscribe/select/publish/debug-rasterize) |
+| `controller.py` | Pure-pursuit follower: `local_waypoints` → `cmd_vel` |
+| `local_navigation_map_module.py` | Subscribes to `global_costmap`, scores trajectories via `NavigationMap` |
+| `multi_waypoints_selector.py` | Standalone K-Means + lidar selector (not wired in `go2_nomad_nav.py`) |
+| `trajectory_local_planner_module.py` | Shared planner: camera in, RPC to `LocalNavigationMapModule`, publish waypoints |
 | `engine/nomad/local_planner_module.py` | NoMaD adapter for `TrajectoryLocalPlannerModule` |
 | `engine/nomad/inference.py` | NoMaD exploration inference wrapper |
 | `engine/nomad/config.py` | NoMaD paths and inference parameters |
 | `trajectory_inference.py` | Shared trajectory model result/protocol utilities |
-| `trajectory_planner_config.py` | Shared local planner/debug-map config |
 | `traversability_grid.py` | Trajectory samples → `OccupancyGrid` |
 
 ## How traversability is derived
 
 NoMaD exploration mode (see upstream `deployment/src/explore.py`) samples `num_samples` future trajectories in the robot body frame. Cells along those polylines receive votes; higher agreement → lower cost (more traversable).
 
-This is a **local, vision-based** traversability estimate — complementary to lidar `CostMapper` maps in `dimos/mapping/`.
+This debug grid is a **local, vision-based** traversability estimate. Candidate
+route selection uses the lidar-backed `global_costmap` through
+`LocalNavigationMapModule` and DimOS `NavigationMap`.
 
 ## Adding another trajectory model
 

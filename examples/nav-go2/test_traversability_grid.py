@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+import sys
+
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 from traversability_grid import rasterize_trajectories_to_costmap
 
 
 def test_rasterize_fan_of_trajectories() -> None:
-    # Eight straight-ahead trajectories -> center column should be free (0)
+    # Eight forward trajectories should mark sampled cells as more traversable.
     angles = np.linspace(-0.3, 0.3, 8)
     steps = 5
     trajs = []
@@ -37,5 +42,23 @@ def test_rasterize_fan_of_trajectories() -> None:
 
     assert grid.frame_id == "base_link"
     assert grid.grid.shape == (20, 20)
+    assert 0 <= int(grid.grid.min()) < 100
+
+
+def test_rasterize_clamps_cells_with_repeated_votes() -> None:
+    trajectories = np.array(
+        [
+            [[0.5, 0.0], [0.5, 0.0], [0.5, 0.0]],
+            [[0.5, 0.0], [0.5, 0.0], [0.5, 0.0]],
+        ],
+        dtype=np.float64,
+    )
+
+    grid = rasterize_trajectories_to_costmap(
+        trajectories,
+        forward_m=1.0,
+        lateral_m=1.0,
+        resolution_m=0.1,
+    )
+
     assert int(grid.grid.min()) == 0
-    assert int(grid.grid[5, 10]) == 0

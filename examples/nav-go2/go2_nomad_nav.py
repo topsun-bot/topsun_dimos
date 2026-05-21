@@ -26,13 +26,18 @@ import sys
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.global_config import global_config
+from dimos.mapping.costmapper import CostMapper
+from dimos.mapping.voxels import VoxelGridMapper
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from controller import WaypointFollowerConfig, WaypointFollowerModule
-from dimos.mapping.costmapper import CostMapper
 from engine.nomad import NoMaDConfig, NoMaDTrajectoryLocalPlannerModule
+from local_navigation_map_module import (
+    LocalNavigationMapConfig,
+    LocalNavigationMapModule,
+)
 
 
 @dataclass(frozen=True)
@@ -106,21 +111,6 @@ def parse_nav_go2_config(argv: list[str] | None = None) -> NavGo2RunConfig:
     )
 
 
-def print_run_summary(config: NavGo2RunConfig) -> None:
-    print("Blueprint: unitree_go2_basic + NoMaDTrajectoryLocalPlannerModule")
-    print("  In:  color_image (from Go2 connection)")
-    print("  Out: local_waypoints (base_link Path)")
-    print("  Out: candidate_paths (list[Path], all diffusion samples)")
-    print("  Follower: local_waypoints -> cmd_vel (WaypointFollowerModule)")
-    print("  Debug: traversability_map (base_link OccupancyGrid, 0=traversable)")
-    if config.nomad_config.visualnav_root:
-        print(f"  VISUALNAV_ROOT: {config.nomad_config.visualnav_root}")
-    ckpt = config.nomad_config.resolved_checkpoint()
-    if ckpt:
-        print(f"  checkpoint: {ckpt}")
-    print()
-
-
 def _apply_viewer_cli(viewer: str) -> None:
     """Map legacy ``rerun-web`` to GlobalConfig viewer + rerun_web."""
     if viewer == "rerun-web":
@@ -134,20 +124,27 @@ def run(config: NavGo2RunConfig) -> None:
     if config.viewer:
         _apply_viewer_cli(config.viewer)
 
-    print_run_summary(config)
     follower_config = WaypointFollowerConfig.load_default()
+    local_map_config = LocalNavigationMapConfig.model_validate(
+        config.nomad_config.model_dump(
+            include={
+                "trajectory_frame_id",
+                "selected_trajectory_index",
+                "navigation_map_gradient_strategy",
+                "navigation_map_robot_increase",
+                "local_map_max_age_s",
+            }
+        )
+    )
     blueprint = autoconnect(
         unitree_go2_basic,
+        VoxelGridMapper.blueprint(),
         CostMapper.blueprint(),
+        LocalNavigationMapModule.blueprint(**local_map_config.model_dump()),
         NoMaDTrajectoryLocalPlannerModule.blueprint(**config.nomad_config.model_dump()),
         WaypointFollowerModule.blueprint(**follower_config.model_dump()),
-    ).remappings(
-        [
-            (CostMapper, "global_map", "lidar"),
-            (CostMapper, "global_costmap", "navigation_costmap"),
-        ]
     ).global_config(
-        n_workers=4,
+        n_workers=6,
         robot_model="unitree_go2",
         robot_ip=config.robot_ip,
     )

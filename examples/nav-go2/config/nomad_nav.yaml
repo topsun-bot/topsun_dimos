@@ -6,7 +6,13 @@ checkpoint_path: ../models/nomad/nomad.pth
 model_config_path: null
 
 num_samples: 8
-inference_hz: 1.0
+inference_hz: 2.0
+
+# Candidate route scoring uses DimOS NavigationMap. Larger values inflate
+# obstacles more and make trajectories farther from obstacles score better.
+selected_trajectory_index: 4
+navigation_map_robot_increase: 2.0
+local_map_max_age_s: 0.5
 
 # WaypointFollower (controller.py) — set control_enabled: false for viz-only runs
 control_enabled: true
@@ -14,6 +20,3 @@ control_speed: 0.4
 lookahead_distance: 0.5
 control_hz: 10.0
 goal_tolerance: 0.15
-# Latch path until hold time and estimated travel are met (0 = accept every message)
-min_path_hold_s: 0.25
-min_path_progress_m: 0.08

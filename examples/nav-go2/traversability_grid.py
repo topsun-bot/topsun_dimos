@@ -55,13 +55,14 @@ def rasterize_trajectories_to_costmap(
         raise ValueError(f"Expected (N, T, 2) trajectories, got {trajectories.shape}")
 
     num_samples = max(trajectories.shape[0], 1)
-    width = max(int(round(lateral_m / resolution_m)), 1)
-    height = max(int(round(forward_m / resolution_m)), 1)
+    width = max(round(lateral_m / resolution_m), 1)
+    height = max(round(forward_m / resolution_m), 1)
 
     votes = np.zeros((height, width), dtype=np.int32)
     half_lateral = lateral_m / 2.0
 
     for traj in trajectories:
+        visited_cells: set[tuple[int, int]] = set()
         for x_fwd, y_lat in traj:
             if x_fwd < 0 or x_fwd > forward_m:
                 continue
@@ -70,7 +71,9 @@ def rasterize_trajectories_to_costmap(
             row = int(x_fwd / resolution_m)
             col = int((y_lat + half_lateral) / resolution_m)
             if 0 <= row < height and 0 <= col < width:
-                votes[row, col] += 1
+                visited_cells.add((row, col))
+        for row, col in visited_cells:
+            votes[row, col] += 1
 
     grid = np.full((height, width), CostValues.UNKNOWN, dtype=np.int8)
 
@@ -79,9 +82,9 @@ def rasterize_trajectories_to_costmap(
             if votes[row, col] == 0:
                 grid[row, col] = CostValues.OCCUPIED
                 continue
-            ratio = votes[row, col] / num_samples
+            ratio = min(1.0, votes[row, col] / num_samples)
             # ROS convention: 0 = free, 100 = lethal
-            grid[row, col] = np.int8(min(99, round(99 * (1.0 - ratio))))
+            grid[row, col] = np.int8(round(99 * (1.0 - ratio)))
 
     origin = Pose(
         position=[-half_lateral, 0.0, 0.0],

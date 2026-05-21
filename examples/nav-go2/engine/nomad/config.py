@@ -20,9 +20,8 @@ import os
 from pathlib import Path
 from typing import Any, Self
 
+from trajectory_local_planner_module import TrajectoryLocalPlannerConfig
 import yaml
-
-from trajectory_planner_config import TrajectoryLocalPlannerConfig
 
 NAV_GO2_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_NAV_CONFIG = NAV_GO2_ROOT / "config" / "nomad_nav.yaml"
