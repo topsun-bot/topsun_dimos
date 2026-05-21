@@ -54,9 +54,9 @@ jobs:
       - name: Fast tests
         run: |
           if [ -d tests ]; then
-            python3 -m pytest tests/ -v --tb=short -m "not slow" --timeout=30 --noconftest
+            python3 -m pytest tests/ dimos/ -v --tb=short -m "not slow" --timeout=30 -p no:cacheprovider --noconftest
           else
-            echo "no top-level tests/ dir on this branch — skipping pytest"
+            python3 -m pytest dimos/ -v --tb=short -m "not slow" --timeout=30 -p no:cacheprovider --noconftest
           fi
 
       - name: Request @codex review (advisory)
@@ -117,18 +117,29 @@ jobs:
               await new Promise(r => setTimeout(r, 20000));
             }
 
-            // Final fetch of state
-            const [{ data: final }, { data: comments }, { data: reviews }] = await Promise.all([
+            // Final fetch of state (with pagination for review comments).
+            const [{ data: final }, { data: reviews }] = await Promise.all([
               github.rest.checks.listForRef({
                 owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100,
-              }),
-              github.rest.pulls.listReviewComments({
-                owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
               }),
               github.rest.pulls.listReviews({
                 owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
               }),
             ]);
+
+            // Paginate through all review comments.
+            let allComments = [];
+            let page = 1;
+            while (true) {
+              const { data: pageComments } = await github.rest.pulls.listReviewComments({
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
+                per_page: 100, page,
+              });
+              allComments = allComments.concat(pageComments);
+              if (pageComments.length < 100) break;
+              page++;
+            }
+            const comments = allComments;
 
             const others = final.check_runs.filter(r => r.name !== SELF);
             const bad    = others.filter(r => !['success', 'skipped', 'neutral'].includes(r.conclusion));
@@ -169,6 +180,13 @@ jobs:
                   issue_number: pr.number, body: lines.join('\n'),
                 });
               } catch (e) { core.warning(`summary post failed: ${e.message}`); }
+            }
+
+            // Require Codex review to have arrived; don't merge if it timed out.
+            const codexArrived = reviews.some(r => r.user.login === CODEX && r.commit_id === headSha);
+            if (!codexArrived) {
+              core.info('not merging — Codex review did not arrive for this HEAD.');
+              return;
             }
 
             if (counts.P0 + counts.P1 > 0) {
