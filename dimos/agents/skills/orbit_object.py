@@ -240,8 +240,10 @@ class OrbitObjectSkillContainer(Module):
     cmd_vel: Out[Twist]
     stop_movement: Out[Bool]
 
-    _KP_DISTANCE: float = 0.8
-    _KP_YAW: float = 0.5
+    _KP_DISTANCE: float = 0.5
+    _KP_YAW: float = 0.15
+    _MAX_ANGULAR_Z: float = 0.15
+    _FACE_THRESHOLD: float = 0.524  # ~30 degrees
     _CONTROL_HZ: float = 10.0
     _SEARCH_RADIUS: float = 3.0
     _MIN_DISTANCE: float = 0.2
@@ -446,25 +448,20 @@ class OrbitObjectSkillContainer(Module):
                 self._finish_orbit("Too far from obstacle — edge lost.")
                 return
 
-            v_radial = self._KP_DISTANCE * (distance - d)
-
-            normal = edge.normal
-            tangent = np.array([-normal[1], normal[0]])
-            if clockwise:
-                tangent = -tangent
-
-            v_world = v_radial * normal + speed * tangent
-
-            cos_yaw = math.cos(robot_yaw)
-            sin_yaw = math.sin(robot_yaw)
-            vx_body = cos_yaw * v_world[0] + sin_yaw * v_world[1]
-            vy_body = -sin_yaw * v_world[0] + cos_yaw * v_world[1]
-
             theta = math.atan2(
                 edge.point[1] - robot_xy[1],
                 edge.point[0] - robot_xy[0],
             )
-            angular_z = self._KP_YAW * _angle_diff(theta, robot_yaw)
+            face_err_rad = _angle_diff(theta, robot_yaw)
+            angular_z = self._KP_YAW * face_err_rad
+            angular_z = max(-self._MAX_ANGULAR_Z, min(self._MAX_ANGULAR_Z, angular_z))
+
+            if abs(face_err_rad) < self._FACE_THRESHOLD:
+                vx_body = max(-0.3, min(0.3, self._KP_DISTANCE * (d - distance)))
+                vy_body = speed * (1 if not clockwise else -1)
+            else:
+                vx_body = 0.0
+                vy_body = 0.0
 
             twist = Twist(
                 linear=Vector3(vx_body, vy_body, 0.0),
