@@ -91,8 +91,8 @@ run ...`. The `--simulation` flag maps the Go2 connection to MuJoCo.
 | `config/nomad_nav.yaml` | NoMaD paths, inference, and follower (`control_*`) settings |
 | `controller.py` | Pure-pursuit follower: `local_waypoints` → `cmd_vel` |
 | `local_navigation_map_module.py` | Subscribes to `global_costmap`, scores trajectories via `NavigationMap` |
-| `multi_waypoints_selector.py` | Standalone K-Means + lidar selector (not wired in `go2_nomad_nav.py`) |
-| `trajectory_local_planner_module.py` | Shared planner: camera in, RPC to `LocalNavigationMapModule`, publish waypoints |
+| `multi_waypoints_selector.py` | K-Means + lidar selector used when `waypoint_selection: multi_waypoints` |
+| `trajectory_local_planner_module.py` | Planner module; dispatches selection via `waypoint_selection` config |
 | `engine/nomad/local_planner_module.py` | NoMaD adapter for `TrajectoryLocalPlannerModule` |
 | `engine/nomad/inference.py` | NoMaD exploration inference wrapper |
 | `engine/nomad/config.py` | NoMaD paths and inference parameters |
@@ -103,9 +103,24 @@ run ...`. The `--simulation` flag maps the Go2 connection to MuJoCo.
 
 NoMaD exploration mode (see upstream `deployment/src/explore.py`) samples `num_samples` future trajectories in the robot body frame. Cells along those polylines receive votes; higher agreement → lower cost (more traversable).
 
-This debug grid is a **local, vision-based** traversability estimate. Candidate
-route selection uses the lidar-backed `global_costmap` through
-`LocalNavigationMapModule` and DimOS `NavigationMap`.
+This debug grid is a **local, vision-based** traversability estimate.
+
+**Waypoint selection** (`config/nomad_nav.yaml` → `waypoint_selection`):
+
+| Mode | Value | Stack | Method |
+|------|-------|-------|--------|
+| Costmap (default) | `navigation_map` | lidar → VoxelGrid → CostMapper → `LocalNavigationMapModule` | DimOS `NavigationMap` scoring |
+| Lidar bundle | `multi_waypoints` | `unitree_go2_basic` + planner only | `MultiWaypointsSelector` (K-Means + lidar + memory) |
+
+```yaml
+# costmap scoring (default)
+waypoint_selection: navigation_map
+
+# or live lidar selector (no mapping modules)
+waypoint_selection: multi_waypoints
+collision_thresh: 0.25
+memory_decay: 0.8
+```
 
 ## Adding another trajectory model
 

@@ -120,34 +120,50 @@ def _apply_viewer_cli(viewer: str) -> None:
         global_config.viewer = viewer
 
 
+def _build_blueprint(config: NavGo2RunConfig):
+    """Compose stack from ``waypoint_selection`` in nomad config."""
+    follower_config = WaypointFollowerConfig.load_default()
+    modules: list = [unitree_go2_basic]
+
+    if config.nomad_config.waypoint_selection == "navigation_map":
+        local_map_config = LocalNavigationMapConfig.model_validate(
+            config.nomad_config.model_dump(
+                include={
+                    "trajectory_frame_id",
+                    "selected_trajectory_index",
+                    "navigation_map_gradient_strategy",
+                    "navigation_map_robot_increase",
+                    "local_map_max_age_s",
+                }
+            )
+        )
+        modules.extend(
+            [
+                VoxelGridMapper.blueprint(),
+                CostMapper.blueprint(),
+                LocalNavigationMapModule.blueprint(**local_map_config.model_dump()),
+            ]
+        )
+
+    modules.extend(
+        [
+            NoMaDTrajectoryLocalPlannerModule.blueprint(**config.nomad_config.model_dump()),
+            WaypointFollowerModule.blueprint(**follower_config.model_dump()),
+        ]
+    )
+    n_workers = 6 if config.nomad_config.waypoint_selection == "navigation_map" else 4
+    return autoconnect(*modules).global_config(
+        n_workers=n_workers,
+        robot_model="unitree_go2",
+        robot_ip=config.robot_ip,
+    )
+
+
 def run(config: NavGo2RunConfig) -> None:
     if config.viewer:
         _apply_viewer_cli(config.viewer)
 
-    follower_config = WaypointFollowerConfig.load_default()
-    local_map_config = LocalNavigationMapConfig.model_validate(
-        config.nomad_config.model_dump(
-            include={
-                "trajectory_frame_id",
-                "selected_trajectory_index",
-                "navigation_map_gradient_strategy",
-                "navigation_map_robot_increase",
-                "local_map_max_age_s",
-            }
-        )
-    )
-    blueprint = autoconnect(
-        unitree_go2_basic,
-        VoxelGridMapper.blueprint(),
-        CostMapper.blueprint(),
-        LocalNavigationMapModule.blueprint(**local_map_config.model_dump()),
-        NoMaDTrajectoryLocalPlannerModule.blueprint(**config.nomad_config.model_dump()),
-        WaypointFollowerModule.blueprint(**follower_config.model_dump()),
-    ).global_config(
-        n_workers=6,
-        robot_model="unitree_go2",
-        robot_ip=config.robot_ip,
-    )
+    blueprint = _build_blueprint(config)
     ModuleCoordinator.build(blueprint).loop()
 
 

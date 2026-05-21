@@ -8,11 +8,20 @@ model_config_path: null
 num_samples: 8
 inference_hz: 2.0
 
-# Candidate route scoring uses DimOS NavigationMap. Larger values inflate
-# obstacles more and make trajectories farther from obstacles score better.
+# Waypoint selection: navigation_map | multi_waypoints
+waypoint_selection: navigation_map
+
+# navigation_map — needs VoxelGridMapper + CostMapper + LocalNavigationMapModule
 selected_trajectory_index: 4
 navigation_map_robot_increase: 2.0
 local_map_max_age_s: 0.5
+
+# multi_waypoints — K-Means + live lidar + temporal memory (no costmap stack)
+# collision_thresh: 0.25
+# memory_decay: 0.8
+# max_clusters: 2
+# lidar_max_range_m: 5.0
+# lidar_max_age_s: 0.5
 
 # WaypointFollower (controller.py) — set control_enabled: false for viz-only runs
 control_enabled: true
