@@ -98,7 +98,12 @@ class RerunWebSocketServer(Module):
         super().start()
         assert self._loop is not None
         asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
-        self._server_ready.wait()
+        if not self._server_ready.wait(timeout=10.0):
+            logger.error(
+                f"RerunWebSocketServer failed to bind {self.host}:{self.port} "
+                f"(port in use or network error)"
+            )
+            return
 
     @rpc
     def stop(self) -> None:
