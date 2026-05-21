@@ -176,6 +176,21 @@ class VisualMemory:
             logger.error(f"Failed to load visual memory: {e!s}")
             return instance
 
+    def remove(self, image_id: str) -> bool:
+        """Remove a single image from memory.
+
+        Args:
+            image_id: Unique identifier for the image
+
+        Returns:
+            True if the image was removed, False if it was not present
+        """
+        if image_id not in self.images:
+            return False
+        del self.images[image_id]
+        logger.debug(f"Removed image {image_id} from visual memory")
+        return True
+
     def clear(self) -> None:
         """Clear all images from memory."""
         self.images = {}

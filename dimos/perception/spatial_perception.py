@@ -58,6 +58,7 @@ class SpatialConfig(ModuleConfig):
     embedding_dimensions: int = 512
     min_distance_threshold: float = 0.01  # Min distance in meters to store a new frame
     min_time_threshold: float = 1.0  # Min time in seconds to record a new frame
+    max_stored_frames: int = 500  # FIFO cap on stored frames (0 = unlimited)
     db_path: str | None = str(_DB_PATH)  # Path for ChromaDB persistence
     visual_memory_path: str | None = str(
         _VISUAL_MEMORY_PATH
@@ -159,11 +160,14 @@ class SpatialMemory(Module):
             model_name=self.embedding_model, dimensions=self.embedding_dimensions
         )
 
+        self.max_stored_frames = self.config.max_stored_frames
+
         self.vector_db: SpatialVectorDB = SpatialVectorDB(
             collection_name=self.collection_name,
             chroma_client=self._chroma_client,
             visual_memory=self._visual_memory,
             embedding_provider=self.embedding_provider,
+            max_stored_frames=self.max_stored_frames,
         )
 
         self.last_position: Vector3 | None = None
@@ -556,7 +560,12 @@ class SpatialMemory(Module):
                 - frame_count: Total number of frames processed
                 - stored_frame_count: Number of frames actually stored
         """
-        return {"frame_count": self.frame_count, "stored_frame_count": self.stored_frame_count}
+        return {
+            "frame_count": self.frame_count,
+            "stored_frame_count": self.stored_frame_count,
+            "retained_frame_count": len(self.vector_db._frame_ids),
+            "max_stored_frames": self.max_stored_frames,
+        }
 
     @rpc
     def tag_location(self, robot_location: RobotLocation) -> bool:

@@ -18,6 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import field
+from datetime import datetime
+import os
+from pathlib import Path
 import signal
 import socket
 import subprocess
@@ -181,6 +184,14 @@ class Config(ModuleConfig):
     web_port: int = RERUN_WEB_VIEWER_PORT
     blueprint: BlueprintFactory | None = _default_blueprint
 
+    # When True, the bridge also writes everything it logs to a local .rrd file.
+    # The file lives for the lifetime of this run; replay it later with
+    # ``rerun <file>.rrd`` or ``dimos-viewer <file>.rrd``. The live in-memory
+    # buffer is still subject to ``memory_limit`` — saving to disk is an
+    # additional sink, not a replacement.
+    save_to_disk: bool = False
+    save_dir: str = "~/.local/share/dimos/rrd"
+
 
 Config.model_rebuild(_types_namespace={"Archetype": Archetype, "Blueprint": Blueprint})
 
@@ -318,6 +329,9 @@ class RerunBridgeModule(Module):
         )
         assert server_uri is not None  # start_grpc=True guarantees a URI
 
+        if self.config.save_to_disk:
+            self._enable_disk_sink()
+
         parsed = urlparse(connect_url.replace("rerun+", "", 1))
         grpc_port = parsed.port or RERUN_GRPC_PORT
 
@@ -392,6 +406,38 @@ class RerunBridgeModule(Module):
                 self.register_disposable(Disposable(pubsub.stop))  # type: ignore[union-attr]
 
         self._log_static()
+
+    def _enable_disk_sink(self) -> None:
+        """Add a .rrd file sink so the recording is persisted to disk.
+
+        Coexists with the live gRPC server — both receive every ``rr.log()``.
+        Saving does NOT relieve memory pressure (the in-memory ring buffer is
+        still bounded by ``memory_limit``); it only lets you replay the run
+        later with ``rerun <file>.rrd``.
+        """
+        save_dir = Path(os.path.expanduser(self.config.save_dir))
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning(
+                f"Could not create rerun save dir {save_dir!r}, skipping disk sink",
+                exc_info=True,
+            )
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = save_dir / f"dimos_{timestamp}.rrd"
+
+        try:
+            rr.save(str(save_path))
+        except Exception:
+            logger.warning(
+                f"Failed to enable rerun disk sink at {save_path}", exc_info=True
+            )
+            return
+
+        self._save_path = save_path
+        logger.info(f"Rerun bridge also writing to {save_path}")
 
     def _log_connect_hints(self, grpc_port: int) -> None:
         """Log CLI commands for connecting a viewer to this bridge."""
