@@ -133,14 +133,16 @@ class MovementManager(Module):
             self.cmd_vel.publish(msg)
 
     def _on_teleop(self, msg: Twist) -> None:
+        # Ignore idle/stop zero-velocity updates so they don't cancel
+        # autonomous goals or refresh the teleop cooldown timer.
+        if _is_zero_twist(msg):
+            return
+
         with self._lock:
             self._teleop_active = True
             self._last_teleop_time = time.monotonic()
 
-        # Only cancel autonomous goals when the operator is actively
-        # commanding a non-zero velocity, not on idle/stop updates.
-        if not _is_zero_twist(msg):
-            self._cancel_goal()
+        self._cancel_goal()
 
         scale = self.config.tele_cmd_vel_scaling
         scaled = Twist(
