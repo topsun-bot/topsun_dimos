@@ -60,11 +60,15 @@ def _run(config: GlobalConfig, shm: ShmReader) -> None:
     mj_model = mujoco.MjModel.from_xml_path(str(scene_path))
     mj_data = mujoco.MjData(mj_model)
 
+    if mj_model.nkey > 0:
+        mujoco.mj_resetDataKeyframe(mj_model, mj_data, 0)
     pos = config.mujoco_start_pos_float
     mj_data.qpos[0] = pos[0]
     mj_data.qpos[1] = pos[1]
-    mj_data.qpos[2] = 0.27
-    mujoco.mj_forward(mj_model, mj_data)
+    room = (config.mujoco_room or "").strip().lower()
+    if room in ("stairs", "scene_stairs", "stair"):
+        mj_data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+    mj_data.qvel[:] = 0.0
 
     controller = MockController(shm)
 
@@ -73,7 +77,17 @@ def _run(config: GlobalConfig, shm: ShmReader) -> None:
     ChannelFactoryInitialize(UNITREE_DDS_DOMAIN_ID, UNITREE_DDS_INTERFACE)
 
     bridge = DimosUnitreeBridge(mj_model, mj_data, controller, policy_path)
-    perception = MujocoPerceptionPublisher(mj_model, shm, lidar_fps=UNITREE_LIDAR_FPS)
+    perception = MujocoPerceptionPublisher(
+        mj_model,
+        shm,
+        lidar_fps=UNITREE_LIDAR_FPS,
+        prefer_raycast_lidar=True,
+    )
+
+    for _ in range(250):
+        bridge.apply_locomotion()
+        mujoco.mj_step(mj_model, mj_data)
+    mujoco.mj_forward(mj_model, mj_data)
 
     viewer = mujoco.viewer.launch_passive(mj_model, mj_data)
     shm.signal_ready()

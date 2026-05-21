@@ -123,4 +123,15 @@ def plan_in_corridor(
             )
         )
 
+    if poses and start.distance(poses[0].position) > 0.25:
+        poses.insert(
+            0,
+            PoseStamped(
+                ts=ts,
+                frame_id=frame_id,
+                position=Vector3(start.x, start.y, start.z),
+                orientation=poses[0].orientation,
+            ),
+        )
+
     return Path(ts=ts, frame_id=frame_id, poses=poses)

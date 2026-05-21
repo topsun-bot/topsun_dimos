@@ -76,6 +76,28 @@ const VisualizerComponent: React.FC<VisualizerComponentProps> = ({ costmap, robo
     return { worldToPx: worldToPxFn };
   }, [costmap, width, height]);
 
+  if (!costmap) {
+    return (
+      <div
+        className="visualizer-container"
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#1a1a2e",
+          color: "#b8b8d0",
+          fontSize: 16,
+          textAlign: "center",
+          padding: 24,
+        }}
+      >
+        等待代价地图…请确认 dimos 已启动且仿真正在发布激光/里程计（约 10–30 秒）。
+      </div>
+    );
+  }
+
   return (
     <div className="visualizer-container" style={{ width: "100%", height: "100%" }}>
       <svg
@@ -89,7 +111,7 @@ const VisualizerComponent: React.FC<VisualizerComponentProps> = ({ costmap, robo
           pointerEvents: "none",
         }}
       >
-        {costmap && <CostmapLayer costmap={costmap} width={width} height={height} />}
+        <CostmapLayer costmap={costmap} width={width} height={height} />
         {path && worldToPx && <PathLayer path={path} worldToPx={worldToPx} />}
         {robotPose && worldToPx && (
           <VectorLayer vector={robotPose} label="robot" worldToPx={worldToPx} />

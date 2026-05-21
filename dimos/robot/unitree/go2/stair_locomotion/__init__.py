@@ -14,10 +14,12 @@
 
 from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
 from dimos.robot.unitree.go2.stair_locomotion.locomotion_policy import StairLocomotionPolicy
+from dimos.robot.unitree.go2.stair_locomotion.sport_actions import API_WALK_STAIR
 from dimos.robot.unitree.go2.stair_locomotion.sport_api import Go2StairSportController
 from dimos.robot.unitree.go2.stair_locomotion.twist_limiter import apply_stair_twist_limit
 
 __all__ = [
+    "API_WALK_STAIR",
     "Go2StairSportController",
     "StairLocomotionConfig",
     "StairLocomotionPolicy",

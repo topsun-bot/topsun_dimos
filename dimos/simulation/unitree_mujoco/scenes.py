@@ -26,11 +26,14 @@ _DIMOS_STAIRS_SCENE = Path(__file__).parent / "scenes" / "scene_dimos_stairs.xml
 
 def resolve_robot_scene(cfg: GlobalConfig) -> Path:
     """Pick a scene file under ``third_party/unitree_mujoco`` or DimOS stairs overlay."""
+    from dimos.simulation.mujoco.build_scene_stairs import build_unitree_scene_dimos_stairs_xml
+
     root = unitree_mujoco_root()
     go2_dir = root / "unitree_robots" / "go2"
 
     room = (cfg.mujoco_room or "").strip().lower()
     if room in ("stairs", "scene_stairs", "stair"):
+        build_unitree_scene_dimos_stairs_xml(force=False)
         if _DIMOS_STAIRS_SCENE.is_file():
             return _DIMOS_STAIRS_SCENE
         terrain = go2_dir / "scene_terrain.xml"

@@ -134,8 +134,12 @@ class MujocoConnection:
 
         # Launch the subprocess
         try:
-            # mjpython must be used macOS (because of launch_passive inside mujoco_process.py)
-            executable = sys.executable if sys.platform != "darwin" else "mjpython"
+            # mjpython must be used on macOS (launch_passive in the sim subprocess).
+            if sys.platform == "darwin":
+                venv_mjpython = Path(sys.executable).resolve().parent / "mjpython"
+                executable = str(venv_mjpython) if venv_mjpython.is_file() else "mjpython"
+            else:
+                executable = sys.executable
 
             self.process = subprocess.Popen(
                 [executable, str(self._launcher_path), config_pickle, shm_names_json],
@@ -395,6 +399,8 @@ class MujocoConnection:
         linear = np.array([twist.linear.x, twist.linear.y, twist.linear.z], dtype=np.float32)
         angular = np.array([twist.angular.x, twist.angular.y, twist.angular.z], dtype=np.float32)
         self.shm_data.write_command(linear, angular)
+        if abs(float(linear[0])) > 0.05:
+            logger.debug("MuJoCo cmd SHM", vx=round(float(linear[0]), 3))
 
         if duration > 0:
             if self._stop_timer:

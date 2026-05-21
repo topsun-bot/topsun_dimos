@@ -33,7 +33,10 @@ def apply_stair_twist_limit(
     lin_x = twist.linear.x
     if on_stair:
         if lin_x >= 0:
-            lin_x = max(config.min_linear_x, min(config.max_linear_x, lin_x))
+            if lin_x > 1e-4:
+                lin_x = max(config.min_linear_x, min(config.max_linear_x, lin_x))
+            else:
+                lin_x = min(config.max_linear_x, lin_x)
         else:
             lin_x = -max(config.min_linear_x, min(config.max_linear_x, abs(lin_x)))
         return Twist(

@@ -128,7 +128,7 @@ def clear_corridor_in_costmap(
     costmap: OccupancyGrid,
     corridor: StairCorridor,
     *,
-    margin_m: float = 0.2,
+    margin_m: float = 0.4,
 ) -> OccupancyGrid:
     """Mark stair corridor cells as free so goals and local clearance treat stairs as traversable."""
     cleared = costmap.copy()

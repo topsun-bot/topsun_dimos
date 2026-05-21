@@ -161,7 +161,13 @@ class McpClient(Module):
                     return None
                 time.sleep(interval)
 
-        return self._mcp_request("tools/list")
+        while True:
+            result = self._mcp_request("tools/list")
+            if result.get("tools"):
+                return result
+            if time.monotonic() >= deadline:
+                return result
+            time.sleep(interval)
 
     def _mcp_tool_to_langchain(self, mcp_tool: dict[str, Any]) -> StructuredTool:
         name = mcp_tool["name"]

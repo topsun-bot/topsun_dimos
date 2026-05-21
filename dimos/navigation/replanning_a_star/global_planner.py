@@ -30,7 +30,11 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.base import NavigationState
-from dimos.navigation.replanning_a_star.goal_validator import find_safe_goal
+from dimos.navigation.replanning_a_star.goal_validator import (
+    clamp_goal_to_costmap,
+    find_safe_goal,
+    goal_inside_costmap,
+)
 from dimos.navigation.replanning_a_star.local_planner import LocalPlanner, StopMessage
 from dimos.navigation.replanning_a_star.min_cost_astar import min_cost_astar
 from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
@@ -284,7 +288,9 @@ class GlobalPlanner(Resource):
                 continue
 
             if (
-                current_goal.position.distance(current_odom.position) < self._goal_tolerance
+                not self._local_planner.is_stair_climbing()
+                and not self._following_stair_path
+                and current_goal.position.distance(current_odom.position) < self._goal_tolerance
                 and abs(
                     angle_diff(current_goal.orientation.euler[2], current_odom.orientation.euler[2])
                 )
@@ -457,6 +463,8 @@ class GlobalPlanner(Resource):
                     "Stair corridor plan unavailable; falling back to grid planner.",
                     goal_x=round(current_goal.position.x, 2),
                     goal_y=round(current_goal.position.y, 2),
+                    robot_x=round(current_odom.position.x, 2),
+                    robot_y=round(current_odom.position.y, 2),
                 )
 
         if path is None or not path.poses:
@@ -476,8 +484,21 @@ class GlobalPlanner(Resource):
             path = self._find_wide_path(safe_goal, current_odom.position)
 
         if not path:
+            costmap = self._navigation_map.binary_costmap
+            map_x_max = costmap.origin.position.x + costmap.width * costmap.resolution
+            map_y_max = costmap.origin.position.y + costmap.height * costmap.resolution
+            hint = (
+                " Goal may be outside the current lidar map — click closer or wait for mapping."
+                if not goal_inside_costmap(costmap, safe_goal)
+                else " Stairs may be marked occupied — wait for 'Stair corridor armed' or click on the stair center."
+            )
             logger.warning(
-                "No path found to the goal.", x=round(safe_goal.x, 3), y=round(safe_goal.y, 3)
+                "No path found to the goal.",
+                x=round(safe_goal.x, 3),
+                y=round(safe_goal.y, 3),
+                map_x_range=(round(costmap.origin.position.x, 2), round(map_x_max, 2)),
+                map_y_range=(round(costmap.origin.position.y, 2), round(map_y_max, 2)),
+                hint=hint.strip(),
             )
             self.cancel_goal()
             return
@@ -503,7 +524,13 @@ class GlobalPlanner(Resource):
             distance = robot_pos.distance(goal)
             navigation_map = self._navigation_map if distance > 1.5 else self._navigation_map_near
             costmap = navigation_map.make_gradient_costmap(size)
-            path = min_cost_astar(costmap, goal, robot_pos)
+            unknown_penalty = 0.35 if self._global_config.stair_navigation else 0.8
+            path = min_cost_astar(
+                costmap,
+                goal,
+                robot_pos,
+                unknown_penalty=unknown_penalty,
+            )
             if path and path.poses:
                 logger.info(f"Found path {size}x robot width.")
                 return path
@@ -513,18 +540,17 @@ class GlobalPlanner(Resource):
     def _find_safe_goal(self, goal: Vector3) -> Vector3 | None:
         with self._lock:
             stair_corridor = self._stair_corridor
-        if (
-            self._global_config.stair_navigation
-            and stair_corridor is not None
-            and point_in_stair_corridor(goal, stair_corridor)
-        ):
-            snapped = snap_goal_to_corridor(goal, stair_corridor)
-            logger.info(
-                "Stair corridor goal accepted.",
-                x=round(snapped.x, 2),
-                y=round(snapped.y, 2),
-            )
-            return snapped
+        if self._global_config.stair_navigation and stair_corridor is not None:
+            if point_in_stair_corridor(goal, stair_corridor) or goal_requests_stair_corridor(
+                goal, stair_corridor
+            ):
+                snapped = snap_goal_to_corridor(goal, stair_corridor)
+                logger.info(
+                    "Stair corridor goal accepted.",
+                    x=round(snapped.x, 2),
+                    y=round(snapped.y, 2),
+                )
+                return snapped
 
         if not self._navigation_map.has_binary:
             logger.warning("Cannot find safe goal — global costmap not available yet")
@@ -532,7 +558,18 @@ class GlobalPlanner(Resource):
 
         costmap = self._navigation_map.binary_costmap
 
-        if costmap.cell_value(goal) == CostValues.UNKNOWN:
+        if not goal_inside_costmap(costmap, goal):
+            clamped = clamp_goal_to_costmap(costmap, goal)
+            logger.warning(
+                "Goal outside current costmap — clamped to map edge (build more map or click closer).",
+                requested_x=round(goal.x, 2),
+                requested_y=round(goal.y, 2),
+                clamped_x=round(clamped.x, 2),
+                clamped_y=round(clamped.y, 2),
+            )
+            goal = clamped
+
+        if costmap.cell_value(goal) == CostValues.UNKNOWN and goal_inside_costmap(costmap, goal):
             return goal
 
         safe_goal = find_safe_goal(

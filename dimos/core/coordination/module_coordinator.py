@@ -211,9 +211,20 @@ class ModuleCoordinator(Resource):
 
     def _send_on_system_modules(self) -> None:
         modules = list(self._deployed_modules.values())
+        mcp_servers: list[ModuleProxyProtocol] = []
+        others: list[ModuleProxyProtocol] = []
         for module in modules:
-            if hasattr(module, "on_system_modules"):
-                module.on_system_modules(modules)
+            if not hasattr(module, "on_system_modules"):
+                continue
+            if getattr(module, "remote_name", None) == "McpServer":
+                mcp_servers.append(module)
+            else:
+                others.append(module)
+        # McpClient fetches tools/list over HTTP — populate the registry before it runs.
+        for module in others:
+            module.on_system_modules(modules)
+        for module in mcp_servers:
+            module.on_system_modules(modules)
 
     def _connect_streams(self, blueprint: Blueprint) -> None:
         streams: dict[tuple[str, type], list[tuple[type, str]]] = defaultdict(list)

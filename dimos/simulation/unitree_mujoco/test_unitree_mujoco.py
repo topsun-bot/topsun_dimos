@@ -33,3 +33,46 @@ def test_resolve_stairs_scene_when_vendored() -> None:
     scene = resolve_robot_scene(cfg)
     assert scene.is_file()
     assert "stair" in scene.name.lower() or "terrain" in scene.name.lower()
+    from dimos.simulation.mujoco.build_scene_stairs import SCENE_MARKER
+
+    assert SCENE_MARKER in scene.read_text(encoding="utf-8")
+
+
+def test_unitree_go2_policy_inherits_sport_locomotion() -> None:
+    from dimos.simulation.mujoco.policy import Go1OnnxController
+    from dimos.simulation.unitree_mujoco.go2_policy import UnitreeGo2OnnxController
+
+    assert UnitreeGo2OnnxController.get_obs is Go1OnnxController.get_obs
+    assert "_policy_linvel" in UnitreeGo2OnnxController.__dict__
+
+
+def test_unitree_stairs_scene_loads_when_vendored() -> None:
+    if not unitree_mujoco_root().is_dir():
+        return
+    import mujoco
+
+    from dimos.simulation.mujoco.build_scene_stairs import build_unitree_scene_dimos_stairs_xml
+    from dimos.simulation.unitree_mujoco.scene_loader import mujoco_scene_path
+
+    build_unitree_scene_dimos_stairs_xml(force=True)
+    cfg = GlobalConfig(simulation=True, mujoco_room="stairs")
+    scene = mujoco_scene_path(cfg)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    assert model.nbody > 0
+
+
+def test_walk_stair_sport_payload_maps_to_gains() -> None:
+    from dimos.robot.unitree.go2.stair_locomotion.sport_actions import sport_payload, walk_stair_call
+    from dimos.simulation.mujoco.sport_state import (
+        SportExecMode,
+        apply_sport_api_payload,
+        default_sport_buffer,
+        sport_array_to_gains,
+    )
+
+    buf = default_sport_buffer()
+    apply_sport_api_payload(buf, sport_payload(walk_stair_call(True)))
+    gains = sport_array_to_gains(buf)
+    assert gains.active
+    assert gains.exec_mode == SportExecMode.WALK_STAIR
+    assert gains.foot_raise_m > 0.05

@@ -33,6 +33,8 @@ import numpy as np
 from numpy.typing import NDArray
 from unitree_webrtc_connect.constants import SPORT_CMD
 
+from dimos.robot.unitree.go2.stair_locomotion.sport_actions import API_WALK_STAIR
+
 # Shared-memory layout: float32 values, seq channel index 5 (see shared_memory.py).
 SPORT_SHM_FLOATS = 9
 SPORT_SEQ_INDEX = 5
@@ -50,6 +52,12 @@ SPORT_IDX_EXEC_MODE = 8
 DEFAULT_FOOT_RAISE_M = 0.06
 DEFAULT_COMMAND_GAIN = 1.0
 DEFAULT_ACTION_SCALE_BOOST = 1.0
+# ``SportClient.WalkStair(True)`` — keep sim foot-raise low (Go1 ONNX + discrete treads).
+WALK_STAIR_SIM_FOOT_RAISE_M = 0.11
+WALK_STAIR_SIM_COMMAND_GAIN = 1.28
+WALK_STAIR_SIM_ACTION_SCALE_BOOST = 1.14
+# Go1 ONNX needs a minimum forward command in obs to produce visible leg motion in sim.
+WALK_STAIR_SIM_MIN_FORWARD_CMD = 0.18
 
 # ONNX destabilizes above ~1.3× command / ~1.35× action on discrete MuJoCo treads.
 STAIR_SIM_MAX_COMMAND_GAIN = 1.22
@@ -67,6 +75,7 @@ class SportExecMode(IntEnum):
     CROSS_STEP = 2
     CROSS_WALK = 3
     ONESIDED_STEP = 4
+    WALK_STAIR = 5
 
 
 @dataclass(frozen=True)
@@ -93,7 +102,7 @@ def _set_exec_mode(buf: NDArray[Any], mode: SportExecMode) -> None:
     buf[SPORT_IDX_EXEC_MODE] = np.float32(float(mode.value))
     if mode == SportExecMode.CROSS_STEP:
         buf[SPORT_IDX_CROSS_STEP] = np.float32(1.0)
-    elif mode in (SportExecMode.NORMAL, SportExecMode.STAIR):
+    elif mode in (SportExecMode.NORMAL, SportExecMode.STAIR, SportExecMode.WALK_STAIR):
         if float(buf[SPORT_IDX_CROSS_STEP]) < 0.5:
             buf[SPORT_IDX_CROSS_STEP] = np.float32(0.0)
 
@@ -112,6 +121,11 @@ def _recompute_derived_gains(buf: NDArray[Any]) -> None:
     if not active:
         buf[SPORT_IDX_COMMAND_GAIN] = DEFAULT_COMMAND_GAIN
         buf[SPORT_IDX_ACTION_SCALE_BOOST] = DEFAULT_ACTION_SCALE_BOOST
+        return
+
+    if exec_mode == SportExecMode.WALK_STAIR:
+        buf[SPORT_IDX_COMMAND_GAIN] = np.float32(WALK_STAIR_SIM_COMMAND_GAIN)
+        buf[SPORT_IDX_ACTION_SCALE_BOOST] = np.float32(WALK_STAIR_SIM_ACTION_SCALE_BOOST)
         return
 
     # Heuristic mapping from FootRaiseHeight (m) to ONNX policy drive (tunable).
@@ -184,6 +198,18 @@ def apply_sport_api_payload(buf: NDArray[Any], payload: dict[str, Any]) -> bool:
         return False
 
     data = _parameter_data(payload)
+
+    if api_id == API_WALK_STAIR:
+        buf[SPORT_IDX_ACTIVE] = np.float32(1.0 if bool(data) else 0.0)
+        if bool(data):
+            buf[SPORT_IDX_FOOT_RAISE_M] = np.float32(WALK_STAIR_SIM_FOOT_RAISE_M)
+            buf[SPORT_IDX_CROSS_STEP] = np.float32(1.0)
+            _set_exec_mode(buf, SportExecMode.WALK_STAIR)
+        else:
+            buf[SPORT_IDX_FOOT_RAISE_M] = np.float32(DEFAULT_FOOT_RAISE_M)
+            _set_exec_mode(buf, SportExecMode.NORMAL)
+        _recompute_derived_gains(buf)
+        return True
 
     if api_id == SPORT_CMD["FootRaiseHeight"] and data is not None:
         buf[SPORT_IDX_ACTIVE] = np.float32(1.0)

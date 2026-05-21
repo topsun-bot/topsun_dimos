@@ -46,6 +46,16 @@ def test_plan_in_corridor_descending() -> None:
     assert max_lateral_offset(path, corridor.centerline) <= corridor.safe_half_width + 0.05
 
 
+def test_plan_in_corridor_prepends_robot_approach() -> None:
+    corridor = synthetic_stair_corridor_ascending()
+    cl = corridor.centerline
+    start = Vector3(cl[0][0] - 1.0, cl[0][1] + 0.4, 0.0)
+    goal = Vector3(cl[-1][0], cl[-1][1], 0.0)
+    path = plan_in_corridor(start, goal, corridor, step_m=0.1)
+    assert path is not None
+    assert path.poses[0].position.distance(start) < 0.05
+
+
 def test_plan_in_corridor_long_run() -> None:
     corridor = synthetic_stair_corridor_ascending()
     cl = corridor.centerline

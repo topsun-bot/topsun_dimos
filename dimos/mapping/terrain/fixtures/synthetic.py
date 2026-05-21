@@ -103,11 +103,15 @@ def mujoco_scene_stairs_height_map(
     num_steps: int = 10,
     riser_m: float = 0.15,
     tread_m: float = 0.28,
-    stair_start_x: float = 3.0,
+    stair_start_x: float = 2.55,
     stair_width_m: float = 1.2,
     floor_extent_m: float = 12.0,
 ) -> SyntheticHeightMap:
-    """Large flat floor with a straight stair strip at +x (matches ``scene_stairs``)."""
+    """Large flat floor with a 15 cm stair strip at +x (nominal profile for detection tests).
+
+    MuJoCo ``scene_stairs`` uses a continuous climb ramp for physics; this grid keeps
+    discrete 15 cm treads so stair-detection unit tests stay stable.
+    """
     half = floor_extent_m / 2.0
     width_cells = int(np.ceil(floor_extent_m / resolution))
     height_cells = int(np.ceil(floor_extent_m / resolution))

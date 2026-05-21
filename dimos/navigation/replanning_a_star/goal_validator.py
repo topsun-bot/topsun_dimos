@@ -20,6 +20,27 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3, VectorLike
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 
 
+def goal_inside_costmap(costmap: OccupancyGrid, goal: VectorLike) -> bool:
+    """True when ``goal`` lies inside the grid (not merely out-of-range UNKNOWN)."""
+    grid = costmap.world_to_grid(goal)
+    gx, gy = int(grid.x), int(grid.y)
+    return 0 <= gx < costmap.width and 0 <= gy < costmap.height
+
+
+def clamp_goal_to_costmap(costmap: OccupancyGrid, goal: Vector3) -> Vector3:
+    """Pull an out-of-bounds goal onto the current map edge (keeps z)."""
+    margin = costmap.resolution * 2.0
+    x_min = costmap.origin.position.x + margin
+    y_min = costmap.origin.position.y + margin
+    x_max = costmap.origin.position.x + costmap.width * costmap.resolution - margin
+    y_max = costmap.origin.position.y + costmap.height * costmap.resolution - margin
+    return Vector3(
+        min(max(goal.x, x_min), x_max),
+        min(max(goal.y, y_min), y_max),
+        goal.z,
+    )
+
+
 def find_safe_goal(
     costmap: OccupancyGrid,
     goal: VectorLike,

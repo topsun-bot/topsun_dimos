@@ -27,6 +27,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.stairs.contracts import StairCorridor, StairDetectionConfig
 from dimos.navigation.stairs.geometry import extend_centerline_approach
 from dimos.navigation.stairs.navigation_stair_spec import NavigationStairSpec
+from dimos.navigation.stairs.scene_corridor import mujoco_scene_stairs_corridor
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -52,7 +53,32 @@ class StairNavigatorModule(Module):
         if not self.config.g.stair_navigation:
             logger.info("stair_navigation disabled — StairNavigatorModule idle")
             return
+        self._maybe_arm_scene_preset_corridor()
         self.register_disposable(self.global_map.subscribe(self._on_global_map))
+
+    def _use_scene_preset_fallback(self) -> bool:
+        if not self.config.g.simulation:
+            return False
+        room = (self.config.g.mujoco_room or "").strip().lower()
+        return room in ("stairs", "scene_stairs", "stair")
+
+    def _maybe_arm_scene_preset_corridor(self) -> None:
+        """Sim ``mujoco_room=stairs``: arm corridor before lidar stair detection."""
+        if not self.config.g.simulation:
+            return
+        room = (self.config.g.mujoco_room or "").strip().lower()
+        if room not in ("stairs", "scene_stairs", "stair"):
+            return
+        if self._active_corridor is not None:
+            return
+        corridor = mujoco_scene_stairs_corridor(safe_half_width=self.config.safe_half_width)
+        self._active_corridor = corridor
+        self._navigator.set_stair_corridor(corridor)
+        logger.info(
+            "Stair corridor preset (scene_stairs geometry)",
+            steps=len(corridor.centerline),
+            mean_riser=round(corridor.mean_riser, 3),
+        )
 
     @rpc
     def stop(self) -> None:
@@ -70,10 +96,10 @@ class StairNavigatorModule(Module):
 
         candidates = detect_stairs_from_pointcloud(cloud, self.config.detection)
         if not candidates:
-            if self._active_corridor is not None:
+            if self._active_corridor is not None and not self._use_scene_preset_fallback():
                 logger.info("Stair lost — clearing corridor")
                 self._clear_corridor()
-            else:
+            elif self._active_corridor is None:
                 points, _ = cloud.as_numpy()
                 logger.debug(
                     "Stair detection: no candidate",

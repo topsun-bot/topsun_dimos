@@ -157,14 +157,13 @@ export default function KeyboardControlPanel({
 
   React.useEffect(() => {
     const handleBlur = () => {
-      if (isActive) {
-        keysPressed.current.clear();
-        setIsActive(false);
-      }
+      // Clicking the Rerun iframe (rerun-web dashboard) blurs the window — only clear
+      // stuck keys; keep keyboard control active so WASD still works after refocusing CC.
+      keysPressed.current.clear();
+      onStopMoveCommand();
     };
 
     const handleFocus = () => {
-      // Clear keys when window regains focus to avoid stuck keys
       keysPressed.current.clear();
     };
 
@@ -175,7 +174,7 @@ export default function KeyboardControlPanel({
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [isActive]);
+  }, [onStopMoveCommand]);
 
   return (
     <div>

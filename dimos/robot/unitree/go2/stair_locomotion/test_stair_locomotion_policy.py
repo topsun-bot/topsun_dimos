@@ -33,6 +33,7 @@ from dimos.navigation.stairs.fixtures_corridor import (
 from dimos.navigation.stairs.plan_in_corridor import plan_in_corridor
 from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
 from dimos.robot.unitree.go2.stair_locomotion.locomotion_policy import StairLocomotionPolicy
+from dimos.robot.unitree.go2.stair_locomotion.sport_api import API_WALK_STAIR
 
 
 class MockGo2Connection:
@@ -63,6 +64,27 @@ class MockGo2Connection:
         )
 
 
+class RpcLikeConnection(MockGo2Connection):
+    """Simulates ``ModuleProxy``: unknown attrs raise ``RuntimeError``, not ``AttributeError``."""
+
+    def __getattr__(self, name: str) -> Any:
+        if name in ("publish_request", "balance_stand", "free_walk", "set_obstacle_avoidance"):
+            return object.__getattribute__(self, name)
+        raise RuntimeError("Actor connection not available - cannot send requests")
+
+
+def test_enter_stair_mode_with_rpc_proxy_connection() -> None:
+    conn = RpcLikeConnection()
+    policy = StairLocomotionPolicy(
+        conn,
+        StairLocomotionConfig(sport_settle_s=0.0),
+        global_config=GlobalConfig(simulation=True),
+    )
+    policy._sport.enter_stair_mode()
+    api_ids = [r["data"]["api_id"] for r in conn.requests]
+    assert API_WALK_STAIR in api_ids
+
+
 def _odom_at(x: float, y: float, yaw: float = 0.0, pitch: float = 0.0) -> PoseStamped:
     return PoseStamped(
         position=Vector3(x, y, 0.0),
@@ -90,6 +112,7 @@ def test_on_stair_linear_speed_bounded() -> None:
     policy.start(corridor, path)
     policy._phase = StairPhase.ON_STAIR
     policy._sport.enter_stair_mode()
+    policy._on_stair_ticks = 20
 
     odom = _odom_at(cl[0][0], cl[0][1], yaw=corridor.axis_yaw)
     twist = policy.step(odom)
@@ -110,10 +133,33 @@ def test_descending_negative_linear_x() -> None:
     policy = StairLocomotionPolicy(conn, global_config=GlobalConfig(simulation=True))
     policy.start(corridor, path)
     policy._phase = StairPhase.ON_STAIR
+    policy._on_stair_ticks = 20
 
     odom = _odom_at(cl[-1][0], cl[-1][1], yaw=corridor.axis_yaw)
     twist = policy.step(odom)
     assert twist.linear.x < 0.0
+
+
+def test_pitch_during_grace_does_not_abort() -> None:
+    corridor = synthetic_stair_corridor_ascending()
+    cl = corridor.centerline
+    path = plan_in_corridor(
+        Vector3(cl[0][0], cl[0][1], 0.0),
+        Vector3(cl[-1][0], cl[-1][1], 0.0),
+        corridor,
+    )
+    assert path is not None
+
+    conn = MockGo2Connection()
+    policy = StairLocomotionPolicy(conn, global_config=GlobalConfig(simulation=True))
+    policy.start(corridor, path)
+    policy._phase = StairPhase.ON_STAIR
+    policy._on_stair_ticks = 3
+
+    odom = _odom_at(cl[0][0], cl[0][1], pitch=math.radians(24))
+    policy.step(odom)
+    assert not policy.aborted
+    assert policy.phase == StairPhase.ON_STAIR
 
 
 def test_pitch_exceeds_threshold_stops() -> None:
@@ -130,8 +176,9 @@ def test_pitch_exceeds_threshold_stops() -> None:
     policy = StairLocomotionPolicy(conn, global_config=GlobalConfig(simulation=True))
     policy.start(corridor, path)
     policy._phase = StairPhase.ON_STAIR
+    policy._on_stair_ticks = 40
 
-    odom = _odom_at(cl[0][0], cl[0][1], pitch=math.radians(30))
+    odom = _odom_at(cl[0][0], cl[0][1], pitch=math.radians(42))
     twist = policy.step(odom)
     assert twist.linear.x == 0.0
     assert twist.angular.z == 0.0
@@ -175,7 +222,27 @@ def test_sport_apis_called_on_enter_on_stair() -> None:
     policy.start(corridor, path)
     policy._sport.enter_stair_mode()
     api_ids = [r["data"]["api_id"] for r in conn.requests]
-    assert SPORT_CMD["FootRaiseHeight"] in api_ids
-    assert SPORT_CMD["BodyHeight"] in api_ids
+    assert API_WALK_STAIR in api_ids
     assert SPORT_CMD["FreeWalk"] in api_ids
     assert SPORT_CMD["BalanceStand"] in api_ids
+    walk_stair_req = next(r for r in conn.requests if r["data"]["api_id"] == API_WALK_STAIR)
+    assert walk_stair_req["data"]["parameter"]["data"] is True
+
+
+def test_manual_stair_mode_uses_foot_raise_height() -> None:
+    corridor = synthetic_stair_corridor_ascending()
+    cl = corridor.centerline
+    path = plan_in_corridor(
+        Vector3(cl[0][0], cl[0][1], 0.0),
+        Vector3(cl[-1][0], cl[-1][1], 0.0),
+        corridor,
+    )
+    assert path is not None
+
+    conn = MockGo2Connection()
+    cfg = StairLocomotionConfig(sport_settle_s=0.0, stair_sport_mode="manual")
+    policy = StairLocomotionPolicy(conn, cfg)
+    policy._sport.enter_stair_mode()
+    api_ids = [r["data"]["api_id"] for r in conn.requests]
+    assert SPORT_CMD["FootRaiseHeight"] in api_ids
+    assert API_WALK_STAIR not in api_ids

@@ -23,7 +23,7 @@ import numpy as np
 import onnxruntime as ort  # type: ignore[import-untyped]
 
 from dimos.simulation.mujoco.input_controller import InputController
-from dimos.simulation.mujoco.sport_state import SportExecMode
+from dimos.simulation.mujoco.sport_state import SportExecMode, WALK_STAIR_SIM_MIN_FORWARD_CMD
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -74,6 +74,8 @@ class OnnxController(ABC):
             gains = self._sport_gains()
             if gains is not None and gains.active:
                 action_scale *= gains.action_scale_boost
+                if gains.exec_mode == SportExecMode.WALK_STAIR:
+                    action_scale = self._WALK_STAIR_ACTION_SCALE * gains.action_scale_boost
             data.ctrl[:] = onnx_pred * action_scale + self._default_angles
             self._post_control_update()
 
@@ -82,9 +84,14 @@ class OnnxController(ABC):
 
 
 class Go1OnnxController(OnnxController):
-    # Gravity xy magnitude above this → policy command cleared (avoid flip on stairs).
+    # Gravity xy magnitude above this → policy command cleared (avoid flip on flat ground).
     _MAX_GRAVITY_TILT = 0.38
+    # WalkStair / STAIR sport mode: body pitch on treads often exceeds flat-ground limit (~24° → ~0.41).
+    _MAX_GRAVITY_TILT_STAIR = 0.62
     _SPORT_MAX_FORWARD_CMD = 0.32
+    _SPORT_MAX_FORWARD_CMD_WALK_STAIR = 0.30
+    _WALK_STAIR_LIFT_SCALE = 0.85
+    _WALK_STAIR_ACTION_SCALE = 0.58
     _SPORT_MAX_LATERAL_CMD = 0.12
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -103,30 +110,69 @@ class Go1OnnxController(OnnxController):
     def _gravity_tilt(gravity: np.ndarray[Any, Any]) -> float:
         return float(np.linalg.norm(gravity[0:2]))
 
-    def _stability_ok(self, gravity: np.ndarray[Any, Any]) -> bool:
-        return self._gravity_tilt(gravity) <= self._MAX_GRAVITY_TILT
+    def _max_gravity_tilt(self, gains: Any) -> float:
+        if gains is not None and gains.active and gains.exec_mode in (
+            SportExecMode.STAIR,
+            SportExecMode.WALK_STAIR,
+        ):
+            return self._MAX_GRAVITY_TILT_STAIR
+        return self._MAX_GRAVITY_TILT
+
+    def _stability_ok(self, gravity: np.ndarray[Any, Any], gains: Any = None) -> bool:
+        return self._gravity_tilt(gravity) <= self._max_gravity_tilt(gains)
+
+    def _leg_joint_qpos(self, data: mujoco.MjData) -> np.ndarray[Any, Any]:
+        n = len(self._default_angles)
+        return data.qpos[7 : 7 + n]
+
+    def _leg_joint_qvel(self, data: mujoco.MjData) -> np.ndarray[Any, Any]:
+        n = len(self._default_angles)
+        return data.qvel[6 : 6 + n]
+
+    def _policy_linvel(self, model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray[Any, Any]:
+        return data.sensor("local_linvel").data
+
+    def _policy_gyro(self, model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray[Any, Any]:
+        return data.sensor("gyro").data
+
+    def _policy_gravity(self, model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray[Any, Any]:
+        imu_xmat = data.site_xmat[model.site("imu").id].reshape(3, 3)
+        return imu_xmat.T @ np.array([0, 0, -1])
 
     def get_obs(self, model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray[Any, Any]:
-        linvel = data.sensor("local_linvel").data
-        gyro = data.sensor("gyro").data
-        imu_xmat = data.site_xmat[model.site("imu").id].reshape(3, 3)
-        gravity = imu_xmat.T @ np.array([0, 0, -1])
+        linvel = self._policy_linvel(model, data)
+        gyro = self._policy_gyro(model, data)
+        gravity = self._policy_gravity(model, data)
         self._last_gravity_tilt = self._gravity_tilt(gravity)
-        joint_angles = data.qpos[7:] - self._default_angles
-        joint_velocities = data.qvel[6:]
+        joint_angles = self._leg_joint_qpos(data) - self._default_angles
+        joint_velocities = self._leg_joint_qvel(data)
         command = self._input_controller.get_command().astype(np.float32, copy=True)
         gains = self._sport_gains()
-        stable = self._last_gravity_tilt <= self._MAX_GRAVITY_TILT
-        if gains is not None and gains.active and stable:
-            command[0] *= gains.command_gain
-            command[0] = np.clip(command[0], -self._SPORT_MAX_FORWARD_CMD, self._SPORT_MAX_FORWARD_CMD)
-            if gains.cross_step or gains.exec_mode == SportExecMode.CROSS_STEP:
-                command[1] *= 1.08
-            if gains.exec_mode == SportExecMode.CROSS_WALK:
-                command[1] *= 1.1
-            if gains.exec_mode == SportExecMode.ONESIDED_STEP:
-                command[0] *= 1.03
-            command[1] = np.clip(command[1], -self._SPORT_MAX_LATERAL_CMD, self._SPORT_MAX_LATERAL_CMD)
+        tilt_limit = self._max_gravity_tilt(gains)
+        stable = self._last_gravity_tilt <= tilt_limit
+        if gains is not None and gains.active:
+            if gains.exec_mode == SportExecMode.WALK_STAIR:
+                command[0] *= gains.command_gain
+                if command[0] > 0.02:
+                    command[0] = max(command[0], WALK_STAIR_SIM_MIN_FORWARD_CMD)
+                command[0] = np.clip(
+                    command[0],
+                    -self._SPORT_MAX_FORWARD_CMD_WALK_STAIR,
+                    self._SPORT_MAX_FORWARD_CMD_WALK_STAIR,
+                )
+            elif stable:
+                command[0] *= gains.command_gain
+                fwd_cap = self._SPORT_MAX_FORWARD_CMD
+                command[0] = np.clip(command[0], -fwd_cap, fwd_cap)
+                if gains.cross_step or gains.exec_mode == SportExecMode.CROSS_STEP:
+                    command[1] *= 1.08
+                if gains.exec_mode == SportExecMode.CROSS_WALK:
+                    command[1] *= 1.1
+                if gains.exec_mode == SportExecMode.ONESIDED_STEP:
+                    command[0] *= 1.03
+                command[1] = np.clip(command[1], -self._SPORT_MAX_LATERAL_CMD, self._SPORT_MAX_LATERAL_CMD)
+            else:
+                command[0] *= 0.4
         elif not stable:
             command[:] = 0.0
         obs = np.hstack(
@@ -148,7 +194,7 @@ class Go1OnnxController(OnnxController):
             gains is not None
             and gains.active
             and gains.foot_raise_m > 0.05
-            and self._last_gravity_tilt <= self._MAX_GRAVITY_TILT
+            and self._last_gravity_tilt <= self._max_gravity_tilt(gains)
         ):
             self._lift_phase = float(
                 np.fmod(self._lift_phase + self._lift_phase_dt + np.pi, 2 * np.pi) - np.pi
@@ -156,14 +202,47 @@ class Go1OnnxController(OnnxController):
         else:
             self._lift_phase = 0.0
 
+    def _apply_walk_stair_sim_assist(
+        self, model: mujoco.MjModel, data: mujoco.MjData, gains: Any
+    ) -> None:
+        """MuJoCo-only: discrete 15 cm treads need base velocity assist (Go1 ONNX ≠ Go2 firmware)."""
+        if self._last_gravity_tilt > self._max_gravity_tilt(gains):
+            return
+        cmd = self._input_controller.get_command()
+        linvel = self._policy_linvel(model, data)
+        fwd_cmd = float(cmd[0])
+        if fwd_cmd <= 0.04:
+            return
+        fwd_vel = float(linvel[0])
+        if fwd_vel < fwd_cmd * 0.65:
+            data.qvel[0] += 0.028 * (fwd_cmd - fwd_vel)
+        if fwd_vel < 0.12 and self._last_gravity_tilt < 0.55:
+            data.qvel[2] += 0.012
+
+    def _apply_walk_stair_sim_lift(self, data: mujoco.MjData, gains: Any) -> None:
+        """Mild front-leg lift on discrete 15 cm treads (hardware uses firmware WalkStair)."""
+        if self._last_gravity_tilt > self._max_gravity_tilt(gains):
+            return
+        scale = gains.action_scale_boost * self._WALK_STAIR_LIFT_SCALE
+        lift_base = gains.foot_raise_m * 2.4 * scale
+        if len(self._default_angles) < 12:
+            return
+        lift = lift_base * np.sin(self._lift_phase)
+        for idx in (1, 2, 4, 5):
+            data.ctrl[idx] += lift
+
     def get_control(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         super().get_control(model, data)
         gains = self._sport_gains()
+        if gains is not None and gains.exec_mode == SportExecMode.WALK_STAIR:
+            self._apply_walk_stair_sim_lift(data, gains)
+            self._apply_walk_stair_sim_assist(model, data, gains)
+            return
         if (
             gains is None
             or not gains.active
             or gains.foot_raise_m <= 0.05
-            or self._last_gravity_tilt > self._MAX_GRAVITY_TILT
+            or self._last_gravity_tilt > self._max_gravity_tilt(gains)
         ):
             return
         scale = gains.action_scale_boost

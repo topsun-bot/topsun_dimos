@@ -250,6 +250,10 @@ class McpServer(Module):
     @rpc
     def start(self) -> None:
         super().start()
+        # Register local skills before uvicorn accepts traffic. Remote skills are
+        # added in on_system_modules after all modules finish start() (Whisper etc.
+        # can block that for minutes while HTTP is already live).
+        self._refresh_tool_registry([])
         self._start_server()
         self._tool_stream_cleanup = tool_stream.subscribe(_fan_out_to_sse_queues)
 
@@ -277,17 +281,49 @@ class McpServer(Module):
 
     @rpc
     def on_system_modules(self, modules: list[RPCClient]) -> None:
-        # TODO: this is a bit hacky, also not thread-safe
         assert self.rpc is not None
-        app.state.skills = [
-            skill_info for module in modules for skill_info in (module.get_skills() or [])
+        remote_modules = [
+            m
+            for m in modules
+            if getattr(m, "remote_name", None) != self.__class__.__name__
         ]
+        self._refresh_tool_registry(remote_modules)
+
+    def _refresh_tool_registry(self, remote_modules: list[RPCClient]) -> None:
+        """Merge local @skill methods with skills discovered on other modules."""
+        # TODO: not thread-safe with concurrent tools/call
+        assert self.rpc is not None
+        own_skills = self.get_skills() or []
+        remote_skills: list[SkillInfo] = []
+        for module in remote_modules:
+            remote_name = getattr(module, "remote_name", type(module).__name__)
+            try:
+                remote_skills.extend(module.get_skills() or [])
+            except Exception:
+                logger.exception(
+                    "Failed to collect MCP skills from module",
+                    module=remote_name,
+                )
+        by_name: dict[str, SkillInfo] = {s.func_name: s for s in own_skills}
+        for skill_info in remote_skills:
+            by_name.setdefault(skill_info.func_name, skill_info)
+        skills = list(by_name.values())
+        app.state.skills = skills
         app.state.rpc_calls = {
             skill_info.func_name: RpcCall(
-                None, self.rpc, skill_info.func_name, skill_info.class_name, []
+                None,
+                self.rpc,
+                skill_info.func_name,
+                skill_info.class_name,
+                [],
             )
-            for skill_info in app.state.skills
+            for skill_info in skills
         }
+        logger.info(
+            "MCP tool registry updated",
+            n_tools=len(skills),
+            tools=[s.func_name for s in skills],
+        )
 
     @skill
     def server_status(self) -> str:

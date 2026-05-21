@@ -17,7 +17,11 @@ import pytest
 
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
-from dimos.navigation.replanning_a_star.goal_validator import find_safe_goal
+from dimos.navigation.replanning_a_star.goal_validator import (
+    clamp_goal_to_costmap,
+    find_safe_goal,
+    goal_inside_costmap,
+)
 from dimos.utils.data import get_data
 
 
@@ -37,6 +41,18 @@ def costmap() -> OccupancyGrid:
         ((5.0, 9.0), (5.85, 9.6)),
     ],
 )
+def test_goal_outside_costmap_is_not_inside(costmap) -> None:
+    far = Vector3(999.0, 999.0, 0.0)
+    assert not goal_inside_costmap(costmap, far)
+    assert costmap.cell_value(far) == CostValues.UNKNOWN
+
+
+def test_clamp_goal_to_costmap(costmap) -> None:
+    far = Vector3(999.0, 999.0, 0.0)
+    clamped = clamp_goal_to_costmap(costmap, far)
+    assert goal_inside_costmap(costmap, clamped)
+
+
 def test_find_safe_goal(costmap, input_pos, expected_pos) -> None:
     goal = Vector3(input_pos[0], input_pos[1], 0.0)
 

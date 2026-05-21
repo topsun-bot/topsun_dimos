@@ -17,6 +17,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from dimos.robot.unitree.go2.stair_locomotion.sport_actions import StairSportMode
+
 
 @dataclass(frozen=True)
 class StairLocomotionConfig:
@@ -26,15 +28,21 @@ class StairLocomotionConfig:
     max_linear_x: float = 0.30
     riser_slowdown_factor: float = 0.55
     max_pitch_rad: float = math.radians(28.0)
+    # MuJoCo: ignore tip checks for this many control ticks after ON_STAIR (WalkStair settle).
+    sim_tip_grace_ticks: int = 25
+    sim_on_stair_settle_ticks: int = 15
+    # Fraction of centerline arc length (start→goal) before EXIT (not 2D waypoint hops).
+    climb_complete_ratio: float = 0.88
     align_yaw_tolerance_rad: float = math.radians(12.0)
     approach_distance_m: float = 0.85
-    # Sport API (FootRaiseHeight 1014) — ~12 cm for 15 cm riser stairs
+    # Official Python demo: ``sport_client.WalkStair(True)`` (TestOption id=16).
+    stair_sport_mode: StairSportMode = "walk_stair"
+    # Used when ``stair_sport_mode == "manual"`` (FootRaiseHeight 1014).
     foot_raise_height_m: float = 0.12
     body_height_delta_m: float = -0.02
     gait_id: int = 0
     speed_level: int = 0
     use_economic_gait: bool = False
-    # SDK2 ``CrossStep`` / WebRTC ``CrossStep`` 1302 — higher foot clearance in sim.
     use_cross_step: bool = False
     sport_settle_s: float = 0.25
     disable_obstacle_avoidance_on_stair: bool = True

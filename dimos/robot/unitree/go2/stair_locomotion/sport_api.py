@@ -12,25 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unitree Go2 Sport API helpers (WebRTC ``SPORT_MOD`` / SDK2 ``SportClient`` parity).
-
-API ids align with ``unitree_skill_container.UNITREE_WEBRTC_CONTROLS`` and
-unitree_sdk2 ``sport_client.hpp``.
-"""
+"""Go2 stair climbing via official SportClient actions (``WalkStair`` + ``Move``)."""
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from typing import Any, Protocol
 
 from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 
 from dimos.core.global_config import GlobalConfig
 from dimos.robot.unitree.go2.stair_locomotion.config import StairLocomotionConfig
+from dimos.robot.unitree.go2.stair_locomotion.sport_actions import (
+    API_WALK_STAIR,
+    SportClientCall,
+    balance_stand_call,
+    body_height_call,
+    cross_step_call,
+    foot_raise_height_call,
+    free_walk_call,
+    speed_level_call,
+    sport_payload,
+    switch_gait_call,
+    walk_stair_call,
+)
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+
+def _safe_get_attr(obj: Any, name: str) -> Any | None:
+    """``getattr`` that does not probe unknown attrs on DimOS ``ModuleProxy`` (RPC)."""
+    try:
+        return getattr(obj, name)
+    except (AttributeError, RuntimeError):
+        return None
 
 
 class Go2SportConnection(Protocol):
@@ -45,29 +61,15 @@ class Go2SportConnection(Protocol):
     def set_obstacle_avoidance(self, enabled: bool = True) -> None: ...
 
 
-# Sport API ids — keep in sync with ``unitree_webrtc_connect.constants.SPORT_CMD``
+# Re-export for tests / callers that still reference WebRTC ids.
 API_BALANCE_STAND = SPORT_CMD["BalanceStand"]
 API_FREE_WALK = SPORT_CMD["FreeWalk"]
-API_SWITCH_GAIT = SPORT_CMD["SwitchGait"]
-API_BODY_HEIGHT = SPORT_CMD["BodyHeight"]
 API_FOOT_RAISE_HEIGHT = SPORT_CMD["FootRaiseHeight"]
-API_SPEED_LEVEL = SPORT_CMD["SpeedLevel"]
-API_ECONOMIC_GAIT = SPORT_CMD["EconomicGait"]
 API_CROSS_STEP = SPORT_CMD["CrossStep"]
-API_CROSS_WALK = SPORT_CMD["CrossWalk"]
-API_ONESIDED_STEP = SPORT_CMD["OnesidedStep"]
-
-
-@dataclass
-class _SportSnapshot:
-    foot_raise_height_m: float = 0.06
-    body_height_m: float = 0.0
-    speed_level: int = 1
-    gait_id: int = 0
 
 
 class Go2StairSportController:
-    """Configure / restore Go2 sport parameters for straight stair climbing."""
+    """Enter/exit stair mode using ``SportClient``-defined sport actions."""
 
     def __init__(
         self,
@@ -79,37 +81,89 @@ class Go2StairSportController:
         self._connection = connection
         self._config = config
         self._global_config = global_config
-        self._snapshot = _SportSnapshot()
         self._stair_mode_active = False
 
     def _settle(self) -> None:
-        """Sleep after Sport API calls on hardware; no-op in MuJoCo sim."""
         if self._global_config is not None and self._global_config.simulation:
             return
         time.sleep(self._config.sport_settle_s)
 
-    def _sport(self, api_id: int, data: float | int | bool | None = None) -> None:
-        payload: dict[str, Any] = {"api_id": api_id}
-        if data is not None:
-            payload["parameter"] = {"data": data}
+    def _invoke(self, call: SportClientCall) -> None:
+        """Publish the same payload ``SportClient`` would send over DDS."""
+        payload = sport_payload(call)
         try:
             self._connection.publish_request(RTC_TOPIC["SPORT_MOD"], payload)
+            logger.debug(
+                "SportClient action",
+                method=call.method,
+                api_id=call.api_id,
+            )
         except Exception as exc:
-            logger.warning("Sport API call failed", api_id=api_id, error=str(exc))
+            logger.warning(
+                "SportClient action failed",
+                method=call.method,
+                api_id=call.api_id,
+                error=str(exc),
+            )
+
+    def _invoke_dds_sport_client(self, call: SportClientCall) -> bool:
+        """Optional: call an attached ``unitree_sdk2py`` ``SportClient`` (DDS teleop path)."""
+        client = _safe_get_attr(self._connection, "sport_client")
+        if client is None:
+            return False
+        method = getattr(client, call.method, None)
+        if method is None:
+            return False
+        try:
+            if call.parameter is None:
+                method()
+            elif "data" in call.parameter:
+                method(bool(call.parameter["data"]))
+            else:
+                method(**call.parameter)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "DDS SportClient call failed",
+                method=call.method,
+                error=str(exc),
+            )
+            return False
+
+    def _sport(self, call: SportClientCall) -> None:
+        if not self._invoke_dds_sport_client(call):
+            self._invoke(call)
 
     def prepare_locomotion(self) -> None:
-        """BalanceStand + FreeWalk — required before velocity / stair sport tweaks."""
+        """``BalanceStand`` + ``FreeWalk`` before stair motion (official example order)."""
         if self._global_config is not None and self._global_config.simulation:
-            self._sport(API_BALANCE_STAND)
-            self._sport(API_FREE_WALK)
+            self._sport(balance_stand_call())
+            self._sport(free_walk_call())
             return
         self._connection.balance_stand()
         self._settle()
         self._connection.free_walk()
         self._settle()
 
+    def _enter_stair_mode_manual(self) -> None:
+        """Fallback: tune ``FootRaiseHeight`` / ``SwitchGait`` when ``WalkStair`` unavailable."""
+        self._sport(speed_level_call(self._config.speed_level))
+        self._settle()
+        self._sport(foot_raise_height_call(self._config.foot_raise_height_m))
+        self._settle()
+        self._sport(body_height_call(self._config.body_height_delta_m))
+        self._settle()
+        self._sport(switch_gait_call(self._config.gait_id))
+        self._settle()
+        if self._config.use_economic_gait:
+            self._sport(
+                SportClientCall("EconomicGait", SPORT_CMD["EconomicGait"], {"data": True})
+            )
+        if self._config.use_cross_step:
+            self._sport(cross_step_call(True))
+            self._settle()
+
     def enter_stair_mode(self) -> None:
-        """Apply stair-friendly gait:抬脚高度、机身高度、步态、低速."""
         if self._stair_mode_active:
             return
 
@@ -121,53 +175,43 @@ class Go2StairSportController:
 
         self.prepare_locomotion()
 
-        self._sport(API_SPEED_LEVEL, self._config.speed_level)
-        self._settle()
-
-        self._sport(API_FOOT_RAISE_HEIGHT, self._config.foot_raise_height_m)
-        self._settle()
-
-        self._sport(API_BODY_HEIGHT, self._config.body_height_delta_m)
-        self._settle()
-
-        self._sport(API_SWITCH_GAIT, self._config.gait_id)
-        self._settle()
-
-        if self._config.use_economic_gait:
-            self._sport(API_ECONOMIC_GAIT, True)
-
-        if self._config.use_cross_step:
-            self._sport(API_CROSS_STEP, True)
+        if self._config.stair_sport_mode == "walk_stair":
+            self._sport(walk_stair_call(True))
             self._settle()
+            action = "WalkStair(True)"
+        else:
+            self._enter_stair_mode_manual()
+            action = "manual FootRaiseHeight/SwitchGait"
 
         self._stair_mode_active = True
         sim_note = ""
         if self._global_config is not None and self._global_config.simulation:
             backend = getattr(self._global_config, "mujoco_backend", "dimos")
             sim_note = (
-                " (Unitree MuJoCo + ONNX mirrors Sport API via SHM)"
+                " (Unitree MuJoCo mirrors SportClient via SHM)"
                 if backend == "unitree"
-                else " (DimOS MuJoCo mirrors Sport API via SHM)"
+                else " (DimOS MuJoCo mirrors SportClient via SHM)"
             )
         logger.info(
             "Go2 stair sport mode active",
-            foot_raise_m=self._config.foot_raise_height_m,
-            speed_level=self._config.speed_level,
-            gait_id=self._config.gait_id,
+            sport_action=action,
+            stair_sport_mode=self._config.stair_sport_mode,
             note=sim_note,
         )
 
     def exit_stair_mode(self) -> None:
-        """Restore conservative defaults after leaving the stair corridor."""
         if not self._stair_mode_active:
             return
 
-        self._sport(API_FOOT_RAISE_HEIGHT, self._snapshot.foot_raise_height_m)
-        self._sport(API_BODY_HEIGHT, self._snapshot.body_height_m)
-        self._sport(API_SPEED_LEVEL, self._snapshot.speed_level)
-        self._sport(API_SWITCH_GAIT, self._snapshot.gait_id)
-        if self._config.use_cross_step:
-            self._sport(API_CROSS_STEP, False)
+        if self._config.stair_sport_mode == "walk_stair":
+            self._sport(walk_stair_call(False))
+        else:
+            self._sport(foot_raise_height_call(0.06))
+            self._sport(body_height_call(0.0))
+            self._sport(speed_level_call(1))
+            self._sport(switch_gait_call(0))
+            if self._config.use_cross_step:
+                self._sport(cross_step_call(False))
 
         if self._config.disable_obstacle_avoidance_on_stair:
             try:
@@ -177,7 +221,7 @@ class Go2StairSportController:
 
         self._stair_mode_active = False
         if self._global_config is not None and self._global_config.simulation:
-            clearer = getattr(self._connection, "clear_sim_sport_state", None)
+            clearer = _safe_get_attr(self._connection, "clear_sim_sport_state")
             if callable(clearer):
                 clearer()
         logger.info("Go2 stair sport mode cleared")

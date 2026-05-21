@@ -58,14 +58,11 @@ class MockController:
         return self.shm.read_sport_gains()
 
     def get_command(self) -> NDArray[Any]:
-        """Get the current movement command."""
-        cmd_data = self.shm.read_command()
-        if cmd_data is not None:
-            linear, angular = cmd_data
-            # MuJoCo expects [forward, lateral, rotational]
-            self._command[0] = linear[0]  # forward/backward
-            self._command[1] = linear[1]  # left/right
-            self._command[2] = angular[2]  # rotation
+        """Read latest cmd_vel from SHM every control step (planner may be slower than sim)."""
+        cmd_array: NDArray[Any] = np.ndarray((6,), dtype=np.float32, buffer=self.shm.shm.cmd.buf)
+        self._command[0] = float(cmd_array[0])
+        self._command[1] = float(cmd_array[1])
+        self._command[2] = float(cmd_array[5])
         result: NDArray[Any] = self._command.copy()
         return result
 

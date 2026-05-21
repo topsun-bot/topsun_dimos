@@ -17,7 +17,9 @@ from __future__ import annotations
 import numpy as np
 from unitree_webrtc_connect.constants import SPORT_CMD
 
+from dimos.robot.unitree.go2.stair_locomotion.sport_actions import API_WALK_STAIR
 from dimos.simulation.mujoco.sport_state import (
+    WALK_STAIR_SIM_FOOT_RAISE_M,
     SPORT_IDX_ACTIVE,
     SPORT_IDX_COMMAND_GAIN,
     SPORT_IDX_FOOT_RAISE_M,
@@ -59,6 +61,28 @@ def test_cross_walk_sets_exec_mode() -> None:
     buf = default_sport_buffer()
     apply_sport_api_payload(buf, {"api_id": SPORT_CMD["CrossWalk"]})
     assert sport_array_to_gains(buf).exec_mode == SportExecMode.CROSS_WALK
+
+
+def test_walk_stair_enables_stair_sim_profile() -> None:
+    buf = default_sport_buffer()
+    ok = apply_sport_api_payload(
+        buf,
+        {"api_id": API_WALK_STAIR, "parameter": {"data": True}},
+    )
+    assert ok
+    gains = sport_array_to_gains(buf)
+    assert gains.active
+    assert abs(gains.foot_raise_m - WALK_STAIR_SIM_FOOT_RAISE_M) < 1e-5
+    assert gains.exec_mode == SportExecMode.WALK_STAIR
+    assert gains.command_gain <= 1.2
+
+
+def test_walk_stair_disable_clears_active() -> None:
+    buf = default_sport_buffer()
+    apply_sport_api_payload(buf, {"api_id": API_WALK_STAIR, "parameter": {"data": True}})
+    apply_sport_api_payload(buf, {"api_id": API_WALK_STAIR, "parameter": {"data": False}})
+    gains = sport_array_to_gains(buf)
+    assert not gains.active
 
 
 def test_switch_gait_stair_id_sets_stair_mode() -> None:

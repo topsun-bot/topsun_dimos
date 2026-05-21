@@ -28,6 +28,8 @@ import time
 from typing import Any
 import webbrowser
 
+import numpy as np
+
 from dimos_lcm.std_msgs import Bool
 from reactivex.disposable import Disposable
 import socketio  # type: ignore[import-untyped]
@@ -53,10 +55,12 @@ from dimos.core.stream import In, Out
 from dimos.mapping.models import LatLon
 from dimos.mapping.occupancy.gradient import gradient
 from dimos.mapping.occupancy.inflation import simple_inflate
+from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.utils.logging_config import setup_logger
@@ -126,6 +130,7 @@ class WebsocketVisModule(Module):
         self.vis_state = {}  # type: ignore[var-annotated]
         self.state_lock = threading.Lock()
         self.costmap_encoder = OptimizedCostmapEncoder(chunk_size=64)
+        self._bootstrap_costmap_sent = False
 
         # Track GPS goal points for visualization
         self.gps_goal_points: list[dict[str, float]] = []
@@ -332,15 +337,15 @@ class WebsocketVisModule(Module):
 
         @self.sio.event  # type: ignore[untyped-decorator]
         async def move_command(sid: str, data: dict[str, Any]) -> None:
-            # Publish Twist if transport is configured
-            if self.cmd_vel and self.cmd_vel.transport:
-                twist = Twist(
-                    linear=Vector3(data["linear"]["x"], data["linear"]["y"], data["linear"]["z"]),
-                    angular=Vector3(
-                        data["angular"]["x"], data["angular"]["y"], data["angular"]["z"]
-                    ),
-                )
-                self.cmd_vel.publish(twist)
+            twist = Twist(
+                linear=Vector3(data["linear"]["x"], data["linear"]["y"], data["linear"]["z"]),
+                angular=Vector3(
+                    data["angular"]["x"], data["angular"]["y"], data["angular"]["z"]
+                ),
+            )
+            # Always publish — transport is set by ModuleCoordinator for cmd_vel; guarding
+            # on .transport silently dropped commands when the property was unset in-process.
+            self.cmd_vel.publish(twist)
 
             # Publish TwistStamped if transport is configured
             if self.movecmd_stamped and self.movecmd_stamped.transport:
@@ -365,9 +370,40 @@ class WebsocketVisModule(Module):
         self._uvicorn_server.run()
 
     def _on_robot_pose(self, msg: PoseStamped) -> None:
+        if not self._bootstrap_costmap_sent and "costmap" not in self.vis_state:
+            self._bootstrap_costmap_sent = True
+            self._publish_bootstrap_costmap(msg)
         pose_data = {"type": "vector", "c": [msg.position.x, msg.position.y, msg.position.z]}
         self.vis_state["robot_pose"] = pose_data
         self._emit("robot_pose", pose_data)
+
+    def _publish_bootstrap_costmap(self, pose: PoseStamped) -> None:
+        """Show a placeholder grid until VoxelGridMapper / CostMapper publish the real map."""
+        resolution = 0.1
+        cells = 80
+        half_extent = cells * resolution / 2.0
+        grid = np.full((cells, cells), -1, dtype=np.int8)
+        origin = Pose(
+            position=Vector3(
+                pose.position.x - half_extent,
+                pose.position.y - half_extent,
+                0.0,
+            ),
+            orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+        )
+        placeholder = OccupancyGrid(
+            grid=grid,
+            resolution=resolution,
+            origin=origin,
+            frame_id="world",
+            ts=pose.ts,
+        )
+        logger.info(
+            "Publishing bootstrap costmap for command-center (waiting for mapper)",
+            origin_x=round(origin.position.x, 2),
+            origin_y=round(origin.position.y, 2),
+        )
+        self._on_global_costmap(placeholder)
 
     def _on_gps_location(self, msg: LatLon) -> None:
         pose_data = {"lat": msg.lat, "lon": msg.lon}

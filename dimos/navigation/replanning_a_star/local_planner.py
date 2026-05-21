@@ -336,8 +336,12 @@ class LocalPlanner(Resource):
             self.cmd_vel.on_next(cmd_vel)
 
             if stair_policy.finished:
-                logger.info("Stair traversal complete.")
-                self.stopped_navigating.on_next("arrived")
+                if stair_policy.aborted:
+                    logger.warning("Stair traversal aborted (tipped or safety stop).")
+                    self.stopped_navigating.on_next("error")
+                else:
+                    logger.info("Stair traversal complete.")
+                    self.stopped_navigating.on_next("arrived")
                 break
 
             elapsed = time.perf_counter() - start_time

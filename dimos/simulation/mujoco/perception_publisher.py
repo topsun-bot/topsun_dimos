@@ -35,6 +35,9 @@ from dimos.simulation.mujoco.constants import (
 )
 from dimos.simulation.mujoco.depth_camera import depth_image_to_point_cloud
 from dimos.simulation.mujoco.shared_memory import ShmReader
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 _CAMERA_NAMES = (
     "head_camera",
@@ -106,9 +109,11 @@ class MujocoPerceptionPublisher:
         shm: ShmReader,
         *,
         lidar_fps: float | None = None,
+        prefer_raycast_lidar: bool = False,
     ) -> None:
         self._model = model
         self._shm = shm
+        self._prefer_raycast_lidar = prefer_raycast_lidar
         self._camera_ids = _camera_ids(model)
         self._scene_option = mujoco.MjvOption()
         self._last_video = 0.0
@@ -146,12 +151,18 @@ class MujocoPerceptionPublisher:
                 self._last_video = now
 
     def _publish_lidar(self, data: mujoco.MjData, ts: float) -> None:
-        if len(self._camera_ids) >= 3 and len(self._depth_renderers) == 3:
+        pts: NDArray[Any]
+        if self._prefer_raycast_lidar:
+            pts = raycast_lidar_points(self._model, data)
+        elif len(self._camera_ids) >= 3 and len(self._depth_renderers) == 3:
             pts = self._lidar_from_depth_cameras(data)
+            if pts.size == 0:
+                pts = raycast_lidar_points(self._model, data)
         else:
             pts = raycast_lidar_points(self._model, data)
 
         if pts.size == 0:
+            logger.warning("MuJoCo lidar publish skipped: no points (depth + raycast empty)")
             return
 
         pcd = o3d.geometry.PointCloud()

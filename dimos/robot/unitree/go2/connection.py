@@ -302,6 +302,8 @@ class GO2Connection(Module, Camera, Pointcloud):
         self.standup()
         time.sleep(3)
         self.balance_stand()
+        if self.config.g.simulation:
+            self.free_walk()
 
         if self.config.mode == Go2Mode.RAGE:
             self.enable_rage_mode()
