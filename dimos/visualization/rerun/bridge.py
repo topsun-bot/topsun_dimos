@@ -431,9 +431,7 @@ class RerunBridgeModule(Module):
         try:
             rr.save(str(save_path))
         except Exception:
-            logger.warning(
-                f"Failed to enable rerun disk sink at {save_path}", exc_info=True
-            )
+            logger.warning(f"Failed to enable rerun disk sink at {save_path}", exc_info=True)
             return
 
         self._save_path = save_path
