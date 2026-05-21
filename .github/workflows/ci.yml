@@ -150,7 +150,7 @@ jobs:
           - runner: [self-hosted, Linux]
             # GitHub Actions only honours `container:` on Linux runners.
             container:
-              image: ghcr.io/topsun-bot/ros-dev:dev
+              image: ghcr.io/topsun-bot/ros-dev:latest
             markers: "self_hosted or skipif_no_ros"
             experimental: false
           - runner: [self-hosted, macos, arm64]
