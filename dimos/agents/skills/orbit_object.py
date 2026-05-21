@@ -448,9 +448,10 @@ class OrbitObjectSkillContainer(Module):
                 self._finish_orbit("Too far from obstacle — edge lost.")
                 return
 
+            # 面向物品中心（稳定），距离基于边缘（精确）
             theta = math.atan2(
-                edge.point[1] - robot_xy[1],
-                edge.point[0] - robot_xy[0],
+                object_center[1] - robot_xy[1],
+                object_center[0] - robot_xy[0],
             )
             face_err_rad = _angle_diff(theta, robot_yaw)
             angular_z = self._KP_YAW * face_err_rad

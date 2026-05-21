@@ -154,8 +154,8 @@ def orbit_loop(
                 print(f"太远 d={d:.2f}m > {MAX_DISTANCE_FACTOR * distance:.2f}m，边缘丢失")
                 break
 
-            # 面向物体的方向角
-            theta = math.atan2(edge.point[1] - robot_xy[1], edge.point[0] - robot_xy[0])
+            # 面向物品中心（稳定），距离基于边缘（精确）
+            theta = math.atan2(object_center[1] - robot_xy[1], object_center[0] - robot_xy[0])
             face_err_rad = _angle_diff(theta, robot_yaw)
             # 转向：面对物体
             angular_z = KP_YAW * face_err_rad
