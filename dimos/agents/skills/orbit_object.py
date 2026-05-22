@@ -308,6 +308,8 @@ class OrbitObjectSkillContainer(Module):
         self._request_stop()
         if self._thread is not None:
             self._thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+            if self._thread.is_alive():
+                logger.warning("Previous orbit thread did not exit in time")
             self._thread = None
 
         if self._latest_odom is None:
@@ -336,10 +338,10 @@ class OrbitObjectSkillContainer(Module):
         if edge is None:
             return "No obstacle found within search radius. Move closer and try again."
 
-        self._should_stop.clear()
         self.stop_movement.publish(Bool(data=True))
         self.start_tool("orbit_object")
 
+        self._should_stop = Event()
         self._thread = Thread(
             target=self._orbit_loop,
             args=(distance, laps, speed, clockwise, target_xy, bearing_val),
