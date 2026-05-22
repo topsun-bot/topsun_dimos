@@ -341,10 +341,11 @@ class OrbitObjectSkillContainer(Module):
         self.stop_movement.publish(Bool(data=True))
         self.start_tool("orbit_object")
 
-        self._should_stop = Event()
+        stop_event = Event()
+        self._should_stop = stop_event
         self._thread = Thread(
             target=self._orbit_loop,
-            args=(distance, laps, speed, clockwise, target_xy, bearing_val),
+            args=(stop_event, distance, laps, speed, clockwise, target_xy, bearing_val),
             daemon=True,
         )
         self._thread.start()
@@ -376,6 +377,7 @@ class OrbitObjectSkillContainer(Module):
 
     def _orbit_loop(
         self,
+        stop_event: Event,
         distance: float,
         laps: float,
         speed: float,
@@ -420,7 +422,7 @@ class OrbitObjectSkillContainer(Module):
             lock_radius=f"{lock_radius:.2f}",
         )
 
-        while not self._should_stop.is_set():
+        while not stop_event.is_set():
             next_time += period
 
             odom = self._latest_odom
