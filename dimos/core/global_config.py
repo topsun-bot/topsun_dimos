@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import platform
 import re
 from typing import Literal
 
@@ -27,6 +28,7 @@ from dimos.visualization.rerun.constants import (
 )
 
 TransportBackend = Literal["lcm", "shm"]
+_DEFAULT_TRANSPORT: TransportBackend = "shm" if platform.system() == "Darwin" else "lcm"
 
 
 def _get_all_numbers(s: str) -> list[float]:
@@ -72,7 +74,7 @@ class GlobalConfig(BaseSettings):
     listen_host: str = "127.0.0.1"
     dimsim_scene: str = "apt"
     dimsim_port: int = 8090
-    default_transport: TransportBackend = "lcm"
+    default_transport: TransportBackend = _DEFAULT_TRANSPORT
 
     model_config = SettingsConfigDict(
         env_file=".env",

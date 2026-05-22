@@ -574,8 +574,10 @@ def _get_transport_for(blueprint: Blueprint, name: str, stream_type: type) -> Pu
     topic = f"/{name}" if _is_name_unique(blueprint, name) else f"/{short_id()}"
 
     for bp in blueprint.active_blueprints:
-        if name in bp.stream_transport_pins:
-            return bp.stream_transport_pins[name](topic)
+        for pin_name in bp.stream_transport_pins:
+            effective_name = blueprint.remapping_map.get((bp.module, pin_name), pin_name)
+            if effective_name == name:
+                return bp.stream_transport_pins[pin_name](topic)
 
     if blueprint._transport_factory:
         return blueprint._transport_factory(topic, stream_type)

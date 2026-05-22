@@ -367,3 +367,20 @@ def test_shm_factory_uses_large_capacity_for_image() -> None:
 
     assert isinstance(transport, pSHMTransport)
     assert transport.shm.config.default_capacity == DEFAULT_CAPACITY_COLOR_IMAGE
+
+
+def test_stream_transport_pins_survive_remapping() -> None:
+    """Pinned streams remain pinned even after .remappings() renames them."""
+    from unittest.mock import patch
+
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    bp = autoconnect(PinnedModule.blueprint(), ModuleA.blueprint()).remappings(
+        [(PinnedModule, "data1", "renamed_data1")]
+    )
+
+    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
+        mock_gc.default_transport = "shm"
+        t_renamed_pinned = _get_transport_for(bp, "renamed_data1", Data1)
+
+    assert isinstance(t_renamed_pinned, pLCMTransport)
