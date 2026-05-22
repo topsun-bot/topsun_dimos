@@ -39,19 +39,49 @@ unitree_go2_basic
 ## Prerequisites
 
 1. DimOS environment: `uv sync --all-extras --no-extra dds`
-2. [visualnav-transformer](https://github.com/robodhruv/visualnav-transformer) cloned and set up (`diffusion_policy`, checkpoints)
-3. Download `nomad.pth` into `visualnav-transformer/deployment/model_weights/`
-4. **NoMaD Python deps** in the **same** `.venv` as DimOS — `uv pip install -r examples/nav-go2/requirements-nomad.txt` and **[DEPENDENCIES.md](./DEPENDENCIES.md)**
+2. [visualnav-transformer](https://github.com/robodhruv/visualnav-transformer) cloned locally
+3. Download `nomad.pth` into `visualnav-transformer/deployment/model_weights/` or set `checkpoint_path`
+4. NoMaD Python deps installed in the same `.venv` as DimOS
 
 ```bash
+cd /home/sgk/work/topsun_dimos
+source .venv/bin/activate
+
 export VISUALNAV_ROOT=/path/to/visualnav-transformer
-# optional:
+export DIFFUSION_POLICY_ROOT=/path/to/diffusion_policy
 export NOMAD_MODEL_CONFIG=$VISUALNAV_ROOT/train/config/nomad.yaml
+
+uv pip install \
+  "diffusers>=0.27,<0.32" \
+  wandb prettytable tqdm opencv-python h5py \
+  efficientnet-pytorch vit-pytorch positional-encodings \
+  lmdb matplotlib pyyaml
+uv pip install -e "$VISUALNAV_ROOT/train/"
+```
+
+Clone `diffusion_policy` if it is not already available:
+
+```bash
+git clone https://github.com/real-stanford/diffusion_policy.git ~/work/diffusion_policy
+export DIFFUSION_POLICY_ROOT=~/work/diffusion_policy
 ```
 
 Edit `examples/nav-go2/config/nomad_nav.yaml` to set `checkpoint_path` (and optionally `visualnav_root`). Paths may be relative to that file.
 
 Use the same Python environment that has `torch`, `diffusers>=0.27`, `vint_train`, and `diffusion_policy` installed (do **not** use upstream `diffusers==0.11.1` in the DimOS venv).
+
+Quick dependency check:
+
+```bash
+uv run python -c "
+import os
+import sys
+sys.path.insert(0, os.environ['DIFFUSION_POLICY_ROOT'])
+from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
+print('NoMaD dependencies OK')
+"
+```
 
 ## Go2 stack
 
@@ -140,8 +170,32 @@ samples shaped `(num_samples, num_steps, 2)`.
 cd examples/nav-go2 && uv run pytest test_traversability_grid.py -v
 ```
 
+## NoMaD dependency notes
+
+NoMaD packages are intentionally not part of the top-level DimOS `pyproject.toml`.
+Install them into the DimOS `.venv`; do not mix in the upstream Python 3.8 conda
+environment from visualnav.
+
+Common fixes:
+
+| Error | Fix |
+|-------|-----|
+| `No module named 'diffusers'` | `uv pip install "diffusers>=0.27,<0.32"` |
+| `cannot import name 'cached_download' from 'huggingface_hub'` | Upgrade `diffusers`; do not downgrade DimOS `huggingface_hub` |
+| `No module named 'prettytable'`, `wandb`, `efficientnet_pytorch`, `vit_pytorch` | Install the NoMaD support packages listed in Prerequisites |
+| `No module named 'utils'` | Set `VISUALNAV_ROOT` and confirm `$VISUALNAV_ROOT/deployment/src/utils.py` exists |
+| `No module named 'diffusion_policy'` | Clone `real-stanford/diffusion_policy` and set `DIFFUSION_POLICY_ROOT` |
+| `No module named 'sensor_msgs'` | DimOS inference stubs this ROS import; use the local `engine/nomad/inference.py` path |
+| CUDA library import errors such as `libcudnn.so.9` | Reinstall the missing NVIDIA wheels in the DimOS venv |
+
+For CUDA wheel repair:
+
+```bash
+uv pip install --reinstall \
+  nvidia-cudnn-cu12 nvidia-cusparselt-cu12 nvidia-nccl-cu12 nvidia-nvshmem-cu12
+```
+
 ## Related
 
-- [DEPENDENCIES.md](./DEPENDENCIES.md) — NoMaD 依赖安装与常见错误修复
 - [mapping-go2](../mapping-go2/) — exploration + occupancy saving
 - `dimos/navigation/replanning_a_star/` — A* planner on gradient costmaps
