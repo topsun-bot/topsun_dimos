@@ -55,9 +55,7 @@ class CrowInput(Module):
     def start(self) -> None:
         super().start()
         self._human_transport = pLCMTransport(_HUMAN_INPUT_TOPIC)
-        logger.info(
-            "CrowInput ready — awaiting commands from CROW via MCP skill 'receive'"
-        )
+        logger.info("CrowInput ready — awaiting commands from CROW via MCP skill 'receive'")
 
     @rpc
     def stop(self) -> None:

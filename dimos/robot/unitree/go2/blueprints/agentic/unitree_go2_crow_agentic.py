@@ -31,9 +31,9 @@ from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.agents.skills.person_follow import PersonFollowSkillContainer
 from dimos.agents.skills.speak_skill import SpeakSkill
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial import unitree_go2_spatial
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
-from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial import unitree_go2_spatial
 
 unitree_go2_crow_agentic = autoconnect(
     unitree_go2_spatial,
@@ -41,7 +41,7 @@ unitree_go2_crow_agentic = autoconnect(
     PersonFollowSkillContainer.blueprint(camera_info=GO2Connection.camera_info_static),
     UnitreeSkillContainer.blueprint(),
     SpeakSkill.blueprint(),
-    CrowInput.blueprint(),   # replaces WebInput — receives commands from CROW
+    CrowInput.blueprint(),  # replaces WebInput — receives commands from CROW
     McpServer.blueprint(),
     McpClient.blueprint(),
 )
