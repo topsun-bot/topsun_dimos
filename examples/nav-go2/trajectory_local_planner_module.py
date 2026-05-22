@@ -54,13 +54,13 @@ class TrajectoryLocalPlannerConfig(ModuleConfig):
     # ``multi_waypoints``: K-Means + live lidar collision + temporal memory.
     waypoint_selection: WaypointSelectionMode = "navigation_map"
 
-    # --- navigation_map mode (LocalNavigationMapModule RPC) ---
+    # Parameters for navigation_map mode using LocalNavigationMapModule RPC.
     selected_trajectory_index: int = 4
     navigation_map_gradient_strategy: Literal["gradient", "voronoi"] = "gradient"
     navigation_map_robot_increase: float = 2.0
     local_map_max_age_s: float = 0.5
 
-    # --- multi_waypoints mode (MultiWaypointsSelector + lidar stream) ---
+    # Parameters for multi_waypoints mode using MultiWaypointsSelector and lidar.
     collision_thresh: float = 0.25
     memory_decay: float = 0.8
     max_clusters: int = 2
