@@ -14,30 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import platform
 from typing import Any
 
-from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
-from dimos.core.transport import pSHMTransport
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.visualization.vis_module import vis_module
-
-# Mac has some issue with high bandwidth UDP, so we use pSHMTransport for color_image
-# actually we can use pSHMTransport for all platforms, and for all streams
-# TODO need a global transport toggle on blueprints/global config
-_mac_transports: dict[tuple[str, type], pSHMTransport[Image]] = {
-    ("color_image", Image): pSHMTransport(
-        "color_image", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE
-    ),
-}
-
-_transports_base = (
-    autoconnect() if platform.system() == "Linux" else autoconnect().transports(_mac_transports)
-)
 
 
 def _convert_camera_info(camera_info: Any) -> Any:
@@ -98,39 +81,23 @@ def _go2_rerun_blueprint() -> Any:
 
 rerun_config = {
     "blueprint": _go2_rerun_blueprint,
-    # Custom converters for specific rerun entity paths
-    # Normally all these would be specified in their respectative modules
-    # Until this is implemented we have central overrides here
-    #
-    # This is unsustainable once we move to multi robot etc
     "visual_override": {
         "world/camera_info": _convert_camera_info,
         "world/global_map": _convert_global_map,
         "world/navigation_costmap": _convert_navigation_costmap,
     },
-    # Throttle high-volume entities. ``0`` would mean "no limit" in the bridge,
-    # which lets the live in-memory ring buffer grow as fast as the source
-    # publishes — the main cause of long-run viewer/bridge memory bloat. The
-    # values below are well below source rates (color ~14 Hz, maps ~7-8 Hz)
-    # but high enough that the viewer still feels live.
     "max_hz": {
-        "world/global_map": 2,  # source ~7.8 Hz
-        "world/color_image": 5,  # source ~14 Hz
-        "world/global_costmap": 2,  # source ~7.6 Hz
+        "world/global_map": 2,
+        "world/color_image": 5,
+        "world/global_costmap": 2,
     },
-    # Cap the bridge/viewer in-memory ring buffer. The default ``"25%"`` of
-    # system RAM is plenty large to compete with MuJoCo + perception workers
-    # for memory in long sims. ``"2GB"`` is enough to keep ~minute(s) of
-    # history at the throttled rates above.
     "memory_limit": "2GB",
-    # slapping a go2 shaped box on top of tf/base_link
     "static": {
         "world/tf/base_link": _static_base_link,
     },
 }
 
 _with_vis = autoconnect(
-    _transports_base,
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config=rerun_config,

@@ -30,14 +30,14 @@ from dimos.core.coordination.worker_manager_python import WorkerManagerPython
 from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.module import ModuleBase, ModuleSpec
 from dimos.core.resource import Resource
-from dimos.core.transport import LCMTransport, PubSubTransport, pLCMTransport
+from dimos.core.transport import LCMTransport, PubSubTransport, pLCMTransport, pSHMTransport
 from dimos.spec.utils import is_spec, spec_annotation_compliance, spec_structural_compliance
 from dimos.utils.generic import short_id
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.safe_thread_map import safe_thread_map
 
 if TYPE_CHECKING:
-    from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
+    from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom, TransportFactory
     from dimos.core.rpc_client import ModuleProxy, ModuleProxyProtocol
 
 logger = setup_logger()
@@ -536,16 +536,33 @@ def _is_name_unique(blueprint: Blueprint, name: str) -> bool:
     return sum(1 for n, _ in _all_name_types(blueprint) if n == name) == 1
 
 
+def _lcm_factory(topic: str, stream_type: type) -> PubSubTransport[Any]:
+    use_pickled = getattr(stream_type, "lcm_encode", None) is None
+    return pLCMTransport(topic) if use_pickled else LCMTransport(topic, stream_type)
+
+
+def _shm_factory(topic: str, stream_type: type) -> PubSubTransport[Any]:
+    return pSHMTransport(topic)
+
+
+_BUILTIN_FACTORIES: dict[str, TransportFactory] = {
+    "lcm": _lcm_factory,
+    "shm": _shm_factory,
+}
+
+
 def _get_transport_for(blueprint: Blueprint, name: str, stream_type: type) -> PubSubTransport[Any]:
     transport = blueprint.transport_map.get((name, stream_type), None)
     if transport:
         return transport
 
-    use_pickled = getattr(stream_type, "lcm_encode", None) is None
     topic = f"/{name}" if _is_name_unique(blueprint, name) else f"/{short_id()}"
-    transport = pLCMTransport(topic) if use_pickled else LCMTransport(topic, stream_type)
 
-    return transport
+    if blueprint._transport_factory:
+        return blueprint._transport_factory(topic, stream_type)
+
+    factory = _BUILTIN_FACTORIES[global_config.default_transport]
+    return factory(topic, stream_type)
 
 
 def _verify_no_name_conflicts(blueprint: Blueprint) -> None:

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import re
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,6 +25,8 @@ from dimos.visualization.rerun.constants import (
     RerunOpenOption,
     ViewerBackend,
 )
+
+TransportBackend = Literal["lcm", "shm"]
 
 
 def _get_all_numbers(s: str) -> list[float]:
@@ -69,6 +72,7 @@ class GlobalConfig(BaseSettings):
     listen_host: str = "127.0.0.1"
     dimsim_scene: str = "apt"
     dimsim_port: int = 8090
+    default_transport: TransportBackend = "lcm"
 
     model_config = SettingsConfigDict(
         env_file=".env",

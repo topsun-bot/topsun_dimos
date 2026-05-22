@@ -33,6 +33,8 @@ from dimos.core.transport import PubSubTransport
 from dimos.spec.utils import Spec, is_spec
 from dimos.utils.logging_config import setup_logger
 
+TransportFactory = Callable[[str, type], PubSubTransport[Any]]
+
 if sys.version_info >= (3, 11):
     from typing import Self
 else:
@@ -148,6 +150,7 @@ class Blueprint:
     transport_map: Mapping[tuple[str, type], PubSubTransport[Any]] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    _transport_factory: TransportFactory | None = field(default=None)
     global_config_overrides: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     remapping_map: Mapping[tuple[type[ModuleBase], str], str | type[ModuleBase] | type[Spec]] = (
         field(default_factory=lambda: MappingProxyType({}))
@@ -173,6 +176,10 @@ class Blueprint:
 
     def transports(self, transports: dict[tuple[str, type], Any]) -> "Blueprint":
         return replace(self, transport_map=MappingProxyType({**self.transport_map, **transports}))
+
+    def transport_factory(self, factory: TransportFactory) -> "Blueprint":
+        """Set a custom default transport factory (OCP extension point)."""
+        return replace(self, _transport_factory=factory)
 
     def global_config(self, **kwargs: Any) -> "Blueprint":
         return replace(
@@ -217,12 +224,18 @@ def autoconnect(*blueprints: Blueprint) -> Blueprint:
     all_requirement_checks = tuple(check for bs in blueprints for check in bs.requirement_checks)
     all_configurator_checks = tuple(check for bs in blueprints for check in bs.configurator_checks)
 
+    merged_factory: TransportFactory | None = None
+    for bp in blueprints:
+        if bp._transport_factory is not None:
+            merged_factory = bp._transport_factory
+
     return Blueprint(
         blueprints=all_blueprints,
         disabled_modules_tuple=tuple(
             module for bp in blueprints for module in bp.disabled_modules_tuple
         ),
         transport_map=MappingProxyType(all_transports),
+        _transport_factory=merged_factory,
         global_config_overrides=MappingProxyType(all_config_overrides),
         remapping_map=MappingProxyType(all_remappings),
         requirement_checks=all_requirement_checks,
