@@ -186,8 +186,11 @@ jobs:
 
   self-hosted-tests:
     # Skip on PRs from forks which would expose the self-hosted runner to untrusted code from external contributors.
+    # Temporarily skip macOS leg while the self-hosted runner is frequently offline (blocks queued runs).
+    # Remove the macos guard once appledeMacBook-Pro is stable again.
     if: |
-      github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+      && !contains(toJSON(matrix.runner), 'macos')
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
