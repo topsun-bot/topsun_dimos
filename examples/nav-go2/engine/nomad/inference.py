@@ -248,9 +248,7 @@ class NoMaDEngine:
             else:
                 obs_cond = obs_cond.repeat(num_samples, 1, 1)
 
-            naction = torch.randn(
-                (num_samples, model_params["len_traj_pred"], 2), device=device
-            )
+            naction = torch.randn((num_samples, model_params["len_traj_pred"], 2), device=device)
             noise_scheduler.set_timesteps(num_diffusion_iters)
             for k in noise_scheduler.timesteps[:]:
                 noise_pred = model(
