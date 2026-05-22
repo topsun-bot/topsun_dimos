@@ -45,6 +45,7 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 OCCUPIED_THRESHOLD = 80
+_UNSET: float = -1e9
 
 
 def _angle_diff(a: float, b: float) -> float:
@@ -122,13 +123,27 @@ def extract_edge(
     if not np.any(mask):
         return None
 
-    dx_masked = world_xs[mask] - robot_xy[0]
-    dy_masked = world_ys[mask] - robot_xy[1]
-    dists_sq_masked = dx_masked * dx_masked + dy_masked * dy_masked
+    masked_xs = world_xs[mask]
+    masked_ys = world_ys[mask]
 
-    nearest_idx = int(np.argmin(dists_sq_masked))
-    p_nearest = np.array([world_xs[mask][nearest_idx], world_ys[mask][nearest_idx]])
-    d = float(np.sqrt(dists_sq_masked[nearest_idx]))
+    if target_xy is not None:
+        ref_x, ref_y = target_xy[0], target_xy[1]
+    else:
+        ref_x, ref_y = robot_xy[0], robot_xy[1]
+
+    dx_ref = masked_xs - ref_x
+    dy_ref = masked_ys - ref_y
+    dists_sq_ref = dx_ref * dx_ref + dy_ref * dy_ref
+    nearest_idx = int(np.argmin(dists_sq_ref))
+    p_nearest = np.array([masked_xs[nearest_idx], masked_ys[nearest_idx]])
+
+    dx_robot = p_nearest[0] - robot_xy[0]
+    dy_robot = p_nearest[1] - robot_xy[1]
+    d = float(math.sqrt(dx_robot * dx_robot + dy_robot * dy_robot))
+
+    dx_masked = masked_xs - robot_xy[0]
+    dy_masked = masked_ys - robot_xy[1]
+    dists_sq_masked = dx_masked * dx_masked + dy_masked * dy_masked
 
     # Compute edge normal via local PCA on K nearest occupied cells
     if np.sum(mask) <= 1:
@@ -273,9 +288,9 @@ class OrbitObjectSkillContainer(Module):
     @skill
     def orbit_object(
         self,
-        x: float = float("nan"),
-        y: float = float("nan"),
-        bearing: float = float("nan"),
+        x: float = _UNSET,
+        y: float = _UNSET,
+        bearing: float = _UNSET,
         distance: float = 0.8,
         laps: float = 1.0,
         speed: float = 0.3,
@@ -287,14 +302,14 @@ class OrbitObjectSkillContainer(Module):
         fixed distance while circling it.
 
         Target selection (by priority):
-        1. If x and y are both provided (not NaN), orbit the obstacle nearest to that world coordinate.
-        2. If bearing is provided (not NaN), orbit the nearest obstacle in that direction.
+        1. If x and y are both provided, orbit the obstacle nearest to that world coordinate.
+        2. If bearing is provided, orbit the nearest obstacle in that direction.
         3. Otherwise, orbit the nearest obstacle to the robot.
 
         Args:
-            x: Target world X coordinate in meters. Use with y for precise targeting. Omit to skip.
-            y: Target world Y coordinate in meters. Use with x for precise targeting. Omit to skip.
-            bearing: Direction to search for target relative to robot front, in degrees (CCW-positive). 0 = front, 90 = left, -90 = right. Omit to skip.
+            x: Target world X coordinate in meters. Must provide both x and y together.
+            y: Target world Y coordinate in meters. Must provide both x and y together.
+            bearing: Direction to search for target relative to robot front, in degrees (CCW-positive). 0 = front, 90 = left, -90 = right.
             distance: Distance to maintain from the object edge in meters.
             laps: Number of laps to complete around the object.
             speed: Forward speed along the edge in m/s.
@@ -311,8 +326,12 @@ class OrbitObjectSkillContainer(Module):
         if self._latest_costmap is None:
             return "No costmap data available. Cannot start orbit."
 
-        target_xy = np.array([x, y]) if (not math.isnan(x) and not math.isnan(y)) else None
-        bearing_val = bearing if not math.isnan(bearing) else None
+        x_set = x != _UNSET
+        y_set = y != _UNSET
+        if x_set != y_set:
+            return "Both x and y must be provided together for coordinate targeting."
+        target_xy = np.array([x, y]) if (x_set and y_set) else None
+        bearing_val = bearing if bearing != _UNSET else None
 
         robot_xy = np.array([self._latest_odom.x, self._latest_odom.y])
         robot_yaw = self._latest_odom.yaw
@@ -416,6 +435,10 @@ class OrbitObjectSkillContainer(Module):
             odom = self._latest_odom
             costmap = self._latest_costmap
             if odom is None or costmap is None:
+                now = time.monotonic()
+                sleep_dur = next_time - now
+                if sleep_dur > 0:
+                    time.sleep(sleep_dur)
                 continue
 
             robot_xy = np.array([odom.x, odom.y])
@@ -431,6 +454,7 @@ class OrbitObjectSkillContainer(Module):
             )
 
             if edge is None:
+                self.cmd_vel.publish(Twist.zero())
                 self._finish_orbit("Obstacle lost during orbit.")
                 return
 
