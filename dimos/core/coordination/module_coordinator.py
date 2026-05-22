@@ -580,7 +580,12 @@ def _get_transport_for(blueprint: Blueprint, name: str, stream_type: type) -> Pu
     if blueprint._transport_factory:
         return blueprint._transport_factory(topic, stream_type)
 
-    factory = _BUILTIN_FACTORIES[global_config.default_transport]
+    factory = _BUILTIN_FACTORIES.get(global_config.default_transport)
+    if factory is None:
+        raise ValueError(
+            f"Unknown default_transport={global_config.default_transport!r}. "
+            f"Valid options: {list(_BUILTIN_FACTORIES)}"
+        )
     return factory(topic, stream_type)
 
 
