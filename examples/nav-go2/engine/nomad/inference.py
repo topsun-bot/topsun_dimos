@@ -18,14 +18,13 @@ from __future__ import annotations
 
 from collections import deque
 import os
-import sys
 from pathlib import Path
+import sys
 from types import ModuleType
 from typing import Any
 
-from PIL import Image as PILImage
-
 from engine.nomad.config import NoMaDConfig
+from PIL import Image as PILImage
 from trajectory_inference import TrajectoryInferenceResult, TrajectoryNavigationRuntimeError
 
 NoMaDInferenceResult = TrajectoryInferenceResult
@@ -144,11 +143,11 @@ class NoMaDEngine:
         self._stub_ros_sensor_msgs()
 
         try:
-            import torch
-            import yaml
             from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+            import torch
             from utils import load_model, to_numpy, transform_images  # type: ignore[import-untyped]
             from vint_train.training.train_utils import get_action  # type: ignore[import-untyped]
+            import yaml
         except ImportError as exc:
             self._init_error = (
                 f"Missing NoMaD dependencies ({exc}). Install: "
@@ -229,8 +228,7 @@ class NoMaDEngine:
             list(self._context), model_params["image_size"], center_crop=False
         )
         obs_images = obs_images.to(device)
-        fake_goal = torch.randn((1, 3, *model_params["image_size"]), device=device)
-        mask = torch.ones(1, dtype=torch.long, device=device)
+        goal_img, goal_mask = self._goal_condition(model_params["image_size"])
 
         num_samples = self._config.num_samples
         num_diffusion_iters = self._config.num_diffusion_iters
@@ -241,8 +239,8 @@ class NoMaDEngine:
             obs_cond = model(
                 "vision_encoder",
                 obs_img=obs_images,
-                goal_img=fake_goal,
-                input_goal_mask=mask,
+                goal_img=goal_img,
+                input_goal_mask=goal_mask,
             )
             if len(obs_cond.shape) == 2:
                 obs_cond = obs_cond.repeat(num_samples, 1)
@@ -275,3 +273,23 @@ class NoMaDEngine:
         waypoint_index = self._config.waypoint_index
         chosen = actions[0, waypoint_index].copy()
         return NoMaDInferenceResult(trajectories=actions, chosen_waypoint=chosen)
+
+    def _goal_condition(self, image_size: tuple[int, int]) -> tuple[Any, Any]:
+        torch = self._torch
+        device = self._device
+
+        if self._config.inference_mode == "explore":
+            goal_img = torch.randn((1, 3, *image_size), device=device)
+            goal_mask = torch.ones(1, dtype=torch.long, device=device)
+            return goal_img, goal_mask
+
+        goal_path = self._config.resolved_goal_image()
+        if goal_path is None:
+            raise NoMaDRuntimeError("navigate mode requires goal_image_path in nomad_nav.yaml")
+        if not goal_path.is_file():
+            raise NoMaDRuntimeError(f"Goal image not found: {goal_path}")
+
+        goal_pil = PILImage.open(goal_path).convert("RGB")
+        goal_img = self._transform_images([goal_pil], image_size, center_crop=False).to(device)
+        goal_mask = torch.zeros(1, dtype=torch.long, device=device)
+        return goal_img, goal_mask

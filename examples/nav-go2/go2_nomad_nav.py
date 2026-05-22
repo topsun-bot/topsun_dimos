@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
+from typing import Literal, cast
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
@@ -38,15 +39,21 @@ from local_navigation_map_module import (
     LocalNavigationMapConfig,
     LocalNavigationMapModule,
 )
+from record_image_module import DEFAULT_RECORD_IMAGE_DIR, RecordImageModule
+
+NavGo2Mode = Literal["record", "explore", "navigate"]
+NAV_GO2_MODES: tuple[NavGo2Mode, ...] = ("record", "explore", "navigate")
 
 
 @dataclass(frozen=True)
 class NavGo2RunConfig:
     """Resolved runtime configuration from CLI / environment."""
 
+    mode: NavGo2Mode
     robot_ip: str | None
     nomad_config: NoMaDConfig
     viewer: str | None
+    record_output_dir: str
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -55,6 +62,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--simulation", action="store_true", help="MuJoCo simulation")
     parser.add_argument("--replay", action="store_true", help="Dataset replay mode")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=NAV_GO2_MODES,
+        default="explore",
+        help="Runtime mode: record, explore, or navigate (default: explore)",
+    )
     parser.add_argument(
         "--viewer",
         type=str,
@@ -73,6 +87,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=8,
         help="Diffusion trajectory samples per frame (default: 8)",
+    )
+    parser.add_argument(
+        "--record-output-dir",
+        type=str,
+        default=str(DEFAULT_RECORD_IMAGE_DIR),
+        help="Directory for --mode record image output",
     )
     return parser
 
@@ -100,14 +120,18 @@ def parse_nav_go2_config(argv: list[str] | None = None) -> NavGo2RunConfig:
 
     nomad_config = NoMaDConfig.load_default()
     overrides: dict[str, object] = {"num_samples": args.num_samples}
+    if args.mode in ("explore", "navigate"):
+        overrides["inference_mode"] = args.mode
     if args.visualnav_root is not None:
         overrides["visualnav_root"] = args.visualnav_root
     nomad_config = nomad_config.model_copy(update=overrides)
 
     return NavGo2RunConfig(
+        mode=cast("NavGo2Mode", args.mode),
         robot_ip=resolve_robot_ip(args),
         nomad_config=nomad_config,
         viewer=args.viewer,
+        record_output_dir=args.record_output_dir,
     )
 
 
@@ -122,6 +146,16 @@ def _apply_viewer_cli(viewer: str) -> None:
 
 def _build_blueprint(config: NavGo2RunConfig):
     """Compose stack from ``waypoint_selection`` in nomad config."""
+    if config.mode == "record":
+        return autoconnect(
+            unitree_go2_basic,
+            RecordImageModule.blueprint(output_dir=config.record_output_dir),
+        ).global_config(
+            n_workers=3,
+            robot_model="unitree_go2",
+            robot_ip=config.robot_ip,
+        )
+
     follower_config = WaypointFollowerConfig.load_default()
     modules: list = [unitree_go2_basic]
 

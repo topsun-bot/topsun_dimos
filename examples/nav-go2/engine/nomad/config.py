@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from trajectory_local_planner_module import TrajectoryLocalPlannerConfig
 import yaml
@@ -41,6 +41,8 @@ class NoMaDConfig(TrajectoryLocalPlannerConfig):
     visualnav_root: str | None = None
     checkpoint_path: str | None = None
     model_config_path: str | None = None
+    goal_image_path: str | None = None
+    inference_mode: Literal["explore", "navigate"] = "explore"
 
     num_samples: int = 8
     waypoint_index: int = 2
@@ -81,6 +83,11 @@ class NoMaDConfig(TrajectoryLocalPlannerConfig):
                 return candidate
         return None
 
+    def resolved_goal_image(self) -> Path | None:
+        if not self.goal_image_path:
+            return None
+        return Path(self.goal_image_path).expanduser().resolve()
+
     @classmethod
     def from_yaml(cls, path: Path | str) -> Self:
         """Load NoMaD settings from a YAML file (e.g. ``nomad_nav.yaml``)."""
@@ -91,7 +98,7 @@ class NoMaDConfig(TrajectoryLocalPlannerConfig):
         if inference_hz is not None:
             raw["min_inference_interval_s"] = 1.0 / max(float(inference_hz), 0.1)
 
-        for key in ("checkpoint_path", "model_config_path"):
+        for key in ("checkpoint_path", "model_config_path", "goal_image_path"):
             value = raw.get(key)
             if not value:
                 continue
