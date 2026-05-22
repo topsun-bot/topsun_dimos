@@ -186,11 +186,8 @@ jobs:
 
   self-hosted-tests:
     # Skip on PRs from forks which would expose the self-hosted runner to untrusted code from external contributors.
-    # Temporarily skip macOS leg while the self-hosted runner is frequently offline (blocks queued runs).
-    # Remove the macos guard once appledeMacBook-Pro is stable again.
     if: |
-      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
-      && !contains(toJSON(matrix.runner), 'macos')
+      github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -206,10 +203,12 @@ jobs:
               image: ghcr.io/topsun-bot/ros-dev:latest
             markers: "self_hosted or skipif_no_ros"
             experimental: false
-          - runner: [self-hosted, macos, arm64]
-            container: null  # run on host — `container:` is Linux-only
-            markers: "self_hosted"
-            experimental: true
+          # Temporarily disabled: macOS runner frequently offline and blocks queued CI runs.
+          # Restore when appledeMacBook-Pro is stable again.
+          # - runner: [self-hosted, macos, arm64]
+          #   container: null  # run on host — `container:` is Linux-only
+          #   markers: "self_hosted"
+          #   experimental: true
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.experimental }}
     permissions:
