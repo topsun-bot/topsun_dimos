@@ -61,7 +61,7 @@ class MultiWaypointsSelector:
 
         Clustering, memory scoring, and the returned path stay in the path frame
         (e.g. ``base_link``). When ``path_to_lidar`` is set, only the few
-        representative trajectories (``M×N`` waypoints, not the full lidar scan)
+        representative trajectories (``M x N`` waypoints, not the full lidar scan)
         are transformed into the lidar frame for collision checks; the returned
         array is always the untransformed path-frame trajectory.
 
@@ -69,8 +69,8 @@ class MultiWaypointsSelector:
             multi_waypoints: Candidate paths, shape ``(M, N, 2)`` in the path
                 frame (typically ``base_link``).
             lidar_points: 2D lidar hits, shape ``(L, 2)`` in the lidar frame.
-            path_to_lidar: Optional ``4×4`` or ``3×3`` rigid transform
-                ``T_lidar←path`` (``tf.get(lidar_frame, path_frame).to_matrix()``).
+            path_to_lidar: Optional ``4 x 4`` or ``3 x 3`` rigid transform
+                ``T_lidar_from_path`` (``tf.get(lidar_frame, path_frame).to_matrix()``).
                 Omit when paths and lidar are already in the same frame.
 
         Returns:
