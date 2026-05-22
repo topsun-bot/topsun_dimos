@@ -53,8 +53,6 @@ def _angle_diff(a: float, b: float) -> float:
     return (d + math.pi) % (2 * math.pi) - math.pi
 
 
-
-
 @dataclass
 class EdgeResult:
     """Nearest occupied edge relative to the robot."""
@@ -197,8 +195,6 @@ def estimate_object_center(
     return np.array([world_xs[mask].mean(), world_ys[mask].mean()])
 
 
-
-
 class LapTracker:
     """Tracks cumulative angle to determine when N laps are complete."""
 
@@ -227,8 +223,6 @@ class LapTracker:
         self._accumulated += delta
         self._last_angle = angle
         return abs(self._accumulated) >= self._target_angle
-
-
 
 
 class OrbitObjectSkillContainer(Module):
