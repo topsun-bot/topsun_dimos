@@ -310,8 +310,11 @@ class OrbitObjectSkillContainer(Module):
             self._thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
             if self._thread.is_alive():
                 logger.warning("Previous orbit thread did not exit in time")
+            self._finish_orbit("Restarted by new orbit call.")
             self._thread = None
 
+        if laps <= 0:
+            return "laps must be positive."
         if self._latest_odom is None:
             return "No odometry data available. Cannot start orbit."
         if self._latest_costmap is None:
