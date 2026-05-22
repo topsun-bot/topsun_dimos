@@ -4,7 +4,7 @@
 visualnav_root: null
 checkpoint_path: ../models/nomad/nomad.pth
 model_config_path: null
-goal_image_path: null
+goal_image_path: ../recordings/images/1779412304145259520_000017.png
 
 num_samples: 8
 inference_hz: 2.0

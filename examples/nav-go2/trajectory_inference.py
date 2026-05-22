@@ -29,6 +29,7 @@ class TrajectoryInferenceResult:
 
     trajectories: np.ndarray  # (num_samples, len_traj_pred, 2) in body frame (m)
     chosen_waypoint: np.ndarray  # (2,) body frame (m)
+    goal_distance: float | None = None  # predicted temporal distance to goal, if available
 
 
 class TrajectoryNavigationRuntimeError(RuntimeError):

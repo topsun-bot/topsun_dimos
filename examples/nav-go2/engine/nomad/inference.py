@@ -242,6 +242,7 @@ class NoMaDEngine:
                 goal_img=goal_img,
                 input_goal_mask=goal_mask,
             )
+            goal_distance = self._predict_goal_distance(obs_cond, goal_mask)
             if len(obs_cond.shape) == 2:
                 obs_cond = obs_cond.repeat(num_samples, 1)
             else:
@@ -272,7 +273,22 @@ class NoMaDEngine:
 
         waypoint_index = self._config.waypoint_index
         chosen = actions[0, waypoint_index].copy()
-        return NoMaDInferenceResult(trajectories=actions, chosen_waypoint=chosen)
+        return NoMaDInferenceResult(
+            trajectories=actions,
+            chosen_waypoint=chosen,
+            goal_distance=goal_distance,
+        )
+
+    def _predict_goal_distance(self, obsgoal_cond: Any, goal_mask: Any) -> float | None:
+        if self._config.inference_mode != "navigate":
+            return None
+
+        torch = self._torch
+        if bool(torch.any(goal_mask != 0).item()):
+            return None
+
+        dists = self._model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+        return float(self._to_numpy(dists.flatten())[0])
 
     def _goal_condition(self, image_size: tuple[int, int]) -> tuple[Any, Any]:
         torch = self._torch

@@ -21,8 +21,8 @@ import time
 from typing import Literal
 
 from local_navigation_map_module import LocalNavigationMapSpec
-import numpy as np
 from multi_waypoints_selector import MultiWaypointsSelector
+import numpy as np
 from trajectory_inference import (
     TrajectoryNavigationEngine,
     TrajectoryNavigationRuntimeError,
@@ -223,13 +223,17 @@ class TrajectoryLocalPlannerModule(Module):
 
         if self._frame_count % 20 == 0:
             free_cells = int((grid.grid == 0).sum()) if grid is not None else -1
+            goal_distance = (
+                f"{result.goal_distance:.2f}" if result.goal_distance is not None else "n/a"
+            )
             logger.info(
                 "Published local_waypoints (%d poses, candidates=%d, free_cells=%d, "
-                "selection=%s, waypoint=%.2f, %.2f)",
+                "selection=%s, goal_distance=%s, waypoint=%.2f, %.2f)",
                 len(local_waypoints.poses),
                 len(candidates),
                 free_cells,
                 self.config.waypoint_selection,
+                goal_distance,
                 result.chosen_waypoint[0],
                 result.chosen_waypoint[1],
             )
