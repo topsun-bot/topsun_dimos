@@ -27,10 +27,17 @@ from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.base import NavigationInterface, NavigationState
+from dimos.navigation.obstacle_snapshot.module_spec import ObstacleSnapshotSpec
 from dimos.navigation.replanning_a_star.global_planner import GlobalPlanner
+from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 class ReplanningAStarPlanner(Module, NavigationInterface):
+    _obstacle_snapshot: ObstacleSnapshotSpec | None = None
+    _go2: GO2ConnectionSpec | None = None
     odom: In[PoseStamped]  # TODO: Use TF.
     global_costmap: In[OccupancyGrid]
     goal_request: In[PoseStamped]
@@ -83,7 +90,28 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
                 self._planner.navigation_costmap.subscribe(self.navigation_costmap.publish)
             )
 
+        if self.config.g.obstacle_navigation:
+            if self._obstacle_snapshot is None:
+                logger.warning(
+                    "obstacle_navigation is enabled but ObstacleSnapshotModule is not in the blueprint"
+                )
+            else:
+                self._planner.set_obstacle_block_handler(
+                    self._obstacle_snapshot.handle_navigation_block
+                )
+
+        if self.config.g.simulation and self._go2 is not None:
+            self._planner.set_foot_raise_callback(
+                lambda raise_m, reach_m, leg_mask=0: self._go2.set_foot_raise_height(
+                    raise_m, reach_m, leg_mask
+                )
+            )
+
         self._planner.start()
+
+    @rpc
+    def attempt_cross_forward(self, forward_m: float) -> bool:
+        return self._planner.attempt_cross_forward(forward_m)
 
     @rpc
     def stop(self) -> None:

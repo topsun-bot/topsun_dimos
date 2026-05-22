@@ -33,8 +33,9 @@ _video_size = VIDEO_WIDTH * VIDEO_HEIGHT * 3
 _depth_size = VIDEO_WIDTH * VIDEO_HEIGHT * 4  # float32 = 4 bytes
 # Odometry buffer: position(3) + quaternion(4) + timestamp(1) = 8 floats
 _odom_size = 8 * 8  # 8 float64 values
-# Command buffer: linear(3) + angular(3) = 6 floats
-_cmd_size = 6 * 4  # 6 float32 values
+# Command: linear(3) + angular(3) + foot_raise(1) + front_reach(1) + front_leg_mask(1) = 9
+# front_leg_mask: 0=off, 1=lift FR (brace FL), 2=lift FL (brace FR)
+_cmd_size = 9 * 4  # 9 float32 values
 # Lidar message buffer: for serialized lidar data
 _lidar_size = 1024 * 1024 * 4  # 4MB should be enough for point cloud
 # Sequence/version numbers for detecting updates
@@ -167,11 +168,23 @@ class ShmReader:
 
         self._increment_seq(4)
 
+    def read_foot_raise_height(self) -> float:
+        cmd_array: NDArray[Any] = np.ndarray((9,), dtype=np.float32, buffer=self.shm.cmd.buf)
+        return float(cmd_array[6])
+
+    def read_front_reach(self) -> float:
+        cmd_array: NDArray[Any] = np.ndarray((9,), dtype=np.float32, buffer=self.shm.cmd.buf)
+        return float(cmd_array[7])
+
+    def read_front_leg_mask(self) -> int:
+        cmd_array: NDArray[Any] = np.ndarray((9,), dtype=np.float32, buffer=self.shm.cmd.buf)
+        return int(cmd_array[8])
+
     def read_command(self) -> tuple[NDArray[Any], NDArray[Any]] | None:
         seq = self._get_seq(3)
         if seq > self._last_cmd_seq:
             self._last_cmd_seq = seq
-            cmd_array: NDArray[Any] = np.ndarray((6,), dtype=np.float32, buffer=self.shm.cmd.buf)
+            cmd_array: NDArray[Any] = np.ndarray((9,), dtype=np.float32, buffer=self.shm.cmd.buf)
             linear = cmd_array[0:3].copy()
             angular = cmd_array[3:6].copy()
             return linear, angular
@@ -202,7 +215,7 @@ class ShmWriter:
         seq_array: NDArray[Any] = np.ndarray((8,), dtype=np.int64, buffer=self.shm.seq.buf)
         seq_array[:] = 0
 
-        cmd_array: NDArray[Any] = np.ndarray((6,), dtype=np.float32, buffer=self.shm.cmd.buf)
+        cmd_array: NDArray[Any] = np.ndarray((9,), dtype=np.float32, buffer=self.shm.cmd.buf)
         cmd_array[:] = 0
 
         control_array: NDArray[Any] = np.ndarray((2,), dtype=np.int32, buffer=self.shm.control.buf)
@@ -235,10 +248,20 @@ class ShmWriter:
             return (pos, quat, timestamp), seq
         return None, 0
 
-    def write_command(self, linear: NDArray[Any], angular: NDArray[Any]) -> None:
-        cmd_array: NDArray[Any] = np.ndarray((6,), dtype=np.float32, buffer=self.shm.cmd.buf)
+    def write_command(
+        self,
+        linear: NDArray[Any],
+        angular: NDArray[Any],
+        foot_raise_height: float = 0.0,
+        front_reach_m: float = 0.0,
+        front_leg_mask: int = 0,
+    ) -> None:
+        cmd_array: NDArray[Any] = np.ndarray((9,), dtype=np.float32, buffer=self.shm.cmd.buf)
         cmd_array[0:3] = linear
         cmd_array[3:6] = angular
+        cmd_array[6] = max(0.0, float(foot_raise_height))
+        cmd_array[7] = max(0.0, float(front_reach_m))
+        cmd_array[8] = float(max(0, min(2, int(front_leg_mask))))
         self._increment_seq(3)
 
     def read_lidar(self) -> tuple[PointCloud2 | None, int]:

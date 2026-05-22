@@ -163,6 +163,7 @@ all_modules = {
     "object-tracker2-d": "dimos.perception.object_tracker_2d.ObjectTracker2D",
     "object-tracker3-d": "dimos.perception.object_tracker_3d.ObjectTracker3D",
     "object-tracking": "dimos.perception.object_tracker.ObjectTracking",
+    "obstacle-snapshot-module": "dimos.navigation.obstacle_snapshot.module.ObstacleSnapshotModule",
     "osm-skill": "dimos.agents.skills.osm.OsmSkill",
     "patrolling-module": "dimos.navigation.patrolling.module.PatrollingModule",
     "perceive-loop-skill": "dimos.perception.perceive_loop_skill.PerceiveLoopSkill",

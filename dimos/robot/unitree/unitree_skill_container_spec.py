@@ -6,23 +6,18 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
+# Unless required by applicable law or agreed to writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Protocol
+from typing import Protocol
 
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.spec.utils import Spec
 
 
-class GO2ConnectionSpec(Spec, Protocol):
-    def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]: ...
+class UnitreeSkillContainerSpec(Spec, Protocol):
+    def execute_sport_command(self, command_name: str) -> str: ...
 
-    def observe(self) -> Image | None: ...
-
-    def set_foot_raise_height(
-        self, height_m: float, front_reach_m: float = 0.0, front_leg_mask: int = 0
-    ) -> None: ...
+    def relative_move(self, forward: float = 0.0, left: float = 0.0, degrees: float = 0.0) -> str: ...

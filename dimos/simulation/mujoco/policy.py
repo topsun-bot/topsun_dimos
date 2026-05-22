@@ -77,6 +77,26 @@ class OnnxController(ABC):
 
 
 class Go1OnnxController(OnnxController):
+    # Actuator order: FR(0-2), FL(3-5), RR(6-8), RL(9-11).
+    _FR_LEG = (0, 1, 2)
+    _FL_LEG = (3, 4, 5)
+    _RR_LEG = (6, 7, 8)
+    _RL_LEG = (9, 10, 11)
+    _ALL_THIGH_ACTUATORS = (1, 4, 7, 10)
+    _REAR_HIP_ACTUATORS = (6, 9)
+    # Torso-up: negative thigh ctrl raises COM on Go1; rear-hip pitch back.
+    _THIGH_LIFT_PER_M = -0.42
+    _REAR_HIP_PITCH_BACK_PER_M = -0.24
+    _FRONT_CALF_RAISE_PER_M = -1.15
+    _REAR_CALF_LIFT_PER_M = -0.28
+    _HIP_REACH_PER_M = 0.26
+    _LIFT_THIGH_EXTRA_PER_M = -0.32
+    # Support front leg + diagonal rear (anti roll when the other front leg is lifted).
+    _SUPPORT_CALF_PRESS_PER_M = 1.12
+    _SUPPORT_THIGH_LOAD_PER_M = 0.62
+    _DIAGONAL_REAR_CALF_PRESS_PER_M = 0.42
+    _DIAGONAL_REAR_THIGH_LOAD_PER_M = 0.28
+
     def get_obs(self, model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray[Any, Any]:
         linvel = data.sensor("local_linvel").data
         gyro = data.sensor("gyro").data
@@ -96,6 +116,47 @@ class Go1OnnxController(OnnxController):
             ]
         )
         return obs.astype(np.float32)
+
+    def get_control(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        super().get_control(model, data)
+        foot_raise = getattr(self._input_controller, "foot_raise_height", 0.0)
+        front_reach = getattr(self._input_controller, "front_reach_m", 0.0)
+        leg_mask = int(getattr(self._input_controller, "front_leg_mask", 0))
+        if foot_raise <= 0.0 and front_reach <= 0.0:
+            return
+
+        for idx in self._ALL_THIGH_ACTUATORS:
+            data.ctrl[idx] += self._THIGH_LIFT_PER_M * foot_raise
+        for idx in self._REAR_HIP_ACTUATORS:
+            data.ctrl[idx] += self._REAR_HIP_PITCH_BACK_PER_M * foot_raise
+        for idx in (8, 11):
+            data.ctrl[idx] += self._REAR_CALF_LIFT_PER_M * foot_raise
+
+        lift_legs: list[tuple[int, ...]] = []
+        support_legs: list[tuple[int, ...]] = []
+        diagonal_rear: tuple[int, ...] | None = None
+        if leg_mask == 1:
+            lift_legs = [self._FR_LEG]
+            support_legs = [self._FL_LEG]
+            diagonal_rear = self._RL_LEG
+        elif leg_mask == 2:
+            lift_legs = [self._FL_LEG]
+            support_legs = [self._FR_LEG]
+            diagonal_rear = self._RR_LEG
+
+        for hip, thigh, calf in lift_legs:
+            data.ctrl[calf] += self._FRONT_CALF_RAISE_PER_M * foot_raise
+            data.ctrl[thigh] += self._LIFT_THIGH_EXTRA_PER_M * foot_raise
+            data.ctrl[hip] += self._HIP_REACH_PER_M * front_reach
+
+        for _hip, thigh, calf in support_legs:
+            data.ctrl[calf] += self._SUPPORT_CALF_PRESS_PER_M * foot_raise
+            data.ctrl[thigh] += self._SUPPORT_THIGH_LOAD_PER_M * foot_raise
+
+        if diagonal_rear is not None:
+            _dhip, dthigh, dcalf = diagonal_rear
+            data.ctrl[dcalf] += self._DIAGONAL_REAR_CALF_PRESS_PER_M * foot_raise
+            data.ctrl[dthigh] += self._DIAGONAL_REAR_THIGH_LOAD_PER_M * foot_raise
 
 
 class G1OnnxController(OnnxController):

@@ -79,6 +79,20 @@ class PathClearance:
 
         return self._last_mask
 
+    def max_cost_ahead(self) -> int:
+        """Maximum height-cost value on the upcoming path corridor (unknown = -1 ignored)."""
+        with self._lock:
+            costmap = self._costmap
+
+        if costmap is None:
+            return 0
+
+        cells = costmap.grid[self.mask]
+        known = cells[cells >= 0]
+        if known.size == 0:
+            return 0
+        return int(known.max())
+
     def is_obstacle_ahead(self) -> bool:
         with self._lock:
             costmap = self._costmap

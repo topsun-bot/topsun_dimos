@@ -45,6 +45,8 @@ class GlobalConfig(BaseSettings):
     mujoco_global_costmap_from_occupancy: str | None = None
     mujoco_global_map_from_pointcloud: str | None = None
     mujoco_start_pos: str = "-1.0, 1.0"
+    #: Sim spawn yaw (rad) about +Z; None keeps the model home keyframe orientation.
+    mujoco_start_yaw: float | None = None
     mujoco_steps_per_frame: int = 7
     robot_model: str | None = None
     robot_width: float = 0.3
@@ -54,8 +56,45 @@ class GlobalConfig(BaseSettings):
     mcp_port: int = 9990
     dtop: bool = False
     obstacle_avoidance: bool = True
+    #: Cross-first navigation on block: try step over, then replan, then stop.
+    obstacle_navigation: bool = True
+    obstacle_cross_forward_m: float = 0.70
+    obstacle_cross_max_attempts: int = 2
+    obstacle_detour_max_attempts: int = 1
+    #: Reset cross/detour counters after moving this far (m) from the block location.
+    obstacle_episode_reset_m: float = 2.5
+    #: Reserved; threshold gait is only applied during cross-forward in sim.
+    obstacle_low_cost_foot_raise_m: float = 0.0
+    #: Sim MuJoCo: per-leg foot clearance during cross (fixed 20 cm when gait active).
+    obstacle_cross_foot_raise_m: float = 0.20
+    #: Reserved; threshold gait is only applied during cross-forward in sim.
+    obstacle_low_cost_front_reach_m: float = 0.0
+    #: Sim MuJoCo: front-paw forward probe during cross (fixed 5 cm when gait active).
+    obstacle_cross_front_reach_m: float = 0.05
+    #: Sim MuJoCo: short backup (s) before cross to unstick a caught front leg.
+    obstacle_cross_backup_s: float = 0.35
+    #: Sim MuJoCo: single-leg lift hold (s) before landing wait.
+    obstacle_cross_leg_phase_s: float = 0.75
+    #: Sim MuJoCo: wait after each leg lands (s) before lifting the other front leg.
+    obstacle_cross_leg_land_s: float = 0.85
+    #: Sim MuJoCo: forward travel (m) while one front leg is raised (per-leg step).
+    obstacle_cross_leg_step_m: float = 0.12
+    #: Sim MuJoCo: duration (s) of the per-leg forward creep while raised.
+    obstacle_cross_leg_creep_s: float = 0.40
+    #: Reserved; no dual-leg settle (alternating FL/FR only).
+    obstacle_cross_settle_s: float = 0.0
+    #: Sim MuJoCo: forward speed (m/s) for backup only during cross.
+    obstacle_cross_linear_speed: float = 0.22
     detection_model: VlModelName = "moondream"
     listen_host: str = "127.0.0.1"
+    #: If True, :class:`dimos.perception.spatial_perception.SpatialMemory` uses stub
+    #: image embeddings instead of loading CLIP from Git LFS (``models_clip``).
+    #: Use when ``git lfs pull`` is unavailable; semantic map / similarity quality is degraded.
+    skip_spatial_lfs: bool = False
+    #: Optional OpenAI-compatible API base URL (e.g. DeepSeek ``https://api.deepseek.com/v1``).
+    #: Also read from env ``OPENAI_BASE_URL`` if unset. ``McpClient`` passes this to LangChain
+    #: ``ChatOpenAI`` together with ``OPENAI_API_KEY`` or ``DEEPSEEK_API_KEY``.
+    openai_base_url: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

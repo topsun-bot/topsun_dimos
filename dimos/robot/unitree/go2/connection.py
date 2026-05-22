@@ -79,6 +79,9 @@ class Go2ConnectionProtocol(Protocol):
     def liedown(self) -> bool: ...
     def balance_stand(self) -> bool: ...
     def set_obstacle_avoidance(self, enabled: bool = True) -> None: ...
+    def set_foot_raise_height(
+        self, height_m: float, front_reach_m: float = 0.0, front_leg_mask: int = 0
+    ) -> None: ...
     def enable_rage_mode(self) -> bool: ...
     def publish_request(self, topic: str, data: dict) -> dict: ...  # type: ignore[type-arg]
 
@@ -161,6 +164,11 @@ class ReplayConnection(UnitreeWebRTCConnection):
         return True
 
     def set_obstacle_avoidance(self, enabled: bool = True) -> None:
+        pass
+
+    def set_foot_raise_height(
+        self, height_m: float, front_reach_m: float = 0.0, front_leg_mask: int = 0
+    ) -> None:
         pass
 
     def enable_rage_mode(self) -> bool:
@@ -318,6 +326,15 @@ class GO2Connection(Module, Camera, Pointcloud):
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         """Send movement command to robot."""
         return self.connection.move(twist, duration)
+
+    @rpc
+    def set_foot_raise_height(
+        self, height_m: float, front_reach_m: float = 0.0, front_leg_mask: int = 0
+    ) -> None:
+        """Raise feet and extend front paws for sills (MuJoCo sim); no-op on replay."""
+        setter = getattr(self.connection, "set_foot_raise_height", None)
+        if setter is not None:
+            setter(height_m, front_reach_m, front_leg_mask)
 
     @rpc
     def standup(self) -> bool:

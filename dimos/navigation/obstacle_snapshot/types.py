@@ -12,17 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Protocol
+from typing import Literal, TypeAlias
 
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.spec.utils import Spec
+ObstacleTriggerReason: TypeAlias = Literal["obstacle_found", "stuck"]
 
-
-class GO2ConnectionSpec(Spec, Protocol):
-    def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]: ...
-
-    def observe(self) -> Image | None: ...
-
-    def set_foot_raise_height(
-        self, height_m: float, front_reach_m: float = 0.0, front_leg_mask: int = 0
-    ) -> None: ...
+# continue: cross succeeded, resume path to goal
+# detour: cross failed, replan around (low priority)
+# stop: cross and detour exhausted, cancel goal (photo taken)
+ObstacleNavOutcome: TypeAlias = Literal["continue", "detour", "stop"]

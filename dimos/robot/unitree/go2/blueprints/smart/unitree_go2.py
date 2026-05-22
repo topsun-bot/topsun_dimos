@@ -27,17 +27,29 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
     WavefrontFrontierExplorer,
 )
 from dimos.navigation.patrolling.module import PatrollingModule
+from dimos.navigation.obstacle_snapshot.module import ObstacleSnapshotModule
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
+from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 
 unitree_go2 = autoconnect(
     unitree_go2_basic,
     VoxelGridMapper.blueprint(),
     CostMapper.blueprint(),
+    ObstacleSnapshotModule.blueprint(),
     ReplanningAStarPlanner.blueprint(),
+    UnitreeSkillContainer.blueprint(),
     WavefrontFrontierExplorer.blueprint(),
     PatrollingModule.blueprint(),
-).global_config(n_workers=9, robot_model="unitree_go2")
+).global_config(
+    n_workers=11,
+    robot_model="unitree_go2",
+    planner_robot_speed=1.1,
+    obstacle_cross_linear_speed=0.44,
+    # +2 m toward rear (+X); yaw π faces −X (5 cm sill at −1 m is first ahead).
+    mujoco_start_pos="0.106, 1.447",
+    mujoco_start_yaw=3.141592653589793,
+)
 
 
 class Go2MemoryConfig(RecorderConfig):

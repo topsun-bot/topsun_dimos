@@ -30,6 +30,8 @@ from dimos.simulation.mujoco.input_controller import InputController
 from dimos.simulation.mujoco.policy import G1OnnxController, Go1OnnxController, OnnxController
 from dimos.utils.data import get_data
 
+_BUNDLED_SCENES_DIR = Path(__file__).resolve().parent / "scenes"
+
 
 def _get_data_dir() -> epath.Path:
     return epath.Path(str(get_data("mujoco_sim")))
@@ -151,6 +153,8 @@ def load_scene_xml(config: GlobalConfig) -> str:
         return generate_mujoco_scene(OccupancyGrid.from_path(path))
 
     mujoco_room = config.mujoco_room or "office1"
-    xml_file = (_get_data_dir() / f"scene_{mujoco_room}.xml").as_posix()
-    with open(xml_file) as f:
-        return f.read()
+    bundled = _BUNDLED_SCENES_DIR / f"scene_{mujoco_room}.xml"
+    if bundled.is_file():
+        return bundled.read_text()
+    xml_file = _get_data_dir() / f"scene_{mujoco_room}.xml"
+    return xml_file.read_text()

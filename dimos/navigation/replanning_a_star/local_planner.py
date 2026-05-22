@@ -69,7 +69,6 @@ class LocalPlanner(Resource):
     _orientation_tolerance: float = 0.35
     _navigation_costmap_interval: float = 1.0
     _navigation_costmap_last: float = 0.0
-
     def __init__(
         self, global_config: GlobalConfig, navigation_map: NavigationMap, goal_tolerance: float
     ) -> None:
@@ -86,7 +85,11 @@ class LocalPlanner(Resource):
         self._navigation_map = navigation_map
         self._goal_tolerance = goal_tolerance
 
-        speed = self._speed
+        speed = (
+            global_config.planner_robot_speed
+            if global_config.planner_robot_speed is not None
+            else self._speed
+        )
         if global_config.nerf_speed < 1.0:
             speed *= global_config.nerf_speed
 
@@ -143,6 +146,10 @@ class LocalPlanner(Resource):
     def get_unique_state(self) -> tuple[PlannerState, int]:
         with self._lock:
             return (self._state, self._state_unique_id)
+
+    def get_path_clearance(self) -> PathClearance | None:
+        with self._lock:
+            return self._path_clearance
 
     def _thread_entrypoint(self) -> None:
         try:

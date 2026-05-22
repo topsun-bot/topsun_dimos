@@ -87,6 +87,9 @@ class MujocoConnection:
         self._last_odom_seq = 0
         self._last_lidar_seq = 0
         self._stop_timer: threading.Timer | None = None
+        self._foot_raise_height_m = 0.0
+        self._front_reach_m = 0.0
+        self._front_leg_mask = 0
 
         self._stream_threads: list[threading.Thread] = []
         self._stop_events: list[threading.Event] = []
@@ -341,13 +344,38 @@ class MujocoConnection:
 
         return self._create_stream(get_video_as_image, VIDEO_FPS, "Video")
 
+    def set_foot_raise_height(
+        self,
+        height_m: float,
+        front_reach_m: float = 0.0,
+        front_leg_mask: int = 0,
+    ) -> None:
+        """Sim only: per-leg or both-front threshold gait (Go1OnnxController)."""
+        self._foot_raise_height_m = max(0.0, float(height_m))
+        self._front_reach_m = max(0.0, float(front_reach_m))
+        self._front_leg_mask = max(0, min(2, int(front_leg_mask)))
+        if self.shm_data is not None:
+            self.shm_data.write_command(
+                np.zeros(3, dtype=np.float32),
+                np.zeros(3, dtype=np.float32),
+                foot_raise_height=self._foot_raise_height_m,
+                front_reach_m=self._front_reach_m,
+                front_leg_mask=self._front_leg_mask,
+            )
+
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         if self._is_cleaned_up or self.shm_data is None:
             return True
 
         linear = np.array([twist.linear.x, twist.linear.y, twist.linear.z], dtype=np.float32)
         angular = np.array([twist.angular.x, twist.angular.y, twist.angular.z], dtype=np.float32)
-        self.shm_data.write_command(linear, angular)
+        self.shm_data.write_command(
+            linear,
+            angular,
+            foot_raise_height=self._foot_raise_height_m,
+            front_reach_m=self._front_reach_m,
+            front_leg_mask=self._front_leg_mask,
+        )
 
         if duration > 0:
             if self._stop_timer:
@@ -356,7 +384,11 @@ class MujocoConnection:
             def stop_movement() -> None:
                 if self.shm_data:
                     self.shm_data.write_command(
-                        np.zeros(3, dtype=np.float32), np.zeros(3, dtype=np.float32)
+                        np.zeros(3, dtype=np.float32),
+                        np.zeros(3, dtype=np.float32),
+                        foot_raise_height=self._foot_raise_height_m,
+                        front_reach_m=self._front_reach_m,
+                        front_leg_mask=self._front_leg_mask,
                     )
                 self._stop_timer = None
 

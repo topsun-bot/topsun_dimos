@@ -53,9 +53,15 @@ class MockController:
     def __init__(self, shm_interface: ShmReader) -> None:
         self.shm = shm_interface
         self._command = np.zeros(3, dtype=np.float32)
+        self.foot_raise_height = 0.0
+        self.front_reach_m = 0.0
+        self.front_leg_mask = 0
 
     def get_command(self) -> NDArray[Any]:
         """Get the current movement command."""
+        self.foot_raise_height = self.shm.read_foot_raise_height()
+        self.front_reach_m = self.shm.read_front_reach()
+        self.front_leg_mask = self.shm.read_front_leg_mask()
         cmd_data = self.shm.read_command()
         if cmd_data is not None:
             linear, angular = cmd_data
@@ -93,6 +99,12 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
     pos = config.mujoco_start_pos_float
 
     data.qpos[0:3] = [pos[0], pos[1], z]
+    if config.mujoco_start_yaw is not None:
+        half_yaw = config.mujoco_start_yaw / 2.0
+        data.qpos[3] = np.cos(half_yaw)
+        data.qpos[4] = 0.0
+        data.qpos[5] = 0.0
+        data.qpos[6] = np.sin(half_yaw)
 
     mujoco.mj_forward(model, data)
 

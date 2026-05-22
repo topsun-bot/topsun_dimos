@@ -125,6 +125,21 @@ export ROBOT_IP=<YOUR_GO2_IP>
 dimos run unitree-go2-agentic
 ```
 
+**DeepSeek:** use `DEEPSEEK_API_KEY` and a DeepSeek model name (defaults to `https://api.deepseek.com/v1`; override with `OPENAI_BASE_URL` or `--openai-base-url` if needed):
+
+```bash
+export DEEPSEEK_API_KEY=<YOUR_DEEPSEEK_KEY>
+export ROBOT_IP=<YOUR_GO2_IP>
+dimos run unitree-go2-agentic --model deepseek-chat
+```
+
+If **Git LFS cannot download** the CLIP weights used by spatial memory (`data/.lfs/models_clip.tar.gz`), start with stub embeddings instead (no LFS; semantic similarity is degraded):
+
+```bash
+dimos run unitree-go2-agentic --skip-spatial-lfs
+# or: export SKIP_SPATIAL_LFS=true
+```
+
 Then use the human CLI to talk to the agent:
 
 ```bash

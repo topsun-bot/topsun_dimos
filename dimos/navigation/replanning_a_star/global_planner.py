@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+from collections.abc import Callable
 from threading import Event, RLock, Thread, current_thread
 import time
 
@@ -30,10 +31,12 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.base import NavigationState
+from dimos.navigation.replanning_a_star.foot_raise import cross_threshold_gait
 from dimos.navigation.replanning_a_star.goal_validator import find_safe_goal
 from dimos.navigation.replanning_a_star.local_planner import LocalPlanner, StopMessage
 from dimos.navigation.replanning_a_star.min_cost_astar import min_cost_astar
 from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
+from dimos.navigation.obstacle_snapshot.types import ObstacleNavOutcome, ObstacleTriggerReason
 from dimos.navigation.replanning_a_star.position_tracker import PositionTracker
 from dimos.navigation.replanning_a_star.replan_limiter import ReplanLimiter
 from dimos.utils.logging_config import setup_logger
@@ -76,6 +79,7 @@ class GlobalPlanner(Resource):
     _stuck_threshold: float = 0.4
     _max_path_deviation: float = 0.9
     _replanning_enabled: bool = True
+    _obstacle_block_handler: Callable[[ObstacleTriggerReason], ObstacleNavOutcome] | None
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self.path = Subject()
@@ -103,6 +107,145 @@ class GlobalPlanner(Resource):
         self._trip_path_length_m = 0.0
         self._last_odom_xy = None
         self._last_completed_navigation_path_m = 0.0
+        self._obstacle_block_handler = None
+        self._foot_raise_callback: Callable[[float, float, int], None] | None = None
+
+    def set_obstacle_block_handler(
+        self, handler: Callable[[ObstacleTriggerReason], ObstacleNavOutcome] | None
+    ) -> None:
+        self._obstacle_block_handler = handler
+
+    def set_foot_raise_callback(self, callback: Callable[[float, float, int], None] | None) -> None:
+        self._foot_raise_callback = callback
+
+    def _apply_threshold_gait(self, raise_m: float, reach_m: float, front_leg_mask: int = 0) -> None:
+        if self._foot_raise_callback is not None:
+            self._foot_raise_callback(raise_m, reach_m, front_leg_mask)
+
+    def _hold_single_leg_phase(
+        self,
+        raise_m: float,
+        reach_m: float,
+        lift_mask: int,
+        settle_s: float,
+        land_s: float,
+        *,
+        step_m: float = 0.0,
+        creep_s: float = 0.0,
+    ) -> None:
+        """Lift one front leg, optional creep forward while raised, then land before the other leg."""
+        stop_twist = Twist()
+        self._local_planner.cmd_vel.on_next(stop_twist)
+        self._apply_threshold_gait(raise_m, reach_m, lift_mask)
+        time.sleep(settle_s * 0.35)
+
+        if step_m > 0.0 and creep_s > 0.0:
+            creep_speed = step_m / creep_s
+            self._local_planner.cmd_vel.on_next(
+                Twist(linear=Vector3(creep_speed, 0.0, 0.0))
+            )
+            time.sleep(creep_s)
+            self._local_planner.cmd_vel.on_next(stop_twist)
+
+        time.sleep(settle_s * 0.35)
+        self._apply_threshold_gait(0.0, 0.0, 0)
+        time.sleep(land_s)
+
+    def _run_cross_gait_sequence(self, raise_m: float, reach_m: float) -> None:
+        """Backup, then staged FL step + FR step (no continuous walk while one foot is on the sill)."""
+        g = self._global_config
+        stop_twist = Twist()
+        self._local_planner.cmd_vel.on_next(stop_twist)
+        self._apply_threshold_gait(0.0, 0.0, 0)
+
+        if g.obstacle_cross_backup_s > 0.0:
+            backup = Twist(linear=Vector3(-g.obstacle_cross_linear_speed, 0.0, 0.0))
+            self._local_planner.cmd_vel.on_next(backup)
+            time.sleep(g.obstacle_cross_backup_s)
+            self._local_planner.cmd_vel.on_next(stop_twist)
+            time.sleep(0.12)
+
+        phase_s = g.obstacle_cross_leg_phase_s
+        land_s = g.obstacle_cross_leg_land_s
+        step_m = g.obstacle_cross_leg_step_m
+        creep_s = g.obstacle_cross_leg_creep_s
+        logger.info(
+            "Cross gait sequence",
+            foot_raise_m=round(raise_m, 3),
+            front_reach_m=round(reach_m, 3),
+            leg_step_m=round(step_m, 3),
+        )
+        self._hold_single_leg_phase(
+            raise_m, reach_m, 2, phase_s, land_s, step_m=step_m, creep_s=creep_s
+        )
+        self._hold_single_leg_phase(
+            raise_m, reach_m, 1, phase_s, land_s, step_m=step_m, creep_s=creep_s
+        )
+
+    def attempt_cross_forward(self, forward_m: float) -> bool:
+        """Drive forward without changing the stored navigation goal (cross maneuver)."""
+        with self._lock:
+            start_odom = self._current_odom
+            goal = self._current_goal
+        if start_odom is None or goal is None:
+            return False
+
+        cross_raise_m = 0.0
+        cross_reach_m = 0.0
+        gait_active = False
+        if self._foot_raise_callback is not None and self._global_config.simulation:
+            # Local planner may already be idle (path cleared); still use cross gait.
+            max_cost = 100
+            path_clearance = self._local_planner.get_path_clearance()
+            if path_clearance is not None:
+                max_cost = max(max_cost, path_clearance.max_cost_ahead())
+            cross_raise_m, cross_reach_m = cross_threshold_gait(
+                max_cost,
+                self._global_config.obstacle_cross_foot_raise_m,
+                self._global_config.obstacle_cross_front_reach_m,
+            )
+            gait_active = cross_raise_m > 0.0 or cross_reach_m > 0.0
+
+        if gait_active:
+            g = self._global_config
+            min_advance = max(0.20, 2.0 * g.obstacle_cross_leg_step_m * 0.85)
+        else:
+            min_advance = max(0.25, forward_m * 0.55)
+        timeout_s = 16.0
+
+        logger.info(
+            "Attempting cross forward",
+            forward_m=forward_m,
+            min_advance_m=min_advance,
+            foot_raise_m=round(cross_raise_m, 3),
+            front_reach_m=round(cross_reach_m, 3),
+        )
+
+        stop_twist = Twist()
+        deadline = time.monotonic() + timeout_s
+        try:
+            if gait_active:
+                self._run_cross_gait_sequence(cross_raise_m, cross_reach_m)
+
+            while time.monotonic() < deadline:
+                with self._lock:
+                    odom = self._current_odom
+                if odom is not None and start_odom.position.distance(odom.position) >= min_advance:
+                    self._local_planner.cmd_vel.on_next(stop_twist)
+                    logger.info(
+                        "Cross forward succeeded",
+                        advance_m=round(start_odom.position.distance(odom.position), 3),
+                    )
+                    return True
+                self._local_planner.cmd_vel.on_next(stop_twist)
+                time.sleep(0.1)
+
+            self._local_planner.cmd_vel.on_next(stop_twist)
+            logger.info("Cross forward failed (timeout or insufficient advance)")
+            return False
+        finally:
+            if gait_active:
+                self._apply_threshold_gait(0.0, 0.0, 0)
 
     def start(self) -> None:
         self._local_planner.start()
@@ -284,8 +427,8 @@ class GlobalPlanner(Resource):
                 time.perf_counter() - last_stuck_check > self._stuck_time_window
                 and self._position_tracker.is_stuck()
             ):
-                logger.info("Robot is stuck. Replanning.")
-                self._replan_path()
+                logger.info("Robot is stuck.")
+                self._handle_navigation_blocked("stuck")
                 last_stuck_check = time.perf_counter()
 
     def _on_stopped_navigating(self, stop_message: StopMessage) -> None:
@@ -304,13 +447,39 @@ class GlobalPlanner(Resource):
             logger.info("Arrived at goal.")
             self.cancel_goal(arrived=True)
         elif stop_message == "obstacle_found":
-            logger.info("Replanning path due to obstacle found.")
-            self._replan_path()
+            logger.info("Obstacle found on path.")
+            self._handle_navigation_blocked("obstacle_found")
         elif stop_message == "error":
             logger.info("Failure in navigation.")
             self._replan_path()
         else:
             logger.error(f"No code to handle '{stop_message}'.")
+            self.cancel_goal()
+
+    def _handle_navigation_blocked(self, reason: ObstacleTriggerReason) -> None:
+        if not self._global_config.obstacle_navigation:
+            self._replan_path()
+            return
+
+        if self._obstacle_block_handler is None:
+            logger.warning("obstacle_navigation enabled but no ObstacleSnapshotModule in blueprint")
+            self._replan_path()
+            return
+
+        try:
+            outcome = self._obstacle_block_handler(reason)
+        except Exception as exc:
+            logger.error("Obstacle navigation handler failed; replanning.", error=str(exc))
+            self._replan_path()
+            return
+
+        logger.info("Obstacle navigation outcome", outcome=outcome, reason=reason)
+        if outcome == "continue":
+            self._position_tracker.reset_data()
+            self._plan_path()
+        elif outcome == "detour":
+            self._replan_path()
+        elif outcome == "stop":
             self.cancel_goal()
 
     def _replan_path(self) -> None:

@@ -135,7 +135,8 @@ class HeightCostConfig(OccupancyConfig):
     """Config for height-cost based occupancy (terrain slope analysis)."""
 
     can_pass_under: float = 0.6
-    can_climb: float = 0.15
+    # Per-cell height step at this value maps to cost 100. 0.30 m → ~33 cost for a 10 cm sill.
+    can_climb: float = 0.30
     ignore_noise: float = 0.05
     smoothing: float = 1.0
 

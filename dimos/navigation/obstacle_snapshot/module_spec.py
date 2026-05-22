@@ -12,17 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Protocol
+from typing import Protocol
 
-from dimos.msgs.sensor_msgs.Image import Image
+from dimos.navigation.obstacle_snapshot.types import ObstacleNavOutcome, ObstacleTriggerReason
 from dimos.spec.utils import Spec
 
 
-class GO2ConnectionSpec(Spec, Protocol):
-    def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]: ...
-
-    def observe(self) -> Image | None: ...
-
-    def set_foot_raise_height(
-        self, height_m: float, front_reach_m: float = 0.0, front_leg_mask: int = 0
-    ) -> None: ...
+class ObstacleSnapshotSpec(Spec, Protocol):
+    def handle_navigation_block(self, reason: ObstacleTriggerReason) -> ObstacleNavOutcome: ...
