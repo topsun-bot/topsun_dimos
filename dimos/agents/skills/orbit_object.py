@@ -20,12 +20,13 @@ nearest obstacle edge while moving tangentially along it.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
+import math
 from threading import Event, Thread
 import time
 from typing import Any
 
+from dimos_lcm.std_msgs import Bool
 import numpy as np
 from numpy.typing import NDArray
 from reactivex.disposable import Disposable
@@ -38,8 +39,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
-from dimos_lcm.std_msgs import Bool
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -56,6 +56,7 @@ def _angle_diff(a: float, b: float) -> float:
 # ---------------------------------------------------------------------------
 # Edge extraction
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class EdgeResult:
@@ -113,7 +114,9 @@ def extract_edge(
         mask = dists_sq <= search_radius * search_radius
         angles = np.arctan2(dy, dx)
         target_angle = robot_yaw + math.radians(bearing_deg)
-        angle_diffs = np.abs(np.arctan2(np.sin(angles - target_angle), np.cos(angles - target_angle)))
+        angle_diffs = np.abs(
+            np.arctan2(np.sin(angles - target_angle), np.cos(angles - target_angle))
+        )
         mask &= angle_diffs <= math.radians(45)
     else:
         dx = world_xs - robot_xy[0]
@@ -124,8 +127,8 @@ def extract_edge(
     if not np.any(mask):
         return None
 
-    dx_masked = (world_xs[mask] - robot_xy[0])
-    dy_masked = (world_ys[mask] - robot_xy[1])
+    dx_masked = world_xs[mask] - robot_xy[0]
+    dy_masked = world_ys[mask] - robot_xy[1]
     dists_sq_masked = dx_masked * dx_masked + dy_masked * dy_masked
 
     nearest_idx = int(np.argmin(dists_sq_masked))
@@ -142,10 +145,12 @@ def extract_edge(
     k = min(k_neighbours, int(np.sum(mask)))
     top_k_indices = np.argpartition(dists_sq_masked, k)[:k]
 
-    pts = np.column_stack([
-        world_xs[mask][top_k_indices],
-        world_ys[mask][top_k_indices],
-    ])
+    pts = np.column_stack(
+        [
+            world_xs[mask][top_k_indices],
+            world_ys[mask][top_k_indices],
+        ]
+    )
 
     centroid = pts.mean(axis=0)
     centered = pts - centroid
@@ -198,6 +203,7 @@ def estimate_object_center(
 # Lap completion tracker
 # ---------------------------------------------------------------------------
 
+
 class LapTracker:
     """Tracks cumulative angle to determine when N laps are complete."""
 
@@ -231,6 +237,7 @@ class LapTracker:
 # ---------------------------------------------------------------------------
 # Skill container
 # ---------------------------------------------------------------------------
+
 
 class OrbitObjectSkillContainer(Module):
     """Orbit around an object using LiDAR costmap edge following."""
@@ -398,15 +405,21 @@ class OrbitObjectSkillContainer(Module):
         robot_xy = np.array([odom.x, odom.y])
 
         edge = extract_edge(
-            costmap, robot_xy, odom.yaw, self._SEARCH_RADIUS,
-            target_xy=target_xy, bearing_deg=bearing_deg,
+            costmap,
+            robot_xy,
+            odom.yaw,
+            self._SEARCH_RADIUS,
+            target_xy=target_xy,
+            bearing_deg=bearing_deg,
         )
         if edge is None:
             self._finish_orbit("Lost obstacle before loop started.")
             return
 
         object_center = estimate_object_center(
-            costmap, edge.point, cluster_radius=max(distance, 0.8),
+            costmap,
+            edge.point,
+            cluster_radius=max(distance, 0.8),
         )
         lap_tracker = LapTracker(robot_xy, object_center, laps)
         lock_radius = max(distance * 2.5, 1.0)
@@ -429,8 +442,12 @@ class OrbitObjectSkillContainer(Module):
             robot_yaw = odom.yaw
 
             edge = extract_edge(
-                costmap, robot_xy, robot_yaw, lock_radius,
-                target_xy=object_center, bearing_deg=None,
+                costmap,
+                robot_xy,
+                robot_yaw,
+                lock_radius,
+                target_xy=object_center,
+                bearing_deg=None,
             )
 
             if edge is None:

@@ -5,12 +5,11 @@
 
 import math
 import time
-import threading
 
+from dimos_lcm.std_msgs import Bool
 import numpy as np
 
 from dimos.agents.skills.orbit_object import (
-    EdgeResult,
     LapTracker,
     estimate_object_center,
     extract_edge,
@@ -20,7 +19,6 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-from dimos_lcm.std_msgs import Bool
 
 
 def _angle_diff(a: float, b: float) -> float:
@@ -68,7 +66,9 @@ def orbit_loop(
         time.sleep(0.5)
         wait_count += 1
         if wait_count % 4 == 0:
-            print(f"  等待中... odom={'有' if latest_odom else '无'} costmap={'有' if latest_costmap else '无'}")
+            print(
+                f"  等待中... odom={'有' if latest_odom else '无'} costmap={'有' if latest_costmap else '无'}"
+            )
     print("数据就绪，开始 orbit")
 
     stop_transport.publish(Bool(data=True))
@@ -87,10 +87,12 @@ def orbit_loop(
     if len(xs) > 0:
         w_xs = ox + xs.astype(np.float64) * res
         w_ys = oy + ys.astype(np.float64) * res
-        dists = np.sqrt((w_xs - robot_xy[0])**2 + (w_ys - robot_xy[1])**2)
+        dists = np.sqrt((w_xs - robot_xy[0]) ** 2 + (w_ys - robot_xy[1]) ** 2)
         angles_deg = np.degrees(np.arctan2(w_ys - robot_xy[1], w_xs - robot_xy[0]) - robot_yaw)
         print(f"Costmap: {grid.shape}, resolution={res}m, 占用格={len(xs)}个")
-        print(f"  占用范围 X: [{w_xs.min():.2f}, {w_xs.max():.2f}], Y: [{w_ys.min():.2f}, {w_ys.max():.2f}]")
+        print(
+            f"  占用范围 X: [{w_xs.min():.2f}, {w_xs.max():.2f}], Y: [{w_ys.min():.2f}, {w_ys.max():.2f}]"
+        )
         print(f"  最近占用格: d={dists.min():.2f}m, 最远: d={dists.max():.2f}m")
         # 按距离排列前 5 个最近的占用格
         top5 = np.argsort(dists)[:5]
@@ -100,7 +102,11 @@ def orbit_loop(
             print(f"    ({w_xs[i]:.2f}, {w_ys[i]:.2f}) d={dists[i]:.2f}m 方位={a:.0f}°")
         # 按扇区统计
         front_mask = np.abs(((angles_deg + 180) % 360) - 180) < 45
-        print(f"  前方±45°内: {np.sum(front_mask)}个占用格, 最近={dists[front_mask].min():.2f}m" if np.any(front_mask) else "  前方±45°内: 无")
+        print(
+            f"  前方±45°内: {np.sum(front_mask)}个占用格, 最近={dists[front_mask].min():.2f}m"
+            if np.any(front_mask)
+            else "  前方±45°内: 无"
+        )
     else:
         print("Costmap: 无占用格！")
 
@@ -113,16 +119,22 @@ def orbit_loop(
     dx = edge.point[0] - robot_xy[0]
     dy = edge.point[1] - robot_xy[1]
     rel_angle = math.degrees(math.atan2(dy, dx) - robot_yaw)
-    print(f"边缘: ({edge.point[0]:.2f}, {edge.point[1]:.2f}), 距离={edge.distance:.2f}m, "
-          f"相对角度={rel_angle:.1f}°, 法线=({edge.normal[0]:.2f}, {edge.normal[1]:.2f})")
+    print(
+        f"边缘: ({edge.point[0]:.2f}, {edge.point[1]:.2f}), 距离={edge.distance:.2f}m, "
+        f"相对角度={rel_angle:.1f}°, 法线=({edge.normal[0]:.2f}, {edge.normal[1]:.2f})"
+    )
 
     object_center = estimate_object_center(costmap, edge.point, cluster_radius=max(distance, 0.8))
     lock_radius = max(distance * 2.5, 1.0)
     lap_tracker = LapTracker(robot_xy, object_center, laps)
 
-    print(f"目标中心: ({object_center[0]:.2f}, {object_center[1]:.2f}), lock_radius={lock_radius:.2f}")
-    print(f"开始绕行: distance={distance}m, laps={laps}, speed={speed}m/s, "
-          f"{'顺时针' if clockwise else '逆时针'}")
+    print(
+        f"目标中心: ({object_center[0]:.2f}, {object_center[1]:.2f}), lock_radius={lock_radius:.2f}"
+    )
+    print(
+        f"开始绕行: distance={distance}m, laps={laps}, speed={speed}m/s, "
+        f"{'顺时针' if clockwise else '逆时针'}"
+    )
 
     period = 1.0 / CONTROL_HZ
     next_time = time.monotonic()
@@ -140,8 +152,7 @@ def orbit_loop(
             robot_xy = np.array([odom.x, odom.y])
             robot_yaw = odom.yaw
 
-            edge = extract_edge(costmap, robot_xy, robot_yaw, lock_radius,
-                                target_xy=object_center)
+            edge = extract_edge(costmap, robot_xy, robot_yaw, lock_radius, target_xy=object_center)
             if edge is None:
                 print("障碍物丢失，停止")
                 break
@@ -173,13 +184,16 @@ def orbit_loop(
             if log_counter % 20 == 0:
                 pct = lap_tracker.progress * 100
                 face_err = math.degrees(_angle_diff(theta, robot_yaw))
-                print(f"[{log_counter/CONTROL_HZ:.1f}s] pos=({robot_xy[0]:.2f},{robot_xy[1]:.2f}) "
-                      f"yaw={math.degrees(robot_yaw):.0f}° face_err={face_err:.0f}° d={d:.2f}m "
-                      f"vx={vx_body:.2f} vy={vy_body:.2f} az={angular_z:.2f} "
-                      f"progress={pct:.0f}%")
+                print(
+                    f"[{log_counter / CONTROL_HZ:.1f}s] pos=({robot_xy[0]:.2f},{robot_xy[1]:.2f}) "
+                    f"yaw={math.degrees(robot_yaw):.0f}° face_err={face_err:.0f}° d={d:.2f}m "
+                    f"vx={vx_body:.2f} vy={vy_body:.2f} az={angular_z:.2f} "
+                    f"progress={pct:.0f}%"
+                )
 
-            twist = Twist(linear=Vector3(vx_body, vy_body, 0.0),
-                          angular=Vector3(0.0, 0.0, angular_z))
+            twist = Twist(
+                linear=Vector3(vx_body, vy_body, 0.0), angular=Vector3(0.0, 0.0, angular_z)
+            )
             cmd_vel_transport.publish(twist)
 
             if lap_tracker.update(robot_xy):
@@ -209,5 +223,12 @@ if __name__ == "__main__":
     costmap_transport.subscribe(on_costmap)
 
     print("LCM 订阅已启动，等待数据...")
-    orbit_loop(cmd_vel_transport, stop_transport,
-               distance=1.0, laps=1, speed=0.2, clockwise=False, bearing=0)
+    orbit_loop(
+        cmd_vel_transport,
+        stop_transport,
+        distance=1.0,
+        laps=1,
+        speed=0.2,
+        clockwise=False,
+        bearing=0,
+    )

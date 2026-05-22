@@ -22,13 +22,11 @@ import numpy as np
 import pytest
 
 from dimos.agents.skills.orbit_object import (
-    EdgeResult,
     LapTracker,
     _angle_diff,
     extract_edge,
 )
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,7 +59,7 @@ def _make_circle_costmap(
     cy, cx = center
     for y in range(size):
         for x in range(size):
-            if (x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2:
+            if (x - cx) ** 2 + (y - cy) ** 2 <= radius**2:
                 grid[y, x] = 100
     from dimos.msgs.geometry_msgs.Pose import Pose
     from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -151,8 +149,11 @@ class TestEdgeExtraction:
         robot_xy = np.array([2.0, 0.5])
         # Robot facing +X (yaw=0), obstacle is at ~(2.0, 2.0) — that's to the left (+Y side)
         # With bearing=90 (right = -Y side), should NOT find it
-        edge = extract_edge(
-            costmap, robot_xy, robot_yaw=0.0, search_radius=5.0,
+        extract_edge(
+            costmap,
+            robot_xy,
+            robot_yaw=0.0,
+            search_radius=5.0,
             bearing_deg=-90,
         )
         # Obstacle is at Y=1.8..2.2, robot at Y=0.5, so obstacle is to the left
@@ -167,7 +168,10 @@ class TestEdgeExtraction:
         robot_xy = np.array([0.5, 0.5])
         target = np.array([2.0, 2.0])
         edge = extract_edge(
-            costmap, robot_xy, robot_yaw=0.0, search_radius=5.0,
+            costmap,
+            robot_xy,
+            robot_yaw=0.0,
+            search_radius=5.0,
             target_xy=target,
         )
 

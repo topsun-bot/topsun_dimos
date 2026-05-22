@@ -68,6 +68,7 @@ if __name__ == "__main__":
 
     def _retry_on_system_modules(module, modules) -> None:
         import time
+
         for attempt in range(3):
             time.sleep(10)
             try:
