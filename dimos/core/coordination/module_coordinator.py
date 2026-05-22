@@ -541,7 +541,29 @@ def _lcm_factory(topic: str, stream_type: type) -> PubSubTransport[Any]:
     return pLCMTransport(topic) if use_pickled else LCMTransport(topic, stream_type)
 
 
+_LCM_PINNED_NAMES = frozenset({"human_input", "agent", "agent_idle"})
+
+
+def _shm_capacity_for(stream_type: type) -> int:
+    from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
+    from dimos.msgs.sensor_msgs.Image import Image
+
+    try:
+        if issubclass(stream_type, Image):
+            return DEFAULT_CAPACITY_COLOR_IMAGE
+    except TypeError:
+        pass
+    return 0
+
+
 def _shm_factory(topic: str, stream_type: type) -> PubSubTransport[Any]:
+    name = topic.lstrip("/")
+    if name in _LCM_PINNED_NAMES:
+        return _lcm_factory(topic, stream_type)
+
+    capacity = _shm_capacity_for(stream_type)
+    if capacity:
+        return pSHMTransport(topic, default_capacity=capacity)
     return pSHMTransport(topic)
 
 

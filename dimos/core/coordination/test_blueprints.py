@@ -327,3 +327,43 @@ def test_global_config_default_transport_lcm() -> None:
         transport = _get_transport_for(bp, "data1", Data1)
 
     assert isinstance(transport, pLCMTransport)
+
+
+class HumanInput(Module):
+    human_input: In[Data1]
+
+
+class AgentOut(Module):
+    agent: Out[Data1]
+    agent_idle: Out[Data2]
+
+
+def test_shm_factory_pins_lcm_for_external_streams() -> None:
+    """Streams with hardcoded external LCM producers stay on LCM even with shm mode."""
+    from unittest.mock import patch
+
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    bp = autoconnect(HumanInput.blueprint(), AgentOut.blueprint())
+
+    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
+        mock_gc.default_transport = "shm"
+        t_human = _get_transport_for(bp, "human_input", Data1)
+        t_agent = _get_transport_for(bp, "agent", Data1)
+        t_agent_idle = _get_transport_for(bp, "agent_idle", Data2)
+
+    assert isinstance(t_human, pLCMTransport)
+    assert isinstance(t_agent, pLCMTransport)
+    assert isinstance(t_agent_idle, pLCMTransport)
+
+
+def test_shm_factory_uses_large_capacity_for_image() -> None:
+    """SHM factory allocates proper capacity for Image streams."""
+    from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
+    from dimos.core.coordination.module_coordinator import _shm_factory
+    from dimos.msgs.sensor_msgs.Image import Image
+
+    transport = _shm_factory("/color_image", Image)
+
+    assert isinstance(transport, pSHMTransport)
+    assert transport.shm.config.default_capacity == DEFAULT_CAPACITY_COLOR_IMAGE
