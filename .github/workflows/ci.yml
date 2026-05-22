@@ -51,23 +51,25 @@ jobs:
       - name: Resolve LFS object cache key
         id: lfs-key
         run: |
-          # Hash the long OIDs of every LFS pointer under docs/ + assets/readme/
-          # so the cache key changes only when those objects change.
+          # Hash LFS OIDs for docs assets plus the small set of data/.lfs archives
+          # referenced by get_data() in documentation code blocks (~840 MB total).
           # After checkout with lfs: false, ls-files marks entries with '-' (pointer),
           # not '*' (local object) — filter by path, not presence marker.
           KEY=$(git lfs ls-files -l \
-                  | awk '$3 ~ /^(docs\/|assets\/readme\/)/ {print $1}' \
+                  | awk '$3 ~ /^(docs\/|assets\/readme\/|data\/\.lfs\/(go2_bigoffice\.db|unitree_go2_bigoffice_map\.pickle|cafe\.jpg|models_yolo|unitree_office_walk|apartment)\.tar\.gz)/ {print $1}' \
                   | sort -u \
                   | sha256sum | cut -c1-16)
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
-      - name: Cache LFS objects for docs + README assets
+      - name: Cache LFS objects for md-babel assets
         uses: actions/cache@v4
         with:
           path: .git/lfs/objects
           key: lfs-mdbabel-${{ steps.lfs-key.outputs.key }}
           restore-keys: lfs-mdbabel-
-      - name: Pull docs + README LFS assets only
-        run: git lfs pull --include="docs/**,assets/readme/**" --exclude=""
+      - name: Pull md-babel LFS assets
+        run: |
+          git lfs pull --include="docs/**,assets/readme/**" --exclude=""
+          git lfs pull --include="data/.lfs/go2_bigoffice.db.tar.gz,data/.lfs/unitree_go2_bigoffice_map.pickle.tar.gz,data/.lfs/cafe.jpg.tar.gz,data/.lfs/models_yolo.tar.gz,data/.lfs/unitree_office_walk.tar.gz,data/.lfs/apartment.tar.gz" --exclude=""
       # Docs decode JPEG from SQLite via PyTurboJPEG; pyaudio needs portaudio.
       - name: Install system dependencies
         run: |
