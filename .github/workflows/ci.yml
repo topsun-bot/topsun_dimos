@@ -53,9 +53,12 @@ jobs:
         run: |
           # Hash the long OIDs of every LFS pointer under docs/ + assets/readme/
           # so the cache key changes only when those objects change.
+          # After checkout with lfs: false, ls-files marks entries with '-' (pointer),
+          # not '*' (local object) — filter by path, not presence marker.
           KEY=$(git lfs ls-files -l \
-                  | grep -E '^[0-9a-f]+ \* (docs/|assets/readme/)' \
-                  | awk '{print $1}' | sort -u | sha256sum | cut -c1-16)
+                  | awk '$3 ~ /^(docs\/|assets\/readme\/)/ {print $1}' \
+                  | sort -u \
+                  | sha256sum | cut -c1-16)
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
       - name: Cache LFS objects for docs + README assets
         uses: actions/cache@v4
