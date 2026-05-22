@@ -22,6 +22,7 @@ from typing import Literal, Protocol
 
 import numpy as np
 from path_selector import TrajectoryPathSelector
+from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -45,7 +46,7 @@ class LocalNavigationMapConfig(ModuleConfig):
 
 
 class LocalNavigationMapSpec(Spec, Protocol):
-    def select_best_trajectory_index(self, trajectories: np.ndarray) -> int: ...
+    def select_best_trajectory_index(self, trajectories: np.ndarray, time_point: float) -> int: ...
     def get_last_local_occupancy_grid(self) -> OccupancyGrid | None: ...
 
 
@@ -79,7 +80,7 @@ class LocalNavigationMapModule(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self.global_costmap.subscribe(self._on_global_costmap)
+        self.register_disposable(Disposable(self.global_costmap.subscribe(self._on_global_costmap)))
         logger.info(
             "%s started (source=global_costmap, max_age=%.2fs, robot_increase=%.2fx)",
             self.__class__.__name__,
@@ -105,10 +106,10 @@ class LocalNavigationMapModule(Module):
             self._log_map_diagnostics(occupancy_grid)
 
     @rpc
-    def select_best_trajectory_index(self, trajectories: np.ndarray) -> int:
+    def select_best_trajectory_index(self, trajectories: np.ndarray, time_point: float) -> int:
         """Return the best trajectory index using the latest local NavigationMap."""
         with self._lock:
-            self._ensure_recent_map_locked()
+            self._ensure_recent_map_locked(time_point)
             navigation_map = self._navigation_map
             map_frame_id = self._last_map_frame_id
 
@@ -118,6 +119,7 @@ class LocalNavigationMapModule(Module):
             map_frame_trajectories = self._trajectories_in_map_frame(
                 trajectories,
                 map_frame_id,
+                time_point,
             )
             return self._selector.select_best_index(map_frame_trajectories, navigation_map)
         except Exception as exc:
@@ -129,18 +131,19 @@ class LocalNavigationMapModule(Module):
         with self._lock:
             return self._last_occupancy_grid
 
-    def _ensure_recent_map_locked(self) -> None:
+    def _ensure_recent_map_locked(self, time_point: float) -> None:
         if self._last_costmap_time_s is None or self._last_occupancy_grid is None:
             raise RuntimeError("No recent global_costmap available for navigation map")
 
-        age = time.time() - self._last_costmap_time_s
+        age = abs(time_point - self._last_costmap_time_s)
         if age > self.config.local_map_max_age_s:
-            raise RuntimeError(f"Latest global_costmap too old: {age:.2f}s")
+            raise RuntimeError(f"Latest global_costmap too far from selection time: {age:.2f}s")
 
     def _trajectories_in_map_frame(
         self,
         trajectories: np.ndarray,
         map_frame_id: str,
+        time_point: float,
     ) -> np.ndarray:
         if map_frame_id == self.config.trajectory_frame_id:
             return trajectories
@@ -148,6 +151,7 @@ class LocalNavigationMapModule(Module):
         tf = self.tf.get(
             map_frame_id,
             self.config.trajectory_frame_id,
+            time_point=time_point,
             time_tolerance=1.0,
         )
         if tf is None:

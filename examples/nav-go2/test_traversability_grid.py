@@ -62,3 +62,19 @@ def test_rasterize_clamps_cells_with_repeated_votes() -> None:
     )
 
     assert int(grid.grid.min()) == 0
+
+
+def test_rasterize_uses_forward_x_and_lateral_y_axes() -> None:
+    trajectories = np.array([[[1.0, 0.0]]], dtype=np.float64)
+
+    grid = rasterize_trajectories_to_costmap(
+        trajectories,
+        forward_m=4.0,
+        lateral_m=2.0,
+        resolution_m=0.5,
+    )
+
+    assert grid.grid.shape == (4, 8)
+    assert grid.origin.position.x == 0.0
+    assert grid.origin.position.y == -1.0
+    assert int(grid.grid[2, 2]) == 0

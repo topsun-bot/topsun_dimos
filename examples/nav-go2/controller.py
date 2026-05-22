@@ -24,6 +24,7 @@ from typing import Any, Self
 from engine.nomad.config import DEFAULT_NAV_CONFIG
 import numpy as np
 from numpy.typing import NDArray
+from reactivex.disposable import Disposable
 import yaml
 
 from dimos.core.core import rpc
@@ -92,7 +93,7 @@ class WaypointFollowerModule(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self.local_waypoints.subscribe(self._on_path)
+        self.register_disposable(Disposable(self.local_waypoints.subscribe(self._on_path)))
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._control_loop, daemon=True)
         self._thread.start()

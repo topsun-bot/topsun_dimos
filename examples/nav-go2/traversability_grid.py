@@ -55,8 +55,8 @@ def rasterize_trajectories_to_costmap(
         raise ValueError(f"Expected (N, T, 2) trajectories, got {trajectories.shape}")
 
     num_samples = max(trajectories.shape[0], 1)
-    width = max(round(lateral_m / resolution_m), 1)
-    height = max(round(forward_m / resolution_m), 1)
+    width = max(round(forward_m / resolution_m), 1)
+    height = max(round(lateral_m / resolution_m), 1)
 
     votes = np.zeros((height, width), dtype=np.int32)
     half_lateral = lateral_m / 2.0
@@ -68,8 +68,8 @@ def rasterize_trajectories_to_costmap(
                 continue
             if y_lat < -half_lateral or y_lat > half_lateral:
                 continue
-            row = int(x_fwd / resolution_m)
-            col = int((y_lat + half_lateral) / resolution_m)
+            col = int(x_fwd / resolution_m)
+            row = int((y_lat + half_lateral) / resolution_m)
             if 0 <= row < height and 0 <= col < width:
                 visited_cells.add((row, col))
         for row, col in visited_cells:
@@ -87,7 +87,7 @@ def rasterize_trajectories_to_costmap(
             grid[row, col] = np.int8(round(99 * (1.0 - ratio)))
 
     origin = Pose(
-        position=[-half_lateral, 0.0, 0.0],
+        position=[0.0, -half_lateral, 0.0],
         orientation=[0.0, 0.0, 0.0, 1.0],
     )
 

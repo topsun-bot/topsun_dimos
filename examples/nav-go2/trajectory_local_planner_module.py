@@ -23,6 +23,7 @@ from typing import Literal
 from local_navigation_map_module import LocalNavigationMapSpec
 from multi_waypoints_selector import MultiWaypointsSelector
 import numpy as np
+from reactivex.disposable import Disposable
 from trajectory_inference import (
     TrajectoryNavigationEngine,
     TrajectoryNavigationRuntimeError,
@@ -122,9 +123,9 @@ class TrajectoryLocalPlannerModule(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self.color_image.subscribe(self._on_image)
+        self.register_disposable(Disposable(self.color_image.subscribe(self._on_image)))
         if not self._uses_navigation_map():
-            self.lidar.subscribe(self._on_lidar)
+            self.register_disposable(Disposable(self.lidar.subscribe(self._on_lidar)))
         try:
             self._engine.initialize()
             logger.info("%s engine initialized", self.engine_name)
@@ -244,16 +245,19 @@ class TrajectoryLocalPlannerModule(Module):
         time_point: float,
     ) -> np.ndarray:
         if self._uses_navigation_map():
-            return self._select_via_navigation_map(trajectories)
+            return self._select_via_navigation_map(trajectories, time_point)
         return self._select_via_multi_waypoints(trajectories, time_point)
 
-    def _select_via_navigation_map(self, trajectories: np.ndarray) -> np.ndarray:
+    def _select_via_navigation_map(self, trajectories: np.ndarray, time_point: float) -> np.ndarray:
         if self._local_navigation_map is None:
             raise TrajectoryNavigationRuntimeError(
                 "LocalNavigationMapModule is not connected "
                 "(required for waypoint_selection='navigation_map')"
             )
-        best_index = self._local_navigation_map.select_best_trajectory_index(trajectories)
+        best_index = self._local_navigation_map.select_best_trajectory_index(
+            trajectories,
+            time_point,
+        )
         return trajectories[best_index]
 
     def _select_via_multi_waypoints(
