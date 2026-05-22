@@ -238,7 +238,7 @@ else:
 
 新建 `dimos/agents/skills/orbit_object.py`：
 
-```python
+```python skip
 class OrbitObjectSkillContainer(Module):
     odom: In[PoseStamped]
     global_costmap: In[OccupancyGrid]
@@ -280,7 +280,7 @@ class OrbitObjectSkillContainer(Module):
 
 ## 7. 蓝图集成
 
-```python
+```python skip
 unitree_go2_agentic = autoconnect(
     unitree_go2_spatial,
     McpServer.blueprint(),
