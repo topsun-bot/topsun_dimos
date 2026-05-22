@@ -87,6 +87,9 @@ class BlueprintAtom:
     module: type[ModuleBase]
     streams: tuple[StreamRef, ...]
     module_refs: tuple[ModuleRef, ...]
+    stream_transport_pins: Mapping[str, Callable[[str], PubSubTransport[Any]]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     @classmethod
     def create(cls, module: type[ModuleBase], kwargs: dict[str, Any]) -> Self:
@@ -135,10 +138,16 @@ class BlueprintAtom:
                     elif is_module_type(inner):
                         module_refs.append(ModuleRef(name=name, spec=inner, optional=True))
 
+        pins: dict[str, Callable[[str], PubSubTransport[Any]]] = {}
+        raw_pins = getattr(module, "_stream_transport_pins", None)
+        if raw_pins:
+            pins.update(raw_pins)
+
         return cls(
             module=module,
             streams=tuple(streams),
             module_refs=tuple(module_refs),
+            stream_transport_pins=MappingProxyType(pins),
             kwargs=kwargs,
         )
 

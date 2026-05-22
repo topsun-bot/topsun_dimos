@@ -541,9 +541,6 @@ def _lcm_factory(topic: str, stream_type: type) -> PubSubTransport[Any]:
     return pLCMTransport(topic) if use_pickled else LCMTransport(topic, stream_type)
 
 
-_LCM_PINNED_NAMES = frozenset({"human_input", "agent", "agent_idle"})
-
-
 def _shm_capacity_for(stream_type: type) -> int:
     from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
     from dimos.msgs.sensor_msgs.Image import Image
@@ -557,10 +554,6 @@ def _shm_capacity_for(stream_type: type) -> int:
 
 
 def _shm_factory(topic: str, stream_type: type) -> PubSubTransport[Any]:
-    name = topic.lstrip("/")
-    if name in _LCM_PINNED_NAMES:
-        return _lcm_factory(topic, stream_type)
-
     capacity = _shm_capacity_for(stream_type)
     if capacity:
         return pSHMTransport(topic, default_capacity=capacity)
@@ -579,6 +572,10 @@ def _get_transport_for(blueprint: Blueprint, name: str, stream_type: type) -> Pu
         return transport
 
     topic = f"/{name}" if _is_name_unique(blueprint, name) else f"/{short_id()}"
+
+    for bp in blueprint.active_blueprints:
+        if name in bp.stream_transport_pins:
+            return bp.stream_transport_pins[name](topic)
 
     if blueprint._transport_factory:
         return blueprint._transport_factory(topic, stream_type)
