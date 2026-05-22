@@ -45,7 +45,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          lfs: true
+          # Skip the default ~19 GB LFS pull. md-babel only needs docs and
+          # README assets, fetched explicitly below.
+          lfs: false
+      - name: Resolve LFS object cache key
+        id: lfs-key
+        run: |
+          # Hash the long OIDs of every LFS pointer under docs/ + assets/readme/
+          # so the cache key changes only when those objects change.
+          # After checkout with lfs: false, ls-files marks entries with '-' (pointer),
+          # not '*' (local object) — filter by path, not presence marker.
+          KEY=$(git lfs ls-files -l \
+                  | awk '$3 ~ /^(docs\/|assets\/readme\/)/ {print $1}' \
+                  | sort -u \
+                  | sha256sum | cut -c1-16)
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+      - name: Cache LFS objects for docs + README assets
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs/objects
+          key: lfs-mdbabel-${{ steps.lfs-key.outputs.key }}
+          restore-keys: lfs-mdbabel-
+      - name: Pull docs + README LFS assets only
+        run: git lfs pull --include="docs/**,assets/readme/**" --exclude=""
       # Docs decode JPEG from SQLite via PyTurboJPEG; pyaudio needs portaudio.
       - name: Install system dependencies
         run: |
