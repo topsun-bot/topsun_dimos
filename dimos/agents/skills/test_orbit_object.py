@@ -28,10 +28,6 @@ from dimos.agents.skills.orbit_object import (
 )
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_square_costmap(
     size: int = 40,
@@ -68,11 +64,6 @@ def _make_circle_costmap(
     return OccupancyGrid(grid=grid, resolution=resolution, origin=origin)
 
 
-# ---------------------------------------------------------------------------
-# Tests: angle_diff
-# ---------------------------------------------------------------------------
-
-
 class TestAngleDiff:
     def test_zero(self) -> None:
         assert _angle_diff(0.0, 0.0) == pytest.approx(0.0)
@@ -87,11 +78,6 @@ class TestAngleDiff:
     def test_wrap_negative(self) -> None:
         result = _angle_diff(-math.pi + 0.1, math.pi - 0.1)
         assert -math.pi < result <= math.pi
-
-
-# ---------------------------------------------------------------------------
-# Tests: edge extraction
-# ---------------------------------------------------------------------------
 
 
 class TestEdgeExtraction:
@@ -178,11 +164,6 @@ class TestEdgeExtraction:
         assert edge is not None
         dist_to_target = np.linalg.norm(edge.point - target)
         assert dist_to_target < 1.0, "Edge should be near the target coordinate"
-
-
-# ---------------------------------------------------------------------------
-# Tests: LapTracker
-# ---------------------------------------------------------------------------
 
 
 class TestLapTracker:

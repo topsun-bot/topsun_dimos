@@ -53,9 +53,6 @@ def _angle_diff(a: float, b: float) -> float:
     return (d + math.pi) % (2 * math.pi) - math.pi
 
 
-# ---------------------------------------------------------------------------
-# Edge extraction
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -135,15 +132,16 @@ def extract_edge(
     p_nearest = np.array([world_xs[mask][nearest_idx], world_ys[mask][nearest_idx]])
     d = float(np.sqrt(dists_sq_masked[nearest_idx]))
 
-    # --- Compute edge normal via local PCA on K nearest occupied cells ---
+    # Compute edge normal via local PCA on K nearest occupied cells
     if np.sum(mask) <= 1:
         diff = robot_xy - p_nearest
         norm = np.linalg.norm(diff)
         normal = diff / norm if norm > 1e-6 else np.array([1.0, 0.0])
         return EdgeResult(point=p_nearest, normal=normal, distance=d)
 
-    k = min(k_neighbours, int(np.sum(mask)))
-    top_k_indices = np.argpartition(dists_sq_masked, k)[:k]
+    n_masked = int(np.sum(mask))
+    k = min(k_neighbours, n_masked)
+    top_k_indices = np.argpartition(dists_sq_masked, min(k, n_masked - 1))[:k]
 
     pts = np.column_stack(
         [
@@ -199,9 +197,6 @@ def estimate_object_center(
     return np.array([world_xs[mask].mean(), world_ys[mask].mean()])
 
 
-# ---------------------------------------------------------------------------
-# Lap completion tracker
-# ---------------------------------------------------------------------------
 
 
 class LapTracker:
@@ -234,9 +229,6 @@ class LapTracker:
         return abs(self._accumulated) >= self._target_angle
 
 
-# ---------------------------------------------------------------------------
-# Skill container
-# ---------------------------------------------------------------------------
 
 
 class OrbitObjectSkillContainer(Module):
@@ -278,22 +270,18 @@ class OrbitObjectSkillContainer(Module):
             self._thread = None
         super().stop()
 
-    # ---- stream callbacks ----
-
     def _on_odom(self, msg: PoseStamped) -> None:
         self._latest_odom = msg
 
     def _on_costmap(self, msg: OccupancyGrid) -> None:
         self._latest_costmap = msg
 
-    # ---- skills ----
-
     @skill
     def orbit_object(
         self,
-        x: float = -1.0,
-        y: float = -1.0,
-        bearing: float = -999.0,
+        x: float = float("nan"),
+        y: float = float("nan"),
+        bearing: float = float("nan"),
         distance: float = 0.8,
         laps: float = 1.0,
         speed: float = 0.3,
@@ -305,14 +293,14 @@ class OrbitObjectSkillContainer(Module):
         fixed distance while circling it.
 
         Target selection (by priority):
-        1. If x and y are given (both >= 0), orbit the obstacle nearest to that world coordinate.
-        2. If bearing is given (not -999), orbit the nearest obstacle in that direction.
+        1. If x and y are both provided (not NaN), orbit the obstacle nearest to that world coordinate.
+        2. If bearing is provided (not NaN), orbit the nearest obstacle in that direction.
         3. Otherwise, orbit the nearest obstacle to the robot.
 
         Args:
-            x: Target world X coordinate in meters. Use with y for precise targeting. Set -1 to skip.
-            y: Target world Y coordinate in meters. Use with x for precise targeting. Set -1 to skip.
-            bearing: Direction to search for target relative to robot front, in degrees. 0 = front, 90 = right, -90 = left. Set -999 to skip.
+            x: Target world X coordinate in meters. Use with y for precise targeting. Omit to skip.
+            y: Target world Y coordinate in meters. Use with x for precise targeting. Omit to skip.
+            bearing: Direction to search for target relative to robot front, in degrees (CCW-positive). 0 = front, 90 = left, -90 = right. Omit to skip.
             distance: Distance to maintain from the object edge in meters.
             laps: Number of laps to complete around the object.
             speed: Forward speed along the edge in m/s.
@@ -329,8 +317,8 @@ class OrbitObjectSkillContainer(Module):
         if self._latest_costmap is None:
             return "No costmap data available. Cannot start orbit."
 
-        target_xy = np.array([x, y]) if (x >= 0 and y >= 0) else None
-        bearing_val = bearing if bearing != -999.0 else None
+        target_xy = np.array([x, y]) if (not math.isnan(x) and not math.isnan(y)) else None
+        bearing_val = bearing if not math.isnan(bearing) else None
 
         robot_xy = np.array([self._latest_odom.x, self._latest_odom.y])
         robot_yaw = self._latest_odom.yaw
@@ -378,8 +366,6 @@ class OrbitObjectSkillContainer(Module):
             self._thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
             self._thread = None
         return "Orbit stopped."
-
-    # ---- internal ----
 
     def _request_stop(self) -> None:
         self._should_stop.set()
