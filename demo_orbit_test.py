@@ -13,11 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""测试脚本：Agent 模式测试 orbit_object 功能
+"""Test script: agent-mode orbit_object test.
 
-用法:
-  真机:  OPENAI_API_KEY=sk-xxx HF_HUB_OFFLINE=1 uv run python demo_orbit_test.py <robot_ip>
-  仿真:  OPENAI_API_KEY=sk-xxx uv run python demo_orbit_test.py
+Usage:
+  Real robot:  OPENAI_API_KEY=sk-xxx HF_HUB_OFFLINE=1 uv run python demo_orbit_test.py <robot_ip>
+  Simulation:  OPENAI_API_KEY=sk-xxx uv run python demo_orbit_test.py
 
 启动后使用 dimos agent-send 发送命令:
   uv run dimos agent-send "orbit the nearest obstacle"
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     _original_send = ModuleCoordinator._send_on_system_modules
 
     def _safe_send(self) -> None:
-        """用 rpcs 字典判断代替 hasattr（避免 pipe 阻塞），超时不阻塞启动。"""
+        """Use rpcs dict instead of hasattr (avoid pipe blocking), timeout-safe."""
         modules = list(self._deployed_modules.values())
         for module in modules:
             if "on_system_modules" in getattr(module, "rpcs", set()):

@@ -27,7 +27,7 @@
 | 全局代价地图 | `CostMapper` → `OccupancyGrid` | LiDAR 点云 → 体素累积 → 占用栅格，分辨率 0.05m |
 | 体素地图 | `VoxelGridMapper` | 带 `carve_columns` 的 Open3D 体素累积，动态更新 |
 | 里程计 | `GO2Connection.odom` | 持续发布 PoseStamped |
-| 全向移动 | `cmd_vel` (Twist) | `linear.x`(横移) + `linear.y`(前后) + `angular.z`(旋转) |
+| 全向移动 | `cmd_vel` (Twist) | `linear.x`(前后) + `linear.y`(横移) + `angular.z`(旋转) |
 | 导航蓝图已有 | `unitree-go2` | 已包含 VoxelGridMapper + CostMapper + 导航链路 |
 
 ### 3.2 核心优势
@@ -205,7 +205,8 @@ Agent 执行流程:
 通过 `bearing` 参数指定目标相对于机器人的方向，只在该扇区搜索：
 
 ```
-"绕右边那个东西转" → orbit_object(bearing=90)
+"绕左边那个东西转" → orbit_object(bearing=90)
+"绕右边那个东西转" → orbit_object(bearing=-90)
 "绕前方物体转"     → orbit_object(bearing=0)
 ```
 
@@ -266,7 +267,7 @@ class OrbitObjectSkillContainer(Module):
             x: Target world X coordinate in meters. Use with y for precise targeting.
             y: Target world Y coordinate in meters. Use with x for precise targeting.
             bearing: Direction to search for target relative to robot front, in degrees.
-                     0 = front, 90 = right, -90 = left.
+                     0 = front, 90 = left (CCW-positive), -90 = right.
             distance: Distance to maintain from the object edge in meters.
             laps: Number of laps to complete around the object.
             speed: Forward speed along the edge in m/s.
@@ -409,8 +410,11 @@ dimos agent-send "围绕最近的物体转一圈"
 **测试 B: 指定方向**
 
 ```bash
-# 绕右侧障碍物
+# 绕左侧障碍物 (bearing=90, CCW-positive)
 dimos mcp call orbit_object --arg bearing=90 --arg distance=0.8 --arg laps=1.0
+
+# 绕右侧障碍物 (bearing=-90)
+dimos mcp call orbit_object --arg bearing=-90 --arg distance=0.8 --arg laps=1.0
 
 # 通过 Agent
 dimos agent-send "绕右边那个东西转一圈"

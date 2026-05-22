@@ -13,8 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""独立 orbit_object 测试：直接通过 LCM 订阅 odom/costmap，发布 cmd_vel。
-用法：先在另一个终端运行 dimos run unitree-go2，然后运行本脚本。
+"""Standalone orbit_object test: subscribe odom/costmap via LCM, publish cmd_vel.
+
+Usage: run ``dimos run unitree-go2`` in another terminal first, then run this script.
 """
 
 import math
@@ -83,7 +84,7 @@ def orbit_loop(
             print(
                 f"  等待中... odom={'有' if latest_odom else '无'} costmap={'有' if latest_costmap else '无'}"
             )
-    print("数据就绪，开始 orbit")
+    print("Data ready, starting orbit")
 
     stop_transport.publish(Bool(data=True))
 
@@ -122,11 +123,11 @@ def orbit_loop(
             else "  前方±45°内: 无"
         )
     else:
-        print("Costmap: 无占用格！")
+        print("Costmap: no occupied cells!")
 
     edge = extract_edge(costmap, robot_xy, robot_yaw, SEARCH_RADIUS, bearing_deg=bearing)
     if edge is None:
-        print("未找到障碍物，退出")
+        print("No obstacle found, exiting")
         stop_transport.publish(Bool(data=False))
         return
 
@@ -161,6 +162,10 @@ def orbit_loop(
             odom = latest_odom
             costmap = latest_costmap
             if odom is None or costmap is None:
+                now = time.monotonic()
+                sleep_dur = next_time - now
+                if sleep_dur > 0:
+                    time.sleep(sleep_dur)
                 continue
 
             robot_xy = np.array([odom.x, odom.y])
@@ -168,28 +173,28 @@ def orbit_loop(
 
             edge = extract_edge(costmap, robot_xy, robot_yaw, lock_radius, target_xy=object_center)
             if edge is None:
-                print("障碍物丢失，停止")
+                print("Obstacle lost, stopping")
                 break
 
             d = edge.distance
             if d < MIN_DISTANCE:
-                print("太近障碍物，安全停止")
+                print("Too close to obstacle, safety stop")
                 break
             if d > MAX_DISTANCE_FACTOR * distance:
-                print(f"太远 d={d:.2f}m > {MAX_DISTANCE_FACTOR * distance:.2f}m，边缘丢失")
+                print(f"Too far d={d:.2f}m > {MAX_DISTANCE_FACTOR * distance:.2f}m, edge lost")
                 break
 
-            # 面向物品中心（稳定），距离基于边缘（精确）
+            # Face object center (stable heading), distance from edge (precise)
             theta = math.atan2(object_center[1] - robot_xy[1], object_center[0] - robot_xy[0])
             face_err_rad = _angle_diff(theta, robot_yaw)
-            # 转向：面对物体
+            # Yaw control: face object
             angular_z = KP_YAW * face_err_rad
             angular_z = max(-MAX_ANGULAR_Z, min(MAX_ANGULAR_Z, angular_z))
 
-            # 只有面对物体时才前进和横移，否则原地转身
+            # Only strafe when facing object; otherwise rotate in place
             if abs(face_err_rad) < FACE_THRESHOLD:
                 vx_body = max(-0.3, min(0.3, KP_DISTANCE * (d - distance)))
-                vy_body = ORBIT_SPEED if not clockwise else -ORBIT_SPEED
+                vy_body = speed if not clockwise else -speed
             else:
                 vx_body = 0.0
                 vy_body = 0.0
@@ -236,7 +241,7 @@ if __name__ == "__main__":
     odom_transport.subscribe(on_odom)
     costmap_transport.subscribe(on_costmap)
 
-    print("LCM 订阅已启动，等待数据...")
+    print("LCM subscriptions started, waiting for data...")
     orbit_loop(
         cmd_vel_transport,
         stop_transport,

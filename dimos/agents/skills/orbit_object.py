@@ -49,7 +49,7 @@ _UNSET: float = -1e9
 
 
 def _angle_diff(a: float, b: float) -> float:
-    """Signed shortest angular difference *a − b*, wrapped to (−π, π]."""
+    """Signed shortest angular difference *a - b*, wrapped to [-pi, pi)."""
     d = a - b
     return (d + math.pi) % (2 * math.pi) - math.pi
 
@@ -126,24 +126,13 @@ def extract_edge(
     masked_xs = world_xs[mask]
     masked_ys = world_ys[mask]
 
-    if target_xy is not None:
-        ref_x, ref_y = target_xy[0], target_xy[1]
-    else:
-        ref_x, ref_y = robot_xy[0], robot_xy[1]
-
-    dx_ref = masked_xs - ref_x
-    dy_ref = masked_ys - ref_y
-    dists_sq_ref = dx_ref * dx_ref + dy_ref * dy_ref
-    nearest_idx = int(np.argmin(dists_sq_ref))
-    p_nearest = np.array([masked_xs[nearest_idx], masked_ys[nearest_idx]])
-
-    dx_robot = p_nearest[0] - robot_xy[0]
-    dy_robot = p_nearest[1] - robot_xy[1]
-    d = float(math.sqrt(dx_robot * dx_robot + dy_robot * dy_robot))
-
     dx_masked = masked_xs - robot_xy[0]
     dy_masked = masked_ys - robot_xy[1]
     dists_sq_masked = dx_masked * dx_masked + dy_masked * dy_masked
+
+    nearest_idx = int(np.argmin(dists_sq_masked))
+    p_nearest = np.array([masked_xs[nearest_idx], masked_ys[nearest_idx]])
+    d = float(np.sqrt(dists_sq_masked[nearest_idx]))
 
     # Compute edge normal via local PCA on K nearest occupied cells
     if np.sum(mask) <= 1:

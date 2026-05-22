@@ -129,24 +129,31 @@ class TestEdgeExtraction:
 
         assert edge is None
 
-    def test_bearing_filter_right(self) -> None:
-        """With bearing=90 (right), only obstacles to the right should be found."""
+    def test_bearing_filter_finds_left(self) -> None:
+        """With bearing=90 (left, CCW-positive), obstacle at +Y should be found."""
         costmap = _make_square_costmap()
         robot_xy = np.array([2.0, 0.5])
-        # Robot facing +X (yaw=0), obstacle is at ~(2.0, 2.0) — that's to the left (+Y side)
-        # With bearing=90 (right = -Y side), should NOT find it
-        extract_edge(
+        edge = extract_edge(
+            costmap,
+            robot_xy,
+            robot_yaw=0.0,
+            search_radius=5.0,
+            bearing_deg=90,
+        )
+        assert edge is not None, "Obstacle at +Y should be found with bearing=90 (left)"
+
+    def test_bearing_filter_rejects_wrong_side(self) -> None:
+        """With bearing=-90 (right, CCW-positive), obstacle at +Y should NOT be found."""
+        costmap = _make_square_costmap()
+        robot_xy = np.array([2.0, 0.5])
+        edge = extract_edge(
             costmap,
             robot_xy,
             robot_yaw=0.0,
             search_radius=5.0,
             bearing_deg=-90,
         )
-        # Obstacle is at Y=1.8..2.2, robot at Y=0.5, so obstacle is to the left
-        # bearing=-90 searches right (negative Y) — should not find it
-        # but the obstacle is actually above the robot, so this depends on geometry
-        # Let's just assert the function runs without error
-        # The result depends on exact geometry
+        assert edge is None, "Obstacle at +Y should not be found with bearing=-90 (right)"
 
     def test_target_xy_filter(self) -> None:
         """With target_xy, only obstacles near that coordinate should be found."""
