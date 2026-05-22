@@ -45,21 +45,47 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Skip the default ~19 GB LFS pull. md-babel only needs docs and
-          # README assets, fetched explicitly below.
+          # Skip the default ~19 GB LFS pull. Fetch md-babel assets explicitly below.
           lfs: false
-      - name: Resolve LFS object cache key
+      - name: Resolve md-babel LFS paths and cache key
         id: lfs-key
         run: |
-          # Hash LFS OIDs for docs assets plus the small set of data/.lfs archives
-          # referenced by get_data() in documentation code blocks (~840 MB total).
-          # After checkout with lfs: false, ls-files marks entries with '-' (pointer),
-          # not '*' (local object) — filter by path, not presence marker.
-          KEY=$(git lfs ls-files -l \
-                  | awk '$3 ~ /^(docs\/|assets\/readme\/|data\/\.lfs\/(go2_bigoffice\.db|unitree_go2_bigoffice_map\.pickle|cafe\.jpg|models_yolo|unitree_office_walk|apartment)\.tar\.gz)/ {print $1}' \
-                  | sort -u \
-                  | sha256sum | cut -c1-16)
+          set -euo pipefail
+          # get_data() archives referenced by md-babel doc blocks (~840 MB total).
+          # Single source of truth — used for both the cache key and git lfs pull.
+          DATA_LFS_ARCHIVES=(
+            go2_bigoffice.db
+            unitree_go2_bigoffice_map.pickle
+            cafe.jpg
+            models_yolo
+            unitree_office_walk
+            apartment
+          )
+          DATA_LFS_INCLUDE=$(printf 'data/.lfs/%s.tar.gz,' "${DATA_LFS_ARCHIVES[@]}")
+          DATA_LFS_INCLUDE=${DATA_LFS_INCLUDE%,}
+
+          BASES=$(printf '%s|' "${DATA_LFS_ARCHIVES[@]}")
+          KEY=$(
+            git lfs ls-files -l \
+              | awk -v bases="$BASES" '
+                  BEGIN {
+                    n = split(bases, arr, "|")
+                    for (i = 1; i <= n; i++) if (arr[i] != "") data[arr[i]] = 1
+                  }
+                  function is_data_archive(path, base) {
+                    if (path !~ /^data\/\.lfs\/.*\.tar\.gz$/) return 0
+                    base = path
+                    sub(/^data\/\.lfs\//, "", base)
+                    sub(/\.tar\.gz$/, "", base)
+                    return (base in data)
+                  }
+                  $3 ~ /^docs\// || $3 ~ /^assets\/readme\// || is_data_archive($3) { print $1 }
+                ' \
+              | sort -u \
+              | sha256sum | cut -c1-16
+          )
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "data_lfs_include=$DATA_LFS_INCLUDE" >> "$GITHUB_OUTPUT"
       - name: Cache LFS objects for md-babel assets
         uses: actions/cache@v4
         with:
@@ -69,7 +95,7 @@ jobs:
       - name: Pull md-babel LFS assets
         run: |
           git lfs pull --include="docs/**,assets/readme/**" --exclude=""
-          git lfs pull --include="data/.lfs/go2_bigoffice.db.tar.gz,data/.lfs/unitree_go2_bigoffice_map.pickle.tar.gz,data/.lfs/cafe.jpg.tar.gz,data/.lfs/models_yolo.tar.gz,data/.lfs/unitree_office_walk.tar.gz,data/.lfs/apartment.tar.gz" --exclude=""
+          git lfs pull --include="${{ steps.lfs-key.outputs.data_lfs_include }}" --exclude=""
       # Docs decode JPEG from SQLite via PyTurboJPEG; pyaudio needs portaudio.
       - name: Install system dependencies
         run: |
