@@ -1,0 +1,32 @@
+# Runtime configuration for go2_nomad_nav.py
+# Paths below are relative to this file unless absolute.
+
+visualnav_root: null
+checkpoint_path: ../models/nomad/nomad.pth
+model_config_path: null
+goal_image_path: ../recordings/images/1779412304145259520_000017.png
+
+num_samples: 8
+inference_hz: 2.0
+
+# Waypoint selection: navigation_map | multi_waypoints
+waypoint_selection: navigation_map
+
+# navigation_map — needs VoxelGridMapper + CostMapper + LocalNavigationMapModule
+selected_trajectory_index: 4
+navigation_map_robot_increase: 2.0
+local_map_max_age_s: 0.5
+
+# multi_waypoints — K-Means + live lidar + temporal memory (no costmap stack)
+# collision_thresh: 0.25
+# memory_decay: 0.8
+# max_clusters: 2
+# lidar_max_range_m: 5.0
+# lidar_max_age_s: 0.5
+
+# WaypointFollower (controller.py) — set control_enabled: false for viz-only runs
+control_enabled: true
+control_speed: 0.4
+lookahead_distance: 0.5
+control_hz: 10.0
+goal_tolerance: 0.15
