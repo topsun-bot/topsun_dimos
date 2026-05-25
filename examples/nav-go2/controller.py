@@ -81,6 +81,7 @@ class WaypointFollowerModule(Module):
         self._path_frame_x: float = 0.0
         self._path_frame_y: float = 0.0
         self._path_frame_yaw: float = 0.0
+        self._path_frame_id: str = "base_link"
         self._control_count = 0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -121,6 +122,7 @@ class WaypointFollowerModule(Module):
             self._path_frame_x = 0.0
             self._path_frame_y = 0.0
             self._path_frame_yaw = 0.0
+            self._path_frame_id = path.frame_id
             self._controller.reset_errors()
 
     def _control_loop(self) -> None:
@@ -237,7 +239,7 @@ class WaypointFollowerModule(Module):
         half_yaw = self._path_frame_yaw / 2.0
         return PoseStamped(
             ts=time.time(),
-            frame_id="base_link",
+            frame_id=self._path_frame_id,
             position=[self._path_frame_x, self._path_frame_y, 0.0],
             orientation=[0.0, 0.0, math.sin(half_yaw), math.cos(half_yaw)],
         )

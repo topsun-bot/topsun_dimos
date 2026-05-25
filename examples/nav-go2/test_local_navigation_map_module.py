@@ -14,6 +14,7 @@
 
 from pathlib import Path
 import sys
+import threading
 
 import numpy as np
 import pytest
@@ -92,3 +93,18 @@ def test_navigation_map_snapshot_copies_costmap_grid() -> None:
     grid.grid[0, 0] = 100
 
     assert snapshot.binary_costmap.grid.tolist() == [[0, 100]]
+
+
+def test_path_selection_error_chains_root_cause() -> None:
+    module = LocalNavigationMapModule.__new__(LocalNavigationMapModule)
+    module.config = LocalNavigationMapConfig()
+    module._lock = threading.RLock()
+    module._last_costmap_time_s = 1.0
+    module._last_occupancy_grid = OccupancyGrid(grid=np.array([[0]], dtype=np.int8), ts=1.0)
+    module._last_map_frame_id = None
+
+    with pytest.raises(RuntimeError, match="Path selection failed") as exc_info:
+        module.select_best_trajectory_index(np.array([[[0.0, 0.0]]]), time_point=1.0)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "No local map frame available"

@@ -123,7 +123,7 @@ class LocalNavigationMapModule(Module):
             )
             return self._selector.select_best_index(map_frame_trajectories, navigation_map)
         except Exception as exc:
-            raise RuntimeError(f"Path selection failed: {exc}")
+            raise RuntimeError(f"Path selection failed: {exc}") from exc
 
     @rpc
     def get_last_local_occupancy_grid(self) -> OccupancyGrid | None:
