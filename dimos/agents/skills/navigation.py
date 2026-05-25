@@ -1377,9 +1377,7 @@ class NavigationSkillContainer(Module):
             return
 
         if n == 1:
-            prompt = (
-                _VLM_OBJECT_LIST_PROMPT + ' Include "image_indices": [0] for each object.'
-            )
+            prompt = _VLM_OBJECT_LIST_PROMPT + ' Include "image_indices": [0] for each object.'
         else:
             prompt = (
                 f"以下 {n} 张图（编号 0 到 {n - 1}）来自房间「{room_name}」的 360° 环视。\n"
@@ -1625,7 +1623,9 @@ class NavigationSkillContainer(Module):
                     obj_rec = self._resolve_landmark_from_query(query)
                     stored_yaw: float | None = None
                     if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
-                        stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
+                        stored_yaw = (
+                            obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
+                        )
                     if stored_yaw is not None:
                         vis_msg = self._visual_acquire_object(query, stored_yaw)
                         if vis_msg:
