@@ -66,12 +66,14 @@ class SpatialRecord:
         if len(self.position) == 2:
             self.position = (self.position[0], self.position[1], 0.0)
         else:
-            self.position = tuple(float(v) for v in self.position)
+            p0, p1, p2 = (float(v) for v in self.position)
+            self.position = (p0, p1, p2)
 
         if len(self.rotation) == 1:
             self.rotation = (0.0, 0.0, self.rotation[0])
         else:
-            self.rotation = tuple(float(v) for v in self.rotation)
+            r0, r1, r2 = (float(v) for v in self.rotation)
+            self.rotation = (r0, r1, r2)
 
         if isinstance(self.record_type, str):
             self.record_type = RecordType(self.record_type)
@@ -86,15 +88,16 @@ class SpatialRecord:
         return cls(**data)
 
     def distance_to(self, other: SpatialRecord) -> float:
-        return (
-            (self.position[0] - other.position[0]) ** 2
-            + (self.position[1] - other.position[1]) ** 2
-            + (self.position[2] - other.position[2]) ** 2
-        ) ** 0.5
+        return float(
+            (
+                (self.position[0] - other.position[0]) ** 2
+                + (self.position[1] - other.position[1]) ** 2
+                + (self.position[2] - other.position[2]) ** 2
+            )
+            ** 0.5
+        )
 
-    # ------------------------------------------------------------------
     # Backward-compatible alias (deprecated — use SpatialRecord)
-    # ------------------------------------------------------------------
 
 
 LandmarkRecord = SpatialRecord

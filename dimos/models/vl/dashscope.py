@@ -53,7 +53,7 @@ class DashScopeVlModel(VlModel):
         # Native DashScope API endpoint (not compatible-mode)
         dashscope.base_http_api_url = self.config.base_url
         if os.getenv("DIMOS_VLM_MODEL_NAME"):
-            self.config.model_name = os.getenv("DIMOS_VLM_MODEL_NAME")
+            self.config.model_name = os.getenv("DIMOS_VLM_MODEL_NAME") or self.config.model_name
 
     def query(
         self,

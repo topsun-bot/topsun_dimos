@@ -76,6 +76,10 @@ class StubSpatialMemory(Module):
     def get_image_by_id(self, frame_id: str) -> Any:
         return None
 
+    @rpc
+    def clear_all(self) -> dict[str, int]:
+        return {}
+
 
 class StubLandmarkMemory(Module):
     @rpc
@@ -133,6 +137,10 @@ class StubLandmarkMemory(Module):
     @rpc
     def load(self) -> bool:
         return True
+
+    @rpc
+    def clear_all(self) -> int:
+        return 0
 
 
 class StubNavigation(Module):

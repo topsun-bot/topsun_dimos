@@ -21,6 +21,7 @@ import json
 import queue
 import threading
 import time
+from typing import Any
 
 from dimos.core.transport import pLCMTransport
 from dimos.utils.logging_config import setup_logger
@@ -95,7 +96,7 @@ def tell_robot(
     done = threading.Event()
 
     human = pLCMTransport[str]("/human_input")
-    agent = pLCMTransport("/agent")
+    agent: Any = pLCMTransport("/agent")
     idle = pLCMTransport[bool]("/agent_idle")
 
     def _on_agent(msg: object) -> None:

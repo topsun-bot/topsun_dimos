@@ -62,9 +62,7 @@ class TopologyGraph:
         self._nodes: dict[str, TopologyNode] = {}
         self._max_edge = max_edge_distance
 
-    # ------------------------------------------------------------------
     # Build
-    # ------------------------------------------------------------------
 
     def add_record(self, record: SpatialRecord) -> None:
         """Add or update a node in the graph."""
@@ -94,9 +92,7 @@ class TopologyGraph:
         for r in records:
             self.add_record(r)
 
-    # ------------------------------------------------------------------
     # Query
-    # ------------------------------------------------------------------
 
     def find_nearest_node(self, x: float, y: float) -> TopologyNode | None:
         """Find the graph node closest to (x, y)."""
@@ -159,7 +155,7 @@ class TopologyGraph:
     def _heuristic(self, a: TopologyNode, b: TopologyNode) -> float:
         dx = a.x - b.x
         dy = a.y - b.y
-        return (dx * dx + dy * dy) ** 0.5
+        return float((dx * dx + dy * dy) ** 0.5)
 
     def _reconstruct_path(
         self,

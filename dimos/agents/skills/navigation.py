@@ -15,7 +15,7 @@
 import math
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 from reactivex.disposable import Disposable
 
@@ -124,7 +124,7 @@ def _normalize_vlm_object_name(raw: str) -> str:
     return name
 
 
-def _create_vl_model():
+def _create_vl_model() -> Any:
     """Create the VLM instance based on environment configuration.
 
     Key ↔ URL pairing is strict — DashScope key only goes to DashScope
@@ -159,6 +159,8 @@ def _create_vl_model():
             provider = "openai"
         elif os.getenv("ALIBABA_API_KEY"):
             provider = "qwen"
+
+    model: Any = None
 
     if provider == "dashscope":
         # Use native DashScope MultiModalConversation API (not compatible-mode)
@@ -297,7 +299,7 @@ class NavigationSkillContainer(Module):
         ] = []
 
         has_cam = self._latest_image is not None and hasattr(self._latest_image, "data")
-        cam_shape = getattr(self._latest_image.data, "shape", None) if has_cam else None
+        cam_shape = getattr(self._latest_image.data, "shape", None) if has_cam else None  # type: ignore[union-attr]
         logger.info(
             "[tag_location] START name=%r num_photos=%d has_camera=%s image_shape=%s",
             location_name,
@@ -325,14 +327,14 @@ class NavigationSkillContainer(Module):
             if has_frame:
                 captured_frames.append(
                     (
-                        self._latest_image.data.copy(),
+                        self._latest_image.data.copy(),  # type: ignore[union-attr]
                         (float(pos.x), float(pos.y), float(pos.z)),
                         rot_tuple,
                     )
                 )
                 try:
                     image_saved = self._spatial_memory.tag_location_with_image(
-                        location, self._latest_image.data
+                        location, self._latest_image.data  # type: ignore[union-attr]
                     )
                 except Exception:
                     logger.exception("Failed to store room reference image for '%s'", name)
@@ -557,7 +559,7 @@ class NavigationSkillContainer(Module):
         }
 
         for step_name in order:
-            msg = steps[step_name]()
+            msg: str | None = steps[step_name]()
             if msg:
                 return msg
         return None
@@ -956,7 +958,7 @@ class NavigationSkillContainer(Module):
                 )
                 self._spatial_memory.tag_location_with_image(room_loc, self._latest_image.data)
                 if not hasattr(self, "_auto_ref_count"):
-                    self._auto_ref_count = {}
+                    self._auto_ref_count: dict[str, int] = {}
                 self._auto_ref_count[room_name] = self._auto_ref_count.get(room_name, 0) + 1
                 logger.info(
                     "Visual match '%s' (conf=%.3f, clip2odom=%.2fm) → auto-added reference #%d",
@@ -1227,7 +1229,7 @@ class NavigationSkillContainer(Module):
             elapsed,
             text[:200].replace("\n", " "),
         )
-        return text
+        return str(text)
 
     def _detect_objects_panorama_batch_async(
         self,
@@ -1390,12 +1392,11 @@ class NavigationSkillContainer(Module):
                 if room_name in seen_rooms:
                     continue
                 seen_rooms.add(room_name)
-                images = room_info.get("images") or []
+                images: list[Any] = cast(list[Any], room_info.get("images") or [])
                 if not images:
                     continue
-                first_img_id = str(
-                    (images[0] if isinstance(images[0], dict) else {}).get("location_id", "")
-                )
+                first_img: dict[str, Any] = images[0] if isinstance(images[0], dict) else {}
+                first_img_id = str(first_img.get("location_id", ""))
                 if not first_img_id:
                     continue
                 room_img = self._spatial_memory.get_room_image(first_img_id)
@@ -1718,7 +1719,7 @@ class NavigationSkillContainer(Module):
             for r in all_records:
                 topo.add_record(r)
 
-            all_waypoints: list = []
+            all_waypoints: list[Any] = []
             if self._latest_odom is not None:
                 pos = self._latest_odom.position
                 all_waypoints = topo.shortest_path(

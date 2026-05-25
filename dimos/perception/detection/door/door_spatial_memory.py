@@ -105,9 +105,7 @@ class SpatialLandmarkMemory:
         self._records: dict[str, SpatialRecord] = {}
         self._dirty: bool = False
 
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     def record(self, rec: SpatialRecord) -> str:
         """Record or update a landmark.
@@ -287,9 +285,7 @@ class SpatialLandmarkMemory:
     def get_by_id(self, record_id: str) -> SpatialRecord | None:
         return self._records.get(record_id)
 
-    # ------------------------------------------------------------------
     # Persistence
-    # ------------------------------------------------------------------
 
     def save(self) -> bool:
         """Persist all landmark records to a JSON file."""
@@ -345,9 +341,7 @@ class SpatialLandmarkMemory:
             logger.warning("Failed to load landmark memory from %s: %s", self._db_path, e)
             return False
 
-    # ------------------------------------------------------------------
     # Snapshot image helpers
-    # ------------------------------------------------------------------
 
     def save_snapshot(self, record_id: str, image_bytes: bytes) -> str | None:
         """Save a landmark snapshot image to the snapshots directory."""
@@ -359,9 +353,7 @@ class SpatialLandmarkMemory:
         except OSError:
             return None
 
-    # ------------------------------------------------------------------
     # Internal
-    # ------------------------------------------------------------------
 
     def _auto_save(self) -> None:
         """Persist after each mutation so data survives crashes."""

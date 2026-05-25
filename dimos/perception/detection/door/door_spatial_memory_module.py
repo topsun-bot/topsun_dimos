@@ -72,9 +72,7 @@ class SpatialLandmarkMemoryModule(Module):
         self._memory.save()
         super().stop()
 
-    # ------------------------------------------------------------------
     # RPC: CRUD
-    # ------------------------------------------------------------------
 
     @rpc
     def record_landmark_str(
@@ -117,9 +115,7 @@ class SpatialLandmarkMemoryModule(Module):
     def count(self) -> int:
         return self._memory.count()
 
-    # ------------------------------------------------------------------
     # RPC: Query
-    # ------------------------------------------------------------------
 
     @rpc
     def find_by_name(self, name: str) -> SpatialRecord | None:
@@ -157,17 +153,13 @@ class SpatialLandmarkMemoryModule(Module):
     def get_by_id(self, record_id: str) -> SpatialRecord | None:
         return self._memory.get_by_id(record_id)
 
-    # ------------------------------------------------------------------
     # RPC: Mutation
-    # ------------------------------------------------------------------
 
     @rpc
     def update_state(self, record_id: str, new_state: str) -> bool:
         return self._memory.update_state(record_id, new_state)
 
-    # ------------------------------------------------------------------
     # RPC: Persistence
-    # ------------------------------------------------------------------
 
     @rpc
     def save_snapshot(self, record_id: str, image_bytes: bytes) -> str | None:
