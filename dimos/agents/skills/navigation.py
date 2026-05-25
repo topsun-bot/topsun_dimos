@@ -501,6 +501,7 @@ class NavigationSkillContainer(Module):
         if (
             "severe visual/odom drift" in nav_landmark_msg.lower()
             or "aborted" in nav_landmark_msg.lower()
+            or "navigation skipped" in nav_landmark_msg.lower()
         ):
             logger.warning("[landmark] ⚠ Navigation failed, fall through")
             return None
@@ -825,6 +826,9 @@ class NavigationSkillContainer(Module):
     def _coordinate_frame_stale_reason(self, target: SpatialRecord) -> str | None:
         """Detect persisted coordinates that no longer match the current odom frame."""
         if self._latest_odom is None:
+            return None
+
+        if target.session_id and target.session_id == self._memory_session_id:
             return None
 
         if target.session_id and target.session_id != self._memory_session_id:
