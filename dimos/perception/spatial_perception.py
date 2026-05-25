@@ -177,20 +177,10 @@ class SpatialMemory(Module):
 
         self._chroma_lock = RLock()
         self._chroma_recover_cooldown_until: float = 0.0
-        self._setup_chromadb()
-
         self.max_stored_frames: int = self.config.max_stored_frames
         self.max_room_images: int = self.config.max_room_images
         self._room_image_ids: list[str] = []  # FIFO order for room image eviction
-        self.max_stored_frames = self.config.max_stored_frames
-
-        self.vector_db: SpatialVectorDB = SpatialVectorDB(
-            collection_name=self.collection_name,
-            chroma_client=self._chroma_client,
-            visual_memory=self._visual_memory,
-            embedding_provider=self.embedding_provider,
-            max_stored_frames=self.max_stored_frames,
-        )
+        self._setup_chromadb()
 
         self.last_position: Vector3 | None = None
         self.last_record_time: float | None = None

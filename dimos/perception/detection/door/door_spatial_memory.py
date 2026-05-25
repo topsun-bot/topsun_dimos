@@ -117,7 +117,7 @@ class SpatialLandmarkMemory:
         """
         if rec.record_type == RecordType.ROOM and rec.name:
             by_name = self.find_by_name(rec.name)
-            if by_name is not None:
+            if by_name is not None and by_name.record_type == RecordType.ROOM:
                 by_name.observation_count += 1
                 by_name.last_seen = time.time()
                 by_name.position = rec.position
