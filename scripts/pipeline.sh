@@ -61,6 +61,7 @@ load_config() {
   local cfg
   cfg=$(python3 -c "
 import json
+import sys
 with open('$CONFIG_FILE') as f:
     c = json.load(f)
 
@@ -69,7 +70,7 @@ valid_models = {'opus', 'sonnet', 'haiku'}
 for role in ('planner', 'developer', 'tester'):
     m = c.get('models', {}).get(role, '')
     if m and m not in valid_models:
-        print(f'WARNING: Unknown model \"{m}\" for {role}, using default')
+        print(f'WARNING: Unknown model \"{m}\" for {role}, using default', file=sys.stderr)
 
 print(json.dumps({
     'max_retries': c.get('max_retries', $MAX_RETRIES),
@@ -79,7 +80,7 @@ print(json.dumps({
     'permission_mode': c.get('permission_mode', '$PERMISSION_MODE'),
     'effort': c.get('effort', '$EFFORT'),
 }))
-" 2>&1) || die "Failed to parse $CONFIG_FILE"
+") || die "Failed to parse $CONFIG_FILE"
 
   MAX_RETRIES=$(echo "$cfg" | python3 -c "import json,sys; print(json.load(sys.stdin)['max_retries'])")
   MODEL_PLANNER=$(echo "$cfg" | python3 -c "import json,sys; print(json.load(sys.stdin)['model_planner'])")

@@ -18,7 +18,7 @@ G1 humanoid agentic blueprint using DeepSeek V4 Pro.
 
 Usage::
 
-    export OPENAI_API_KEY="sk-fb774f182a3c4c28aaa8b6878ee32b60"
+    export OPENAI_API_KEY="sk-..."
     export OPENAI_BASE_URL="https://api.deepseek.com"
     dimos run unitree-g1-agentic-deepseek
 """

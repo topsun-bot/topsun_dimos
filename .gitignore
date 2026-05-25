@@ -65,6 +65,12 @@ yolo11n.pt
 # ai_longrun_harness - ignore entire workflow directory
 .ai_longrun_harness/
 
+# Local multi-agent pipeline runtime state
+.pipeline/logs/
+.pipeline/session/
+.pipeline/state
+.pipeline/retry_count
+
 /logs
 
 *.so

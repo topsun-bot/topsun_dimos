@@ -19,14 +19,15 @@ generalized record that can represent doors, rooms, or generic landmarks.
 
 from __future__ import annotations
 
-import time
-import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum
+import time
 from typing import Any
+import uuid
 
 
 class RecordType(Enum):
+    DOOR = "door"
     ROOM = "room"
     LANDMARK = "landmark"
     UNKNOWN = "unknown"

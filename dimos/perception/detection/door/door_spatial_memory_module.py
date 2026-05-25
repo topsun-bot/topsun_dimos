@@ -26,7 +26,7 @@ from dimos.constants import STATE_DIR
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.perception.detection.door.door_spatial_memory import SpatialLandmarkMemory
-from dimos.types.spatial_record import SpatialRecord, RecordType
+from dimos.types.spatial_record import RecordType, SpatialRecord
 from dimos.utils.logging_config import setup_logger
 
 _LANDMARK_MEMORY_DIR = STATE_DIR / "landmark_memory"
@@ -134,7 +134,11 @@ class SpatialLandmarkMemoryModule(Module):
         return self._memory.find_nearest(x, y, radius)
 
     @rpc
-    def query_by_type(self, record_type: str) -> list[SpatialRecord]:
+    def query_by_type(self, record_type: RecordType) -> list[SpatialRecord]:
+        return self._memory.query_by_type(record_type)
+
+    @rpc
+    def query_by_type_str(self, record_type: str) -> list[SpatialRecord]:
         return self._memory.query_by_type(RecordType(record_type))
 
     @rpc

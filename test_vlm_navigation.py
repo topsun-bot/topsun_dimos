@@ -54,11 +54,12 @@ def _resolve():
 
 def vlm_query_dashscope(image_path_or_array, prompt, api_key, base_url, model):
     """DashScope native MultiModalConversation API."""
-    import cv2
     import io
-    from PIL import Image as PILImage
+
+    import cv2
     import dashscope
     from dashscope import MultiModalConversation
+    from PIL import Image as PILImage
 
     dashscope.base_http_api_url = base_url
 
@@ -102,10 +103,11 @@ def vlm_query_dashscope(image_path_or_array, prompt, api_key, base_url, model):
 
 def vlm_query_openai(image_path_or_array, prompt, api_key, base_url, model):
     """OpenAI-compatible API."""
-    import cv2
     import io
-    from PIL import Image as PILImage
+
+    import cv2
     from openai import OpenAI
+    from PIL import Image as PILImage
 
     kwargs: dict = {"api_key": api_key}
     if base_url:
@@ -154,7 +156,7 @@ def vlm_query(image_path_or_array, prompt, model=None):
     return result
 
 
-def test_detect_objects(image_path, model=None):
+def run_detect_objects(image_path, model=None):
     """Way 2: Capture-time object detection."""
     print("\n" + "=" * 60)
     print("TEST 1: detect_objects_in_view (Way 2 - capture-time detection)")
@@ -183,10 +185,10 @@ def test_detect_objects(image_path, model=None):
         for obj in objects:
             print(f"  - {obj.get('name', '?')}: {obj.get('description', '')}")
     except json.JSONDecodeError:
-        print(f"FAILED to parse JSON from response — prompt may need tuning")
+        print("FAILED to parse JSON from response — prompt may need tuning")
 
 
-def test_find_object(image_path, target, model=None):
+def run_find_object(image_path, target, model=None):
     """Way 1: Search for a specific object in a stored image."""
     print("\n" + "=" * 60)
     print(f"TEST 2: VLM memory-image query for '{target}' (Way 1)")
@@ -202,7 +204,7 @@ def test_find_object(image_path, target, model=None):
     print(f"VLM answer: {response.strip()}")
 
 
-def test_find_bbox(image_path, target, model=None):
+def run_find_bbox(image_path, target, model=None):
     """Test in-frame bbox detection."""
     import cv2
 
@@ -267,9 +269,9 @@ def main():
         print("ERROR: Provide an image path or --camera")
         sys.exit(1)
 
-    test_detect_objects(image_input, model)
-    test_find_object(image_input, args.target, model)
-    test_find_bbox(image_input, args.target, model)
+    run_detect_objects(image_input, model)
+    run_find_object(image_input, args.target, model)
+    run_find_bbox(image_input, args.target, model)
 
     print("\n" + "=" * 60)
     print("All tests complete.")

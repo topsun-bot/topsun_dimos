@@ -22,14 +22,12 @@ No database dependency. Can be upgraded to ChromaDB/SQLite later.
 from __future__ import annotations
 
 import json
-import os
+from pathlib import Path
 import shutil
 import time
-from pathlib import Path
-from typing import Any
 
 from dimos.constants import STATE_DIR
-from dimos.types.spatial_record import SpatialRecord, RecordType
+from dimos.types.spatial_record import RecordType, SpatialRecord
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -305,7 +303,7 @@ class SpatialLandmarkMemory:
             shutil.move(str(tmp), str(self._db_path))
             self._dirty = False
             return True
-        except (OSError, TypeError) as e:
+        except (OSError, TypeError):
             return False
 
     def clear_all(self) -> int:
@@ -386,3 +384,13 @@ class SpatialLandmarkMemory:
             if dx * dx + dy * dy <= radius * radius:
                 return rec
         return None
+
+
+class DoorSpatialMemory(SpatialLandmarkMemory):
+    """Backward-compatible door memory wrapper around SpatialLandmarkMemory."""
+
+    def record_door(self, rec: SpatialRecord) -> str:
+        return self.record(rec)
+
+    def get_all_doors(self) -> list[SpatialRecord]:
+        return self.get_all()

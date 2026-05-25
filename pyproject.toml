@@ -375,6 +375,10 @@ all = [
 # For autofix.yml
 autofix = ["ruff==0.14.3"]
 
+dev = [
+    "pytest>=8.3.5",
+]
+
 # Project deps shared by `tests` and `lint`.
 project-deps = [
     "dimos[web,visualization]",
@@ -475,11 +479,6 @@ override-dependencies = [
     # (CVE-2026-25990, CVE-2026-40192, CVE-2026-42311).
     "pillow>=12.2.0",
     "pytest==8.3.5", # because gtsam screwed up their dev dependencies
-]
-
-[dependency-groups]
-dev = [
-    "pytest>=8.3.5",
 ]
 
 [tool.ruff]

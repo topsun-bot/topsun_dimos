@@ -39,12 +39,12 @@ from typing import Any
 
 import cv2
 import numpy as np
-import torch
 from PIL import Image as PILImage
+import torch
 
-from dimos.types.spatial_record import SpatialRecord, RecordType
-from dimos.perception.detection.door.door_spatial_memory import SpatialLandmarkMemory
 from dimos.perception.detection.detectors.yolo import Yolo2DDetector
+from dimos.perception.detection.door.door_spatial_memory import SpatialLandmarkMemory
+from dimos.types.spatial_record import RecordType, SpatialRecord
 
 # CLIP zero-shot text prompts
 _DOOR_PROMPTS = ["door", "french door", "sliding door", "gate"]
@@ -214,8 +214,8 @@ class DoorDetector:
             door_y = robot_position[1] + 2.0 * _math.sin(yaw)
 
             rec = SpatialRecord(
-                name="",
-                record_type=RecordType.LANDMARK,
+                name="door",
+                record_type=RecordType.DOOR,
                 position=(door_x, door_y, robot_position[2]),
                 rotation=robot_rotation,
                 state=det["door_state"],

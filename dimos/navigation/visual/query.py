@@ -66,7 +66,7 @@ def _scale_bbox_to_image(
     bbox: tuple[float, float, float, float],
     image: Image,
 ) -> BBox:
-    """Map model coords to pixel space (0–1 fraction, Qwen 0–1000, or absolute pixels)."""
+    """Map model coords to pixel space (0-1 fraction, Qwen 0-1000, or absolute pixels)."""
     h, w = image.data.shape[:2]
     x1, y1, x2, y2 = bbox
     mx = max(x1, y1, x2, y2)
@@ -102,7 +102,7 @@ def parse_object_bbox_from_vlm_response(
         bbox = _bbox_from_detection_item(result)
         if bbox is not None:
             name = str(result.get("name") or result.get("label") or "")
-            score = 1.0 if _label_matches_query(name, object_description) else 0.5
+            score = 1.0 if _label_matches_query(name, object_description) else 0.0
             area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             candidates.append((score, area, bbox))
     elif isinstance(result, list):
@@ -121,6 +121,8 @@ def parse_object_bbox_from_vlm_response(
         return None
 
     candidates.sort(key=lambda c: (-c[0], -c[1]))
+    if candidates[0][0] <= 0.0:
+        return None
     return _scale_bbox_to_image(candidates[0][2], image)
 
 
@@ -128,7 +130,7 @@ def get_object_bbox_from_image(
     vl_model: VlModel, image: Image, object_description: str
 ) -> BBox | None:
     prompt = (
-        f"在这张图中找到「{object_description}」（可用中文或英文描述）。"
+        f"在这张图中找到「{object_description}」(可用中文或英文描述)。"
         "Return JSON for every matching instance. Prefer either format:\n"
         '1) A single object: {"name": "<中文或英文名>", "bbox": [x1, y1, x2, y2]}\n'
         '2) Multiple objects: [{"label": "...", "bbox_2d": [x1, y1, x2, y2]}, ...]\n'
