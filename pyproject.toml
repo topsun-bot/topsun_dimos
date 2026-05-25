@@ -518,6 +518,7 @@ module = [
     "annotation_protocol",
     "cyclonedds",
     "cyclonedds.*",
+    "dashscope",
     "dimos_lcm.*",
     "etils",
     "faster_whisper",
