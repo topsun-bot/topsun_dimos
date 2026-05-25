@@ -334,7 +334,8 @@ class NavigationSkillContainer(Module):
                 )
                 try:
                     image_saved = self._spatial_memory.tag_location_with_image(
-                        location, self._latest_image.data  # type: ignore[union-attr]
+                        location,
+                        self._latest_image.data,  # type: ignore[union-attr]
                     )
                 except Exception:
                     logger.exception("Failed to store room reference image for '%s'", name)
@@ -1392,7 +1393,7 @@ class NavigationSkillContainer(Module):
                 if room_name in seen_rooms:
                     continue
                 seen_rooms.add(room_name)
-                images: list[Any] = cast(list[Any], room_info.get("images") or [])
+                images: list[Any] = cast("list[Any]", room_info.get("images") or [])
                 if not images:
                     continue
                 first_img: dict[str, Any] = images[0] if isinstance(images[0], dict) else {}
