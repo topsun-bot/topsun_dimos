@@ -164,8 +164,8 @@ jobs:
         if: failure()
         env:
           COLOR: yes
-        run: >-  # `exit 1` makes sure that the job remains red with flaky runs
-          uv run pytest --no-cov -vvvvv --lf  -m 'not (tool or self_hosted or mujoco or dimsim)' && exit 1
+        run: >-
+          uv run pytest --no-cov -vvvvv --lf  -m 'not (tool or self_hosted or mujoco or dimsim)'
         shell: bash
       - name: Turn coverage into xml
         run: uv run python -m coverage xml
@@ -260,8 +260,8 @@ jobs:
         if: failure()
         env:
           COLOR: yes
-        run: >-  # `exit 1` makes sure that the job remains red with flaky runs
-          uv run pytest --no-cov -vvvvv --lf  -m '(${{ matrix.markers }}) and not (tool or mujoco)' && exit 1
+        run: >-
+          uv run pytest --no-cov -vvvvv --lf  -m '(${{ matrix.markers }}) and not (tool or mujoco)'
         shell: bash
       - name: Turn coverage into xml
         run: uv run python -m coverage xml

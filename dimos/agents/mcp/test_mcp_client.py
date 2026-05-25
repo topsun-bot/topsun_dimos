@@ -195,7 +195,14 @@ def test_image(agent_setup):
         system_prompt="You are a helpful assistant that can use a camera to take pictures.",
     )
 
-    response = history[-1].content.lower()
+    # The last message may have multimodal content (list of dicts);
+    # walk backward to find the last AI message with string content.
+    response = ""
+    for msg in reversed(history):
+        content = msg.content
+        if isinstance(content, str):
+            response = content.lower()
+            break
     assert "cafe" in response
     assert "stadium" not in response
     assert "battleship" not in response
