@@ -97,9 +97,9 @@ class SpatialConfig(ModuleConfig):
     collection_name: str = "spatial_memory"
     embedding_model: str = "clip"
     embedding_dimensions: int = 512
-    min_distance_threshold: float = 0.5  # Min distance in meters to store a new frame
-    min_time_threshold: float = 5.0  # Min time in seconds to record a new frame
-    max_stored_frames: int = 500  # Max frames in VisualMemory; older frames evicted when exceeded
+    min_distance_threshold: float = 0.01  # Min distance in meters to store a new frame
+    min_time_threshold: float = 1.0  # Min time in seconds to record a new frame
+    max_stored_frames: int = 500  # FIFO cap on stored frames (0 = unlimited)
     max_room_images: int = 100  # Max room reference images; oldest evicted when exceeded
     db_path: str | None = str(_DB_PATH)  # Path for ChromaDB persistence
     visual_memory_path: str | None = str(
@@ -173,7 +173,7 @@ class SpatialMemory(Module):
                     logger.error(f"Error loading visual memory: {e}")
                     self._visual_memory = VisualMemory(output_dir=self.config.output_dir)
 
-        self.embedding_provider: ImageEmbeddingProvider = ImageEmbeddingProvider(
+        self.embedding_provider = ImageEmbeddingProvider(
             model_name=self.embedding_model, dimensions=self.embedding_dimensions
         )
 
@@ -184,6 +184,15 @@ class SpatialMemory(Module):
         self.max_stored_frames: int = self.config.max_stored_frames
         self.max_room_images: int = self.config.max_room_images
         self._room_image_ids: list[str] = []  # FIFO order for room image eviction
+        self.max_stored_frames = self.config.max_stored_frames
+
+        self.vector_db: SpatialVectorDB = SpatialVectorDB(
+            collection_name=self.collection_name,
+            chroma_client=self._chroma_client,
+            visual_memory=self._visual_memory,
+            embedding_provider=self.embedding_provider,
+            max_stored_frames=self.max_stored_frames,
+        )
 
         self.last_position: Vector3 | None = None
         self.last_record_time: float | None = None
@@ -676,7 +685,12 @@ class SpatialMemory(Module):
                 - frame_count: Total number of frames processed
                 - stored_frame_count: Number of frames actually stored
         """
-        return {"frame_count": self.frame_count, "stored_frame_count": self.stored_frame_count}
+        return {
+            "frame_count": self.frame_count,
+            "stored_frame_count": self.stored_frame_count,
+            "retained_frame_count": len(self.vector_db._frame_ids),
+            "max_stored_frames": self.max_stored_frames,
+        }
 
     @rpc
     def clear_all(self) -> dict[str, int]:

@@ -19,6 +19,7 @@ This module extends the ChromaDB implementation to support storing images with
 their XY locations and querying by location or image similarity.
 """
 
+from collections import deque
 from typing import Any
 
 import numpy as np
@@ -44,6 +45,7 @@ class SpatialVectorDB:
         chroma_client=None,
         visual_memory=None,
         embedding_provider=None,
+        max_stored_frames: int = 0,
     ) -> None:
         """
         Initialize the spatial vector database.
@@ -53,8 +55,11 @@ class SpatialVectorDB:
             chroma_client: Optional ChromaDB client for persistence. If None, an in-memory client is used.
             visual_memory: Optional VisualMemory instance for storing images. If None, a new one is created.
             embedding_provider: Optional ImageEmbeddingProvider instance for computing embeddings. If None, one will be created.
+            max_stored_frames: Maximum frames to retain (FIFO eviction). 0 means unlimited.
         """
         self.collection_name = collection_name
+        self.max_stored_frames = max_stored_frames
+        self._frame_ids: deque[str] = deque()
 
         # Here to prevent unwanted imports in the file.
         import chromadb
@@ -110,6 +115,81 @@ class SpatialVectorDB:
                 f"Initialized {client_type} collection '{collection_name}' (count error: {e!s})"
             )
 
+        sync_ok = self._sync_frame_order_from_collection()
+        if self.max_stored_frames > 0:
+            logger.info(f"SpatialVectorDB max_stored_frames={self.max_stored_frames}")
+            self._enforce_frame_limit()
+            # Only prune orphans when the FIFO index was successfully rebuilt.
+            # On a sync failure `_frame_ids` is empty for unknown reasons (e.g.
+            # transient Chroma read error), and pruning would wipe every in-memory
+            # image — turning a recoverable startup read into data loss.
+            if sync_ok:
+                self._prune_visual_memory_orphans()
+            else:
+                logger.warning(
+                    "Skipping visual-memory orphan prune: frame index sync failed; "
+                    "retaining existing images to avoid data loss."
+                )
+
+    def _prune_visual_memory_orphans(self) -> None:
+        """Drop visual-memory entries that are no longer in the frame index."""
+        retained = set(self._frame_ids)
+        for image_id in list(self.visual_memory.images):
+            if image_id not in retained:
+                self.visual_memory.remove(image_id)
+
+    def _sync_frame_order_from_collection(self) -> bool:
+        """Rebuild FIFO order from ChromaDB (oldest first by metadata timestamp).
+
+        Returns:
+            True if the index was rebuilt from a successful collection read
+            (including the empty-collection case); False if the read failed
+            and the caller should treat `_frame_ids` as unreliable.
+        """
+        try:
+            results = self.image_collection.get(include=["metadatas"])
+        except Exception as e:
+            logger.warning(f"Could not sync frame order from collection: {e}")
+            return False
+
+        if not results or not results.get("ids"):
+            self._frame_ids.clear()
+            return True
+
+        ids: list[str] = results["ids"]
+        metadatas: list[dict[str, Any]] = results.get("metadatas") or [{}] * len(ids)
+        ordered = sorted(
+            zip(ids, metadatas, strict=False),
+            key=lambda pair: float((pair[1] or {}).get("timestamp", 0.0)),
+        )
+        self._frame_ids = deque(frame_id for frame_id, _ in ordered)
+        return True
+
+    def remove_image_vector(self, vector_id: str) -> None:
+        """Remove one frame from visual memory and ChromaDB."""
+        self.visual_memory.remove(vector_id)
+        try:
+            self.image_collection.delete(ids=[vector_id])
+        except Exception as e:
+            logger.warning(f"Failed to delete vector {vector_id} from ChromaDB: {e}")
+
+    def _enforce_frame_limit(self) -> None:
+        """Drop oldest frames until within max_stored_frames."""
+        if self.max_stored_frames <= 0:
+            return
+
+        evicted = 0
+        while len(self._frame_ids) > self.max_stored_frames:
+            oldest_id = self._frame_ids.popleft()
+            self.remove_image_vector(oldest_id)
+            evicted += 1
+
+        if evicted:
+            logger.info(
+                f"Evicted {evicted} oldest frame(s); "
+                f"retaining {len(self._frame_ids)}/{self.max_stored_frames}"
+            )
+
     def add_image_vector(
         self,
         vector_id: str,
@@ -133,6 +213,11 @@ class SpatialVectorDB:
         self.image_collection.add(
             ids=[vector_id], embeddings=[embedding.tolist()], metadatas=[metadata]
         )
+
+        if vector_id in self._frame_ids:
+            self._frame_ids.remove(vector_id)
+        self._frame_ids.append(vector_id)
+        self._enforce_frame_limit()
 
         logger.info(f"Added image vector {vector_id} with metadata: {metadata}")
 

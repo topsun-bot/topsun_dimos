@@ -16,6 +16,12 @@
 """Basic G1 sim stack: base sensors plus sim connection and planner."""
 
 from typing import Any
+from dimos.core.coordination.blueprints import autoconnect
+from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
+from dimos.robot.unitree.g1.blueprints.primitive.uintree_g1_primitive_no_nav import (
+    uintree_g1_primitive_no_nav,
+)
+from dimos.robot.unitree.g1.mujoco_sim import G1SimConnection
 
 from dimos_lcm.sensor_msgs import CameraInfo
 

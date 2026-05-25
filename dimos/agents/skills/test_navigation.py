@@ -16,7 +16,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-import pytest
 
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.core.core import rpc
@@ -493,7 +492,6 @@ def test_stop_movement(agent_setup) -> None:
     assert "stopped" in history[-1].content.lower()
 
 
-@pytest.mark.slow
 def test_start_exploration(agent_setup) -> None:
     history = agent_setup(
         blueprints=[
@@ -510,7 +508,6 @@ def test_start_exploration(agent_setup) -> None:
     assert "explor" in history[-1].content.lower()
 
 
-@pytest.mark.slow
 def test_go_to_semantic_location(agent_setup) -> None:
     history = agent_setup(
         blueprints=[

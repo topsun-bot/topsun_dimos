@@ -46,7 +46,7 @@ text "same dockerfiles" at (D.e.x + 1.2in, D.e.y + 0.4in)
 
 ## Images
 
-All images are published to `ghcr.io/dimensionalos/`.
+All images are published to `ghcr.io/topsun-bot/`.
 
 | Image        | Base                        | Purpose                                            |
 |--------------|-----------------------------|----------------------------------------------------|
@@ -71,7 +71,7 @@ Images are tagged based on the git branch:
 ### Non-ROS Track (`python` → `dev`)
 
 ```sh skip
-docker run -it ghcr.io/dimensionalos/dev:latest bash
+docker run -it ghcr.io/topsun-bot/dev:latest bash
 ```
 
 ### ROS Track (`ros` → `ros-python` → `ros-dev`)
@@ -83,7 +83,7 @@ Use when you need ROS2 integration:
 - Running ROS tests (`pytest -m ros`)
 
 ```sh skip
-docker run -it ghcr.io/dimensionalos/ros-dev:latest bash
+docker run -it ghcr.io/topsun-bot/ros-dev:latest bash
 ```
 
 ## Local Development
