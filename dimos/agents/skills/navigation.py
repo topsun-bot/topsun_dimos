@@ -34,7 +34,11 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
 )
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.navigation.topology import TopologyGraph
-from dimos.navigation.visual.query import get_object_bbox_from_image
+from dimos.navigation.visual.query import (
+    get_object_bbox_from_image,
+    parse_simple_bbox_line,
+    yaw_offset_from_bbox,
+)
 from dimos.perception.object_tracking_spec import ObjectTrackingSpec
 from dimos.perception.spatial_memory_spec import SpatialMemorySpec
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
@@ -307,7 +311,7 @@ class NavigationSkillContainer(Module):
         )
 
         def _snap_one(name: str) -> bool:
-            """Take one photo; always queue frame for VLM when camera data exists."""
+            """Take one photo; queue frame for CLIP and spawn per-frame VLM thread."""
             pos = self._latest_odom.position if self._latest_odom else None
             rot_tuple = self._odom_euler_tuple()
             if pos is None or rot_tuple is None:
@@ -323,19 +327,24 @@ class NavigationSkillContainer(Module):
             image_saved = False
             has_frame = self._latest_image is not None and hasattr(self._latest_image, "data")
             if has_frame:
-                captured_frames.append(
-                    (
-                        self._latest_image.data.copy(),
-                        (float(pos.x), float(pos.y), float(pos.z)),
-                        rot_tuple,
-                    )
-                )
+                img_copy = self._latest_image.data.copy()
+                pos_tuple = (float(pos.x), float(pos.y), float(pos.z))
+                captured_frames.append((img_copy, pos_tuple, rot_tuple))
                 try:
                     image_saved = self._spatial_memory.tag_location_with_image(
                         location, self._latest_image.data
                     )
                 except Exception:
                     logger.exception("Failed to store room reference image for '%s'", name)
+
+                # Per-frame async VLM: fire immediately rather than waiting for all frames.
+                frame_idx = len(captured_frames) - 1
+                threading.Thread(
+                    target=self._detect_single_frame_async,
+                    args=(img_copy, pos_tuple, rot_tuple, name),
+                    daemon=True,
+                    name=f"vlm-frame-{name}-{frame_idx}",
+                ).start()
 
             logger.info(
                 "[tag_location] snap name=%r image_saved=%s captured_total=%d",
@@ -385,19 +394,13 @@ class NavigationSkillContainer(Module):
 
         if captured_frames:
             logger.info(
-                "[tag_location] scheduling VLM batch: room=%r frames=%d (async thread)",
+                "[tag_location] per-frame VLM threads already spawned: room=%r frames=%d",
                 location_name,
                 len(captured_frames),
             )
-            threading.Thread(
-                target=self._detect_objects_panorama_batch_async,
-                args=(captured_frames, location_name),
-                daemon=True,
-                name=f"vlm-panorama-{location_name}",
-            ).start()
         else:
             logger.warning(
-                "[tag_location] VLM batch SKIPPED for %r: no camera frames captured "
+                "[tag_location] VLM SKIPPED for %r: no camera frames captured "
                 "(check color_image stream / simulation camera)",
                 location_name,
             )
@@ -405,7 +408,7 @@ class NavigationSkillContainer(Module):
         extra = f", {num_photos} panoramic photos" if num_photos >= 2 else ""
         suffix = ""
         if captured_frames:
-            suffix += f", VLM batch on {len(captured_frames)} frame(s) in background"
+            suffix += f", VLM detection on {len(captured_frames)} frame(s) in background"
             if not image_saved:
                 suffix += " (CLIP room images failed — check Chroma/CLIP logs)"
             else:
@@ -436,8 +439,12 @@ class NavigationSkillContainer(Module):
         return False
 
     @skill
-    def tag_room(self, name: str, num_photos: int = 6) -> str:
+    def tag_room(self, name: str, num_photos: int = 3) -> str:
         """Tag the current room with 360° panoramic capture.
+
+        Captures ``num_photos`` evenly-spaced frames around the room (default 3,
+        giving one frame every 120°) and runs per-frame VLM object detection
+        asynchronously after each shot.
 
         Convenience wrapper that calls ``tag_location(name, num_photos=N)``.
         """
@@ -1228,6 +1235,143 @@ class NavigationSkillContainer(Module):
             text[:200].replace("\n", " "),
         )
         return text
+
+    # ------------------------------------------------------------------ #
+    #  Simple-format VLM helpers (per-frame, bbox-aware)                  #
+    # ------------------------------------------------------------------ #
+
+    _VLM_SIMPLE_BBOX_PROMPT = (
+        "识别图中物品，最多8个。"
+        "仅输出一行，格式：名称,x1,y1,x2,y2;名称,x1,y1,x2,y2;"
+        "坐标为0-1000整数，相对原图。"
+        "不要解释、不要JSON、不要换行，物品名称要求为中文。"
+        "跳过墙面、地面、天花板。"
+    )
+
+    #: Camera horizontal field-of-view in degrees.  Override per robot subclass.
+    _camera_hfov_deg: float = 90.0
+
+    def _parse_simple_vlm_response(
+        self,
+        response: str,
+        capture_yaw: float,
+    ) -> list[dict[str, Any]]:
+        """Parse the compact ``名称,x1,y1,x2,y2;`` response into internal object dicts.
+
+        Each returned dict contains:
+        - ``"name"`` — Chinese object name
+        - ``"bbox"`` — [x1, y1, x2, y2] in 0-1000 coords
+        - ``"yaw_offset"`` — horizontal angle offset from camera centre (radians)
+        - ``"object_yaw"`` — absolute world yaw = capture_yaw + yaw_offset (radians)
+        """
+        items = parse_simple_bbox_line(response)
+        result: list[dict[str, Any]] = []
+        for item in items:
+            x1, y1, x2, y2 = item["bbox"]
+            offset = yaw_offset_from_bbox(x1, y1, x2, y2, self._camera_hfov_deg)
+            item["yaw_offset"] = offset
+            item["object_yaw"] = capture_yaw + offset
+            result.append(item)
+        return result
+
+    def _detect_single_frame_async(
+        self,
+        image_data: Any,
+        position: tuple[float, float, float],
+        rotation: tuple[float, float, float],
+        room_name: str,
+    ) -> None:
+        """Run VLM on a single captured frame and store detected objects.
+
+        Uses the compact bbox output format (``名称,x1,y1,x2,y2;``) so that the
+        horizontal offset of each detected object relative to the image centre
+        line can be combined with the robot's capture heading to produce a more
+        accurate world-frame yaw for each landmark.
+
+        ``rotation[2]`` (yaw in radians from odom) is adjusted per-object by
+        ``yaw_offset_from_bbox`` before the landmark is stored.
+        """
+        from dimos.msgs.sensor_msgs.Image import Image as DimosImage
+
+        if self._vl_model is None:
+            logger.warning("[VLM single-frame] no VLM model available, skipping room=%r", room_name)
+            return
+
+        image = image_data if isinstance(image_data, DimosImage) else DimosImage.from_numpy(image_data)
+        capture_yaw = float(rotation[2])
+
+        logger.info(
+            "[VLM single-frame] START room=%r pos=(%.2f,%.2f) yaw=%.2f°",
+            room_name,
+            position[0],
+            position[1],
+            math.degrees(capture_yaw),
+        )
+        try:
+            response = self._vl_model.query(image, self._VLM_SIMPLE_BBOX_PROMPT)
+        except Exception:
+            logger.exception("[VLM single-frame] VLM call FAILED for room=%r", room_name)
+            return
+
+        if not response or not response.strip():
+            logger.warning("[VLM single-frame] empty response for room=%r", room_name)
+            return
+
+        logger.info(
+            "[VLM single-frame] response room=%r: %s",
+            room_name,
+            response.strip()[:200].replace("\n", " "),
+        )
+
+        parsed = self._parse_simple_vlm_response(response.strip(), capture_yaw)
+        if not parsed:
+            logger.warning("[VLM single-frame] no objects parsed for room=%r", room_name)
+            return
+
+        stored = 0
+        for item in parsed:
+            name = _normalize_vlm_object_name(item.get("name", "").strip())
+            if not name:
+                continue
+            obj_yaw = float(item.get("object_yaw", capture_yaw))
+            obj_rotation = (rotation[0], rotation[1], obj_yaw)
+            bbox = item.get("bbox", [])
+            meta: dict[str, Any] = {
+                "observed_position": list(position),
+                "observed_rotation": list(obj_rotation),
+                "room_name": room_name,
+                "bbox_0to1000": bbox,
+                "yaw_offset_deg": round(math.degrees(float(item.get("yaw_offset", 0.0))), 1),
+                "capture_yaw_deg": round(math.degrees(capture_yaw), 1),
+            }
+            rec = SpatialRecord(
+                name=name,
+                record_type=RecordType.LANDMARK,
+                position=position,
+                rotation=obj_rotation,
+                state="",
+                metadata=meta,
+                session_id=self._memory_session_id,
+            )
+            self._landmark_memory.record(rec)
+            stored += 1
+            logger.info(
+                "[VLM single-frame] stored '%s' at (%.2f,%.2f) yaw=%.1f° "
+                "(cap=%.1f° offset=%.1f°) room=%r",
+                name,
+                position[0],
+                position[1],
+                math.degrees(obj_yaw),
+                math.degrees(capture_yaw),
+                math.degrees(float(item.get("yaw_offset", 0.0))),
+                room_name,
+            )
+
+        logger.info(
+            "[VLM single-frame] DONE room=%r stored=%d object(s)",
+            room_name,
+            stored,
+        )
 
     def _detect_objects_panorama_batch_async(
         self,

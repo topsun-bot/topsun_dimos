@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from dimos.models.qwen.bbox import BBox
@@ -124,6 +125,75 @@ def parse_object_bbox_from_vlm_response(
     if candidates[0][0] <= 0.0:
         return None
     return _scale_bbox_to_image(candidates[0][2], image)
+
+
+def parse_simple_bbox_line(text: str) -> list[dict[str, Any]]:
+    """Parse the compact VLM output format into a list of object dicts.
+
+    Expected input (one line, semicolon-separated):
+        ``显示器,196,222,653,548;键盘,398,535,775,642;``
+
+    Each item in the returned list has the form::
+
+        {"name": "显示器", "bbox": [196, 222, 653, 548]}
+
+    Coordinates are in 0-1000 space (relative to the original image).
+    Malformed tokens are silently skipped.
+    """
+    results: list[dict[str, Any]] = []
+    for part in text.strip().rstrip(";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        tokens = part.split(",")
+        if len(tokens) != 5:
+            continue
+        name = tokens[0].strip()
+        if not name:
+            continue
+        try:
+            x1, y1, x2, y2 = (int(t.strip()) for t in tokens[1:])
+        except ValueError:
+            continue
+        if x2 <= x1 or y2 <= y1:
+            continue
+        results.append({"name": name, "bbox": [x1, y1, x2, y2]})
+    return results
+
+
+def yaw_offset_from_bbox(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    hfov_deg: float = 90.0,
+) -> float:
+    """Return the yaw offset (radians) of an object relative to the camera center line.
+
+    Uses the horizontal centre of the bounding box in 0-1000 coordinate space
+    (where 500 = image centre) and the camera horizontal field-of-view to compute
+    the angle via the pinhole model::
+
+        yaw_offset = atan2(cx - 500,  500 / tan(hfov/2))
+
+    Positive values mean the object is to the *right* of centre (camera +yaw
+    convention: counter-clockwise is positive, but horizontal right is negative
+    yaw in ROS frame — callers should negate as needed).
+
+    Args:
+        x1: Left edge of bbox in 0-1000 coords.
+        y1: Top edge (unused, kept for signature symmetry).
+        x2: Right edge of bbox in 0-1000 coords.
+        y2: Bottom edge (unused).
+        hfov_deg: Camera horizontal field-of-view in degrees (default 90°).
+
+    Returns:
+        Yaw offset in radians.  Right-of-centre → positive value.
+    """
+    cx = (x1 + x2) / 2.0
+    hfov_rad = math.radians(hfov_deg)
+    focal = 500.0 / math.tan(hfov_rad / 2.0)
+    return math.atan2(cx - 500.0, focal)
 
 
 def get_object_bbox_from_image(
