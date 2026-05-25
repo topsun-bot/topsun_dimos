@@ -38,17 +38,23 @@ class OpenAIVlModel(VlModel):
     @cached_property
     def _client(self) -> OpenAI:
         # Determine effective base_url first to pick the right key
-        base_url = self.config.base_url or os.getenv("DIMOS_VLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        base_url = (
+            self.config.base_url or os.getenv("DIMOS_VLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        )
 
         # Key selection: match to the endpoint
         is_dashscope = base_url and "dashscope" in base_url.lower()
         if is_dashscope:
             api_key = self.config.api_key or os.getenv("DASHSCOPE_API_KEY")
         else:
-            api_key = self.config.api_key or os.getenv("DIMOS_VLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+            api_key = (
+                self.config.api_key or os.getenv("DIMOS_VLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+            )
 
         if not api_key:
-            env_hint = "DASHSCOPE_API_KEY" if is_dashscope else "DIMOS_VLM_API_KEY or OPENAI_API_KEY"
+            env_hint = (
+                "DASHSCOPE_API_KEY" if is_dashscope else "DIMOS_VLM_API_KEY or OPENAI_API_KEY"
+            )
             raise ValueError(f"VLM API key must be provided via {env_hint}")
 
         kwargs: dict[str, Any] = {"api_key": api_key}

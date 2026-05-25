@@ -174,9 +174,7 @@ class ObjectTracker2D(Module):
 
         fh, fw = self._latest_rgb_frame.shape[:2]
         if w * h > int(0.55 * fw * fh):
-            logger.warning(
-                "BBox too large for tracking (%dx%d in %dx%d frame)", w, h, fw, fh
-            )
+            logger.warning("BBox too large for tracking (%dx%d in %dx%d frame)", w, h, fw, fh)
             return {"status": "invalid_bbox", "reason": "bbox_too_large"}
 
         self.tracking_bbox = (x1, y1, w, h)  # type: ignore[assignment]

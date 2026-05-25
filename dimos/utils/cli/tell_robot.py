@@ -39,13 +39,15 @@ def main() -> None:
         help="Natural language message to send (e.g. 'where is the charging station?')",
     )
     parser.add_argument(
-        "-t", "--timeout",
+        "-t",
+        "--timeout",
         type=float,
         default=60.0,
         help="Max wait time in seconds (default: 60)",
     )
     parser.add_argument(
-        "-q", "--quiet",
+        "-q",
+        "--quiet",
         action="store_true",
         help="Suppress status messages, only show agent responses",
     )

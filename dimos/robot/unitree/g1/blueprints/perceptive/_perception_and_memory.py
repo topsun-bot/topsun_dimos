@@ -22,18 +22,15 @@ from dimos.perception.detection.door.door_spatial_memory_module import SpatialLa
 from dimos.perception.object_tracker_2d import ObjectTracker2D
 from dimos.perception.spatial_perception import SpatialMemory
 
-_perception_and_memory = (
-    autoconnect(
-        SpatialMemory.blueprint(new_memory=global_config.new_memory),
-        SpatialLandmarkMemoryModule.blueprint(),
-        ObjectTracker2D.blueprint(frame_id="camera_link"),
-        BBoxNavigationModule.blueprint(),
-    )
-    .remappings(
-        [
-            (BBoxNavigationModule, "detection2d", "detection2darray"),
-        ]
-    )
+_perception_and_memory = autoconnect(
+    SpatialMemory.blueprint(new_memory=global_config.new_memory),
+    SpatialLandmarkMemoryModule.blueprint(),
+    ObjectTracker2D.blueprint(frame_id="camera_link"),
+    BBoxNavigationModule.blueprint(),
+).remappings(
+    [
+        (BBoxNavigationModule, "detection2d", "detection2darray"),
+    ]
 )
 
 __all__ = ["_perception_and_memory"]

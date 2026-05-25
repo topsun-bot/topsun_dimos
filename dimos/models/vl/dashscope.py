@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import cached_property
 import os
 from typing import Any
 
 import dashscope
-import numpy as np
 from dashscope import MultiModalConversation
+import numpy as np
 
 from dimos.models.vl.base import VlModel, VlModelConfig
 from dimos.msgs.sensor_msgs.Image import Image
@@ -64,6 +63,7 @@ class DashScopeVlModel(VlModel):
     ) -> str:
         if isinstance(image, np.ndarray):
             import warnings
+
             warnings.warn(
                 "DashScopeVlModel.query should receive standard dimos Image type",
                 DeprecationWarning,

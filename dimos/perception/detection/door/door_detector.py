@@ -138,10 +138,12 @@ class DoorDetector:
                 cropped = frame[int(y1) : int(y2), int(x1) : int(x2)]
                 if cropped.size == 0:
                     continue
-                proposals.append({
-                    "bbox": (x1, y1, x2, y2),
-                    "cropped": cropped,
-                })
+                proposals.append(
+                    {
+                        "bbox": (x1, y1, x2, y2),
+                        "cropped": cropped,
+                    }
+                )
 
         if not proposals:
             return []
@@ -171,14 +173,16 @@ class DoorDetector:
                 ".jpg", proposals[idx]["cropped"], [cv2.IMWRITE_JPEG_QUALITY, 85]
             )
 
-            results.append({
-                "bbox": proposals[idx]["bbox"],
-                "confidence": score,
-                "door_state": door_state,
-                "record_type": "door",
-                "cropped_bytes": jpeg_bytes.tobytes(),
-                "frame_id": frame_id,
-            })
+            results.append(
+                {
+                    "bbox": proposals[idx]["bbox"],
+                    "confidence": score,
+                    "door_state": door_state,
+                    "record_type": "door",
+                    "cropped_bytes": jpeg_bytes.tobytes(),
+                    "frame_id": frame_id,
+                }
+            )
 
         return results
 

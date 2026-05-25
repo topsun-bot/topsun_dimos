@@ -22,15 +22,15 @@ from dimos.types.spatial_record import RecordType, SpatialRecord
 
 @pytest.fixture
 def memory(tmp_path: Path) -> SpatialLandmarkMemory:
-    return SpatialLandmarkMemory(db_path=tmp_path / "landmarks.json", snapshots_dir=tmp_path / "snapshots")
+    return SpatialLandmarkMemory(
+        db_path=tmp_path / "landmarks.json", snapshots_dir=tmp_path / "snapshots"
+    )
 
 
 def test_landmark_objects_same_position_different_names(memory: SpatialLandmarkMemory) -> None:
     pos = (1.0, 0.0, 0.0)
     for name in ("cabinet", "television", "tv stand", "person"):
-        memory.record(
-            SpatialRecord(name=name, record_type=RecordType.LANDMARK, position=pos)
-        )
+        memory.record(SpatialRecord(name=name, record_type=RecordType.LANDMARK, position=pos))
     assert memory.count() == 4
     assert memory.find_by_name("cabinet") is not None
     assert memory.find_by_name("person") is not None

@@ -394,9 +394,7 @@ class SpatialVectorDB:
 
         # Dedup by name: remove existing entries with the same location_name
         try:
-            existing = self.location_collection.get(
-                where={"location_name": location_name}
-            )
+            existing = self.location_collection.get(where={"location_name": location_name})
             if existing and existing.get("ids"):
                 self.location_collection.delete(ids=existing["ids"])
         except Exception:

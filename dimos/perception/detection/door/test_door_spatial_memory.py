@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from dimos.perception.detection.door.door_spatial_memory import DoorSpatialMemory
-from dimos.types.spatial_record import SpatialRecord, RecordType
+from dimos.types.spatial_record import RecordType, SpatialRecord
 
 
 @pytest.fixture
@@ -28,7 +27,9 @@ def memory(tmp_path: Path) -> DoorSpatialMemory:
 
 class TestDoorSpatialMemory:
     def test_record_and_get_all(self, memory: DoorSpatialMemory) -> None:
-        rec = SpatialRecord(name="front_door", record_type=RecordType.DOOR, position=(0.0, 0.0, 0.0))
+        rec = SpatialRecord(
+            name="front_door", record_type=RecordType.DOOR, position=(0.0, 0.0, 0.0)
+        )
         memory.record_door(rec)
         assert memory.count() == 1
         assert memory.get_all_doors()[0].name == "front_door"
@@ -57,8 +58,14 @@ class TestDoorSpatialMemory:
         assert memory.count() == 2
 
     def test_find_by_name(self, memory: DoorSpatialMemory) -> None:
-        memory.record_door(SpatialRecord(name="kitchen_door", record_type=RecordType.DOOR, position=(1.0, 1.0, 0.0)))
-        memory.record_door(SpatialRecord(name="kitchen", record_type=RecordType.ROOM, position=(5.0, 0.0, 0.0)))
+        memory.record_door(
+            SpatialRecord(
+                name="kitchen_door", record_type=RecordType.DOOR, position=(1.0, 1.0, 0.0)
+            )
+        )
+        memory.record_door(
+            SpatialRecord(name="kitchen", record_type=RecordType.ROOM, position=(5.0, 0.0, 0.0))
+        )
 
         assert memory.find_by_name("kitchen_door") is not None
         assert memory.find_by_name("kitchen") is not None
@@ -81,15 +88,21 @@ class TestDoorSpatialMemory:
         assert memory.find_nearest(0.0, 0.0, radius=0.5) is None
 
     def test_query_by_type(self, memory: DoorSpatialMemory) -> None:
-        memory.record_door(SpatialRecord(name="kitchen", record_type=RecordType.ROOM, position=(1.0, 1.0, 0.0)))
-        memory.record_door(SpatialRecord(name="front_door", record_type=RecordType.DOOR, position=(2.0, 2.0, 0.0)))
+        memory.record_door(
+            SpatialRecord(name="kitchen", record_type=RecordType.ROOM, position=(1.0, 1.0, 0.0))
+        )
+        memory.record_door(
+            SpatialRecord(name="front_door", record_type=RecordType.DOOR, position=(2.0, 2.0, 0.0))
+        )
 
         assert len(memory.query_by_type(RecordType.ROOM)) == 1
         assert len(memory.query_by_type(RecordType.DOOR)) == 1
 
     def test_query_by_state(self, memory: DoorSpatialMemory) -> None:
         memory.record_door(SpatialRecord(name="open_door", state="open", position=(0.0, 0.0, 0.0)))
-        memory.record_door(SpatialRecord(name="closed_door", state="closed", position=(1.0, 0.0, 0.0)))
+        memory.record_door(
+            SpatialRecord(name="closed_door", state="closed", position=(1.0, 0.0, 0.0))
+        )
 
         assert len(memory.query_by_state("open")) == 1
         assert len(memory.query_by_state("closed")) == 1
@@ -111,7 +124,9 @@ class TestDoorSpatialMemory:
     def test_json_persistence(self, tmp_path: Path) -> None:
         db_path = tmp_path / "doors.json"
         mem = DoorSpatialMemory(db_path=db_path)
-        mem.record_door(SpatialRecord(name="saved", record_type=RecordType.DOOR, position=(1.0, 2.0, 0.0)))
+        mem.record_door(
+            SpatialRecord(name="saved", record_type=RecordType.DOOR, position=(1.0, 2.0, 0.0))
+        )
         assert mem.save()
 
         mem2 = DoorSpatialMemory(db_path=db_path)

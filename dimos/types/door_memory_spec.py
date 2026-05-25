@@ -15,7 +15,7 @@
 from typing import Protocol
 
 from dimos.spec.utils import Spec
-from dimos.types.spatial_record import SpatialRecord, RecordType
+from dimos.types.spatial_record import RecordType, SpatialRecord
 
 
 class SpatialLandmarkMemorySpec(Spec, Protocol):

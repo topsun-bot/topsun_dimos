@@ -85,9 +85,7 @@ def _create_persistent_chroma_client(db_path: str) -> Any:
     try:
         return _open()
     except Exception as exc:
-        logger.warning(
-            "ChromaDB open failed (%s); wiping and recreating at %s", exc, db_path
-        )
+        logger.warning("ChromaDB open failed (%s); wiping and recreating at %s", exc, db_path)
         _wipe_chromadb_directory(db_path)
         os.makedirs(db_path, exist_ok=True)
         return _open()
@@ -256,7 +254,9 @@ class SpatialMemory(Module):
         if now < self._chroma_recover_cooldown_until:
             return False
         self._chroma_recover_cooldown_until = now + 30.0
-        logger.warning("ChromaDB appears corrupt; wiping %s and re-binding collections", self.db_path)
+        logger.warning(
+            "ChromaDB appears corrupt; wiping %s and re-binding collections", self.db_path
+        )
         try:
             with self._chroma_lock:
                 self._chroma_client = None
@@ -888,10 +888,12 @@ class SpatialMemory(Module):
             rooms: dict[str, list[dict[str, object]]] = {}
             for meta in data.get("metadatas", []) or []:
                 name = meta.get("location_name", "?")
-                rooms.setdefault(name, []).append({
-                    "location_id": meta.get("location_id", ""),
-                    "timestamp": meta.get("timestamp", 0),
-                })
+                rooms.setdefault(name, []).append(
+                    {
+                        "location_id": meta.get("location_id", ""),
+                        "timestamp": meta.get("timestamp", 0),
+                    }
+                )
             result: list[dict[str, object]] = []
             for name, images in sorted(rooms.items()):
                 result.append({"name": name, "count": len(images), "images": images})
@@ -955,12 +957,14 @@ class SpatialMemory(Module):
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
                 dist = float(results["distances"][0][i]) if results.get("distances") else 1.0
                 img = self._visual_memory.get(vid)
-                out.append({
-                    "id": vid,
-                    "metadata": meta,
-                    "distance": dist,
-                    "image": img,
-                })
+                out.append(
+                    {
+                        "id": vid,
+                        "metadata": meta,
+                        "distance": dist,
+                        "image": img,
+                    }
+                )
             return out
         except Exception:
             logger.exception("query_by_text_with_images failed")

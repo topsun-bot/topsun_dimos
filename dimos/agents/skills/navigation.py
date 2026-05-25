@@ -48,12 +48,12 @@ logger = setup_logger()
 
 # navigate_with_text fallback step order (env: DIMOS_NAV_FALLBACK=semantic|room_first)
 _NAV_FALLBACK_SEMANTIC = (
-    "landmark",      # L3: landmark JSON + topology + re-scan
-    "in_frame",      # L2: VLM bbox + object tracking
-    "room_sweep",    # L4: visit each ROOM + 360 scan
-    "vlm_memory",    # L5: batch VLM on stored images
-    "clip_map",      # L6: CLIP semantic map
-    "tagged",        # L1: CLIP tagged location (rooms; last to reduce false positives)
+    "landmark",  # L3: landmark JSON + topology + re-scan
+    "in_frame",  # L2: VLM bbox + object tracking
+    "room_sweep",  # L4: visit each ROOM + 360 scan
+    "vlm_memory",  # L5: batch VLM on stored images
+    "clip_map",  # L6: CLIP semantic map
+    "tagged",  # L1: CLIP tagged location (rooms; last to reduce false positives)
 )
 _NAV_FALLBACK_ROOM_FIRST = (
     "tagged",
@@ -177,10 +177,12 @@ def _create_vl_model():
 
     if provider == "moondream":
         from dimos.models.vl.moondream import MoondreamVlModel
+
         return MoondreamVlModel()
 
     # Default: Qwen (legacy, ALIBABA_API_KEY)
     from dimos.models.vl.qwen import QwenVlModel
+
     model = QwenVlModel()
     if model_name:
         model.config.model_name = model_name
@@ -290,7 +292,9 @@ class NavigationSkillContainer(Module):
 
         num_photos = max(0, min(num_photos, 12))
         # Each entry: (image ndarray, position, rotation) at capture time.
-        captured_frames: list[tuple[Any, tuple[float, float, float], tuple[float, float, float]]] = []
+        captured_frames: list[
+            tuple[Any, tuple[float, float, float], tuple[float, float, float]]
+        ] = []
 
         has_cam = self._latest_image is not None and hasattr(self._latest_image, "data")
         cam_shape = getattr(self._latest_image.data, "shape", None) if has_cam else None
@@ -357,6 +361,7 @@ class NavigationSkillContainer(Module):
         if image_saved and self._latest_image is not None and hasattr(self._latest_image, "data"):
             try:
                 import cv2
+
                 _, jpg = cv2.imencode(".jpg", self._latest_image.data)
                 img_path = self._landmark_memory.save_snapshot(room_rec.record_id, jpg.tobytes())
                 if img_path:
@@ -369,7 +374,7 @@ class NavigationSkillContainer(Module):
         if num_photos >= 2:
             angle_step = 360.0 / num_photos
             done = 1
-            for i in range(1, num_photos):
+            for _i in range(1, num_photos):
                 ok = self._rotate_in_place_degrees(angle_step)
                 if not ok:
                     break
@@ -443,9 +448,7 @@ class NavigationSkillContainer(Module):
 
         name = os.getenv("DIMOS_NAV_FALLBACK", "semantic").lower().strip()
         if name not in _NAV_FALLBACK_STRATEGIES:
-            logger.warning(
-                "Unknown DIMOS_NAV_FALLBACK=%r, using 'semantic'", name
-            )
+            logger.warning("Unknown DIMOS_NAV_FALLBACK=%r, using 'semantic'", name)
             return "semantic"
         return name
 
@@ -492,7 +495,10 @@ class NavigationSkillContainer(Module):
             run_arrival_action=is_object_landmark,
             enable_visual_drift=False,
         )
-        if "severe visual/odom drift" in nav_landmark_msg.lower() or "aborted" in nav_landmark_msg.lower():
+        if (
+            "severe visual/odom drift" in nav_landmark_msg.lower()
+            or "aborted" in nav_landmark_msg.lower()
+        ):
             logger.warning("[landmark] ⚠ Navigation failed, fall through")
             return None
 
@@ -500,7 +506,9 @@ class NavigationSkillContainer(Module):
             logger.info("[landmark] ✓ Reached room '%s'", landmark_target.name)
             return nav_landmark_msg
 
-        logger.info("[landmark] ✓ Reached object landmark '%s'; stop fallback chain", landmark_target.name)
+        logger.info(
+            "[landmark] ✓ Reached object landmark '%s'; stop fallback chain", landmark_target.name
+        )
         return nav_landmark_msg
 
     def _nav_fallback_step_room_sweep(self, query: str) -> str | None:
@@ -612,7 +620,8 @@ class NavigationSkillContainer(Module):
                 logger.warning(
                     "Tagged location '%s' matched query '%s' semantically but "
                     "has no text overlap — skipping to let fallback chain try",
-                    robot_location.name, query,
+                    robot_location.name,
+                    query,
                 )
                 return None
 
@@ -747,7 +756,14 @@ class NavigationSkillContainer(Module):
         logger.info("[L4]   Sweeping %d room(s) ...", len(rooms))
         for ri, room in enumerate(rooms):
             rname = room.name or room.record_id
-            logger.info("[L4]   Room %d/%d: %r at (%.2f, %.2f)", ri + 1, len(rooms), rname, room.position[0], room.position[1])
+            logger.info(
+                "[L4]   Room %d/%d: %r at (%.2f, %.2f)",
+                ri + 1,
+                len(rooms),
+                rname,
+                room.position[0],
+                room.position[1],
+            )
             nav_msg = self._navigate_to_landmark(
                 room,
                 arrival_action="stop",
@@ -919,7 +935,12 @@ class NavigationSkillContainer(Module):
             logger.warning(
                 "Visual match '%s' rejected: matched position (%.1f, %.1f) is "
                 "%.1fm from odometry (%.1f, %.1f) — likely false positive",
-                room_name, vx, vy, clip_to_odom, ox, oy,
+                room_name,
+                vx,
+                vy,
+                clip_to_odom,
+                ox,
+                oy,
             )
             return (active_goal, False)
         if room_name and clip_to_odom < 0.8:
@@ -939,7 +960,10 @@ class NavigationSkillContainer(Module):
                 self._auto_ref_count[room_name] = self._auto_ref_count.get(room_name, 0) + 1
                 logger.info(
                     "Visual match '%s' (conf=%.3f, clip2odom=%.2fm) → auto-added reference #%d",
-                    room_name, conf, clip_to_odom, self._auto_ref_count[room_name],
+                    room_name,
+                    conf,
+                    clip_to_odom,
+                    self._auto_ref_count[room_name],
                 )
             except Exception:
                 logger.exception("Failed to auto-add room reference for '%s'", room_name)
@@ -1062,10 +1086,14 @@ class NavigationSkillContainer(Module):
             )
 
         cmd_map = {
-            "sit": "Sit", "sit_down": "Sit",
-            "wave": "Hello", "wave_hand": "Hello",
-            "stand": "StandUp", "stand_up": "StandUp",
-            "recover": "RecoveryStand", "recovery": "RecoveryStand",
+            "sit": "Sit",
+            "sit_down": "Sit",
+            "wave": "Hello",
+            "wave_hand": "Hello",
+            "stand": "StandUp",
+            "stand_up": "StandUp",
+            "recover": "RecoveryStand",
+            "recovery": "RecoveryStand",
             "recovery_stand": "RecoveryStand",
         }
         cmd = cmd_map.get(a)
@@ -1090,8 +1118,7 @@ class NavigationSkillContainer(Module):
         obj: dict[str, Any],
         default_position: tuple[float, float, float],
         default_rotation: tuple[float, float, float],
-        frame_poses: list[tuple[tuple[float, float, float], tuple[float, float, float]]]
-        | None,
+        frame_poses: list[tuple[tuple[float, float, float], tuple[float, float, float]]] | None,
     ) -> tuple[tuple[float, float, float], tuple[float, float, float], int | None]:
         """Use the capture pose for the frame where VLM saw the object."""
         indices = obj.get("image_indices")
@@ -1165,8 +1192,7 @@ class NavigationSkillContainer(Module):
             logger.warning("[VLM] query_batch skipped: empty image list")
             return ""
         dimos_images = [
-            img if isinstance(img, DimosImage) else DimosImage.from_numpy(img)
-            for img in images
+            img if isinstance(img, DimosImage) else DimosImage.from_numpy(img) for img in images
         ]
         shapes = [getattr(img.data, "shape", None) for img in dimos_images]
         model_cls = type(self._vl_model).__name__
@@ -1225,10 +1251,7 @@ class NavigationSkillContainer(Module):
             return
 
         if n == 1:
-            prompt = (
-                _VLM_OBJECT_LIST_PROMPT
-                + ' Include "image_indices": [0] for each object.'
-            )
+            prompt = _VLM_OBJECT_LIST_PROMPT + ' Include "image_indices": [0] for each object.'
         else:
             prompt = (
                 f"以下 {n} 张图（编号 0 到 {n - 1}）来自房间「{room_name}」的 360° 环视。\n"
@@ -1244,9 +1267,7 @@ class NavigationSkillContainer(Module):
             logger.info("[VLM] panorama calling API for room=%r ...", room_name)
             response = self._vlm_query_all_images(frames, prompt)
         except Exception:
-            logger.exception(
-                "[VLM] panorama FAILED for room=%r (%d frames)", room_name, n
-            )
+            logger.exception("[VLM] panorama FAILED for room=%r (%d frames)", room_name, n)
             return
 
         objects = self._parse_vlm_object_list_response(response)
@@ -1290,10 +1311,6 @@ class NavigationSkillContainer(Module):
         if not hasattr(self._latest_image, "data"):
             return "Camera image has no pixel data."
 
-        import numpy as np
-
-        from dimos.msgs.sensor_msgs.Image import Image as DimosImage
-
         logger.info(
             "[detect_objects_in_view] START image_shape=%s",
             getattr(self._latest_image.data, "shape", None),
@@ -1312,12 +1329,8 @@ class NavigationSkillContainer(Module):
 
         pos = self._latest_odom.position if self._latest_odom else None
         rot = self._latest_odom.orientation if self._latest_odom else None
-        position = (
-            (float(pos.x), float(pos.y), float(pos.z)) if pos else (0.0, 0.0, 0.0)
-        )
-        rotation = (
-            (float(rot.x), float(rot.y), float(rot.z)) if rot else (0.0, 0.0, 0.0)
-        )
+        position = (float(pos.x), float(pos.y), float(pos.z)) if pos else (0.0, 0.0, 0.0)
+        rotation = (float(rot.x), float(rot.y), float(rot.z)) if rot else (0.0, 0.0, 0.0)
         stored = self._store_detected_objects(objects, position, rotation)
         names = [(o.get("name") or "").strip() for o in objects if (o.get("name") or "").strip()]
 
@@ -1352,9 +1365,9 @@ class NavigationSkillContainer(Module):
         """
         import numpy as np
 
-        from dimos.msgs.sensor_msgs.Image import Image as DimosImage
-
-        candidates: list[tuple[np.ndarray, dict[str, Any], str]] = []  # (image, metadata, source_tag)
+        candidates: list[
+            tuple[np.ndarray, dict[str, Any], str]
+        ] = []  # (image, metadata, source_tag)
 
         # Source A: spatial-memory frames matching the text query
         try:
@@ -1380,7 +1393,9 @@ class NavigationSkillContainer(Module):
                 images = room_info.get("images") or []
                 if not images:
                     continue
-                first_img_id = str((images[0] if isinstance(images[0], dict) else {}).get("location_id", ""))
+                first_img_id = str(
+                    (images[0] if isinstance(images[0], dict) else {}).get("location_id", "")
+                )
                 if not first_img_id:
                     continue
                 room_img = self._spatial_memory.get_room_image(first_img_id)
@@ -1513,7 +1528,11 @@ class NavigationSkillContainer(Module):
 
         logger.info("[L6]   Goal pose: %s", goal_pose)
         if not goal_pose:
-            logger.info("[L6]   ✗ Similarity below threshold (%.4f < %.4f)", similarity, self._similarity_threshold)
+            logger.info(
+                "[L6]   ✗ Similarity below threshold (%.4f < %.4f)",
+                similarity,
+                self._similarity_threshold,
+            )
             return None
 
         message = f"Found a location in the semantic map matching '{query}'."
@@ -1688,9 +1707,7 @@ class NavigationSkillContainer(Module):
         elif target.record_type == RecordType.ROOM:
             expected_room = target.name
         else:
-            expected_room = self._room_name_at_position(
-                target.position[0], target.position[1]
-            )
+            expected_room = self._room_name_at_position(target.position[0], target.position[1])
 
         def _try_navigate() -> str | None:
             """Single attempt at waypoint traversal + approach. Returns None on success,
@@ -1709,8 +1726,12 @@ class NavigationSkillContainer(Module):
                 )
                 logger.info(
                     "[L3]   Topology: %d waypoints from (%.2f, %.2f) → '%s' (%.2f, %.2f)",
-                    len(all_waypoints), pos.x, pos.y,
-                    target.name, target.position[0], target.position[1],
+                    len(all_waypoints),
+                    pos.x,
+                    pos.y,
+                    target.name,
+                    target.position[0],
+                    target.position[1],
                 )
 
             last_corr = [0.0]
@@ -1721,7 +1742,14 @@ class NavigationSkillContainer(Module):
             )
 
             for i, wp in enumerate(all_waypoints):
-                logger.info("[L3]   Waypoint %d/%d: '%s' at (%.2f, %.2f)", i + 1, len(all_waypoints), wp.name, wp.x, wp.y)
+                logger.info(
+                    "[L3]   Waypoint %d/%d: '%s' at (%.2f, %.2f)",
+                    i + 1,
+                    len(all_waypoints),
+                    wp.name,
+                    wp.x,
+                    wp.y,
+                )
                 segment_goal = PoseStamped(
                     position=make_vector3(wp.x, wp.y, 0.0),
                     orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
@@ -1853,10 +1881,7 @@ class NavigationSkillContainer(Module):
             tname = target.name or target.record_id
             if run_arrival_action:
                 return self._run_arrival_action(arrival_action, tname)
-            return (
-                f"Arrived near '{tname}' standoff after drift recovery "
-                f"(arrival_action not run)."
-            )
+            return f"Arrived near '{tname}' standoff after drift recovery (arrival_action not run)."
 
         return (
             "Navigation aborted: severe visual/odom drift persisted after re-plan. "
@@ -1935,17 +1960,23 @@ class NavigationSkillContainer(Module):
         if rooms:
             lines.append(f"  ── Rooms ({len(rooms)}) ──")
             for r in rooms:
-                lines.append(f"  [room] {r.name} at ({r.position[0]:.1f}, {r.position[1]:.1f}) · seen {r.observation_count}x")
+                lines.append(
+                    f"  [room] {r.name} at ({r.position[0]:.1f}, {r.position[1]:.1f}) · seen {r.observation_count}x"
+                )
         if objects:
             lines.append(f"  ── Objects ({len(objects)}) ──")
             for r in objects:
                 desc = f" — {r.state}" if r.state else ""
-                lines.append(f"  [obj]  {r.name}{desc} at ({r.position[0]:.1f}, {r.position[1]:.1f}) · seen {r.observation_count}x")
+                lines.append(
+                    f"  [obj]  {r.name}{desc} at ({r.position[0]:.1f}, {r.position[1]:.1f}) · seen {r.observation_count}x"
+                )
         if other:
             lines.append(f"  ── Other ({len(other)}) ──")
             for r in other:
                 state_str = f" ({r.state})" if r.state else ""
-                lines.append(f"  [{r.record_type.value}] {r.name}{state_str} at ({r.position[0]:.1f}, {r.position[1]:.1f})")
+                lines.append(
+                    f"  [{r.record_type.value}] {r.name}{state_str} at ({r.position[0]:.1f}, {r.position[1]:.1f})"
+                )
         return "\n".join(lines)
 
     def _cancel_goal_and_stop(self) -> None:

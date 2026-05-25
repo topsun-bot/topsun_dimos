@@ -16,11 +16,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import queue
 import threading
 import time
-from typing import Callable
 
 from dimos.core.transport import pLCMTransport
 from dimos.utils.logging_config import setup_logger
@@ -35,8 +35,7 @@ def _print_langchain_msg(msg: object, quiet: bool, write: Callable[[str], None])
     if isinstance(msg, AIMessage):
         content = getattr(msg, "content", "") or ""
         tool_calls = (
-            getattr(msg, "tool_calls", None)
-            or msg.additional_kwargs.get("tool_calls", [])  # type: ignore[union-attr]
+            getattr(msg, "tool_calls", None) or msg.additional_kwargs.get("tool_calls", [])  # type: ignore[union-attr]
         )
         if content:
             write(f"\n{content}")

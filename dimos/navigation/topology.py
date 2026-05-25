@@ -28,9 +28,8 @@ the fine-grained path between each waypoint.
 from __future__ import annotations
 
 import heapq
-from typing import Any
 
-from dimos.types.spatial_record import SpatialRecord, RecordType
+from dimos.types.spatial_record import SpatialRecord
 
 # Maximum distance for two nodes to be directly connected.
 _MAX_EDGE_DISTANCE = 8.0
@@ -142,7 +141,9 @@ class TopologyGraph:
             _, current_id, _ = heapq.heappop(open_set)
 
             if current_id == goal_node.record_id:
-                return self._reconstruct_path(came_from, current_id, start_node.record_id, goal_node)
+                return self._reconstruct_path(
+                    came_from, current_id, start_node.record_id, goal_node
+                )
 
             current = self._nodes[current_id]
             for neighbor_id, dist in current.neighbors.items():

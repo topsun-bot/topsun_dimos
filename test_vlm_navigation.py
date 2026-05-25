@@ -76,13 +76,15 @@ def vlm_query_dashscope(image_path_or_array, prompt, api_key, base_url, model):
     pil_img.save(buf, format="PNG")
     img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-    messages = [{
-        "role": "user",
-        "content": [
-            {"image": f"data:image/png;base64,{img_b64}"},
-            {"text": prompt},
-        ],
-    }]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"image": f"data:image/png;base64,{img_b64}"},
+                {"text": prompt},
+            ],
+        }
+    ]
 
     response = MultiModalConversation.call(
         api_key=api_key,
@@ -96,9 +98,7 @@ def vlm_query_dashscope(image_path_or_array, prompt, api_key, base_url, model):
             return content[0].get("text", "") or ""
         return str(content)
 
-    raise RuntimeError(
-        f"DashScope error: code={response.status_code} msg={response.message}"
-    )
+    raise RuntimeError(f"DashScope error: code={response.status_code} msg={response.message}")
 
 
 def vlm_query_openai(image_path_or_array, prompt, api_key, base_url, model):
@@ -129,13 +129,18 @@ def vlm_query_openai(image_path_or_array, prompt, api_key, base_url, model):
 
     response = client.chat.completions.create(
         model=model,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                {"type": "text", "text": prompt},
-            ],
-        }],
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
     )
     return response.choices[0].message.content or ""
 
@@ -143,6 +148,7 @@ def vlm_query_openai(image_path_or_array, prompt, api_key, base_url, model):
 def vlm_query(image_path_or_array, prompt, model=None):
     """Dispatch to correct VLM backend."""
     import time
+
     provider, api_key, base_url, default_model = _resolve()
     model = model or default_model
     print(f"[provider={provider}, model={model}, base_url={base_url}]")
@@ -219,8 +225,8 @@ def run_find_bbox(image_path, target, model=None):
     prompt = (
         f"Look at this image and find the '{target}'. "
         "Return JSON for every matching instance. Prefer either format:\n"
-        "1) A single object: {\"name\": \"...\", \"bbox\": [x1, y1, x2, y2]}\n"
-        "2) Multiple objects: [{\"label\": \"...\", \"bbox_2d\": [x1, y1, x2, y2]}, ...]\n"
+        '1) A single object: {"name": "...", "bbox": [x1, y1, x2, y2]}\n'
+        '2) Multiple objects: [{"label": "...", "bbox_2d": [x1, y1, x2, y2]}, ...]\n'
         "If not found, return null."
     )
 
@@ -244,8 +250,7 @@ def run_find_bbox(image_path, target, model=None):
 def main():
     parser = argparse.ArgumentParser(description="Test VLM-based object recognition")
     parser.add_argument("image", nargs="?", help="Path to an image file")
-    parser.add_argument("--target", default="fire extinguisher",
-                        help="Object to search for")
+    parser.add_argument("--target", default="fire extinguisher", help="Object to search for")
     parser.add_argument("--model", help="Override VLM model name")
     parser.add_argument("--camera", action="store_true", help="Capture from camera")
     args = parser.parse_args()
@@ -254,6 +259,7 @@ def main():
 
     if args.camera:
         import cv2
+
         cap = cv2.VideoCapture(0)
         ret, frame = cap.read()
         cap.release()

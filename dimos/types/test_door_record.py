@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dimos.types.door_record import DoorRecord, DoorState
-from dimos.types.spatial_record import SpatialRecord, RecordType
+from dimos.types.spatial_record import RecordType, SpatialRecord
 
 
 class TestSpatialRecord:

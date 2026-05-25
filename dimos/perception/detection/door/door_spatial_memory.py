@@ -217,9 +217,7 @@ class SpatialLandmarkMemory:
         lower = query.lower()
         results: list[SpatialRecord] = []
         for rec in self._records.values():
-            haystack = " ".join(
-                (rec.name, rec.description, rec.state, rec.record_id)
-            ).lower()
+            haystack = " ".join((rec.name, rec.description, rec.state, rec.record_id)).lower()
             if lower in haystack:
                 results.append(rec)
         return results[:limit]
@@ -323,7 +321,9 @@ class SpatialLandmarkMemory:
             try:
                 shutil.rmtree(self._snapshots_dir)
             except OSError:
-                logger.warning("Failed to clear snapshots dir %s", self._snapshots_dir, exc_info=True)
+                logger.warning(
+                    "Failed to clear snapshots dir %s", self._snapshots_dir, exc_info=True
+                )
         self._snapshots_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Cleared %d landmark record(s) from %s", n, self._db_path.parent)
         return n
@@ -370,7 +370,9 @@ class SpatialLandmarkMemory:
         except Exception:
             logger.warning("Auto-save failed", exc_info=True)
 
-    def _find_by_position(self, xy: tuple[float, float], radius: float, record_type: RecordType | None = None) -> SpatialRecord | None:
+    def _find_by_position(
+        self, xy: tuple[float, float], radius: float, record_type: RecordType | None = None
+    ) -> SpatialRecord | None:
         """Check if any existing record is within *radius* of xy.
 
         If *record_type* is given, only match records of the same type.

@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 
 from dimos.navigation.topology import TopologyGraph
-from dimos.types.spatial_record import SpatialRecord, RecordType
+from dimos.types.spatial_record import RecordType, SpatialRecord
 
 
 class TestTopologyGraph:
@@ -79,11 +78,21 @@ class TestTopologyGraph:
     def test_shortest_path_through_doors(self) -> None:
         """RoomA -> Door1 -> Corridor -> Door2 -> RoomB"""
         g = TopologyGraph(max_edge_distance=6.0)
-        g.add_record(SpatialRecord(name="room_a", record_type=RecordType.ROOM, position=(0.0, 0.0, 0.0)))
-        g.add_record(SpatialRecord(name="door_1", record_type=RecordType.DOOR, position=(5.0, 0.0, 0.0)))
-        g.add_record(SpatialRecord(name="corridor", record_type=RecordType.ROOM, position=(10.0, 0.0, 0.0)))
-        g.add_record(SpatialRecord(name="door_2", record_type=RecordType.DOOR, position=(15.0, 0.0, 0.0)))
-        g.add_record(SpatialRecord(name="room_b", record_type=RecordType.ROOM, position=(20.0, 0.0, 0.0)))
+        g.add_record(
+            SpatialRecord(name="room_a", record_type=RecordType.ROOM, position=(0.0, 0.0, 0.0))
+        )
+        g.add_record(
+            SpatialRecord(name="door_1", record_type=RecordType.DOOR, position=(5.0, 0.0, 0.0))
+        )
+        g.add_record(
+            SpatialRecord(name="corridor", record_type=RecordType.ROOM, position=(10.0, 0.0, 0.0))
+        )
+        g.add_record(
+            SpatialRecord(name="door_2", record_type=RecordType.DOOR, position=(15.0, 0.0, 0.0))
+        )
+        g.add_record(
+            SpatialRecord(name="room_b", record_type=RecordType.ROOM, position=(20.0, 0.0, 0.0))
+        )
 
         path = g.shortest_path(0.0, 0.0, 20.0, 0.0)
         assert len(path) >= 3  # Should go through door_1, corridor, door_2
@@ -119,8 +128,10 @@ class TestTopologyGraph:
     def test_rebuild(self) -> None:
         g = TopologyGraph()
         g.add_record(SpatialRecord(name="old", position=(0.0, 0.0, 0.0)))
-        g.rebuild([
-            SpatialRecord(name="new", position=(10.0, 10.0, 0.0)),
-        ])
+        g.rebuild(
+            [
+                SpatialRecord(name="new", position=(10.0, 10.0, 0.0)),
+            ]
+        )
         assert g.count() == 1
         assert g.find_nearest_node(10.0, 10.0) is not None
