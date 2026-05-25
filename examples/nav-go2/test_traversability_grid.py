@@ -78,3 +78,39 @@ def test_rasterize_uses_forward_x_and_lateral_y_axes() -> None:
     assert grid.origin.position.x == 0.0
     assert grid.origin.position.y == -1.0
     assert int(grid.grid[2, 2]) == 0
+
+
+def test_rasterize_ceil_dimensions_cover_requested_extent() -> None:
+    trajectories = np.array([[[3.95, 0.0]]], dtype=np.float64)
+
+    grid = rasterize_trajectories_to_costmap(
+        trajectories,
+        forward_m=4.0,
+        lateral_m=2.0,
+        resolution_m=0.3,
+    )
+
+    assert grid.grid.shape == (7, 14)
+    assert int(grid.grid[3, 13]) == 0
+
+
+def test_rasterize_includes_max_boundary_cells() -> None:
+    trajectories = np.array(
+        [
+            [
+                [4.0, 1.0],
+                [4.0, -1.0],
+            ]
+        ],
+        dtype=np.float64,
+    )
+
+    grid = rasterize_trajectories_to_costmap(
+        trajectories,
+        forward_m=4.0,
+        lateral_m=2.0,
+        resolution_m=0.5,
+    )
+
+    assert int(grid.grid[3, 7]) == 0
+    assert int(grid.grid[0, 7]) == 0

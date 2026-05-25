@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 
 import numpy as np
@@ -48,15 +49,14 @@ def rasterize_trajectories_to_costmap(
         OccupancyGrid where lower values mean more traversable:
         - 0: many diffusion samples pass through the cell
         - 1-99: partial consensus
-        - 100: never visited by any sample (in-bounds only)
-        - -1: outside the modeled forward/lateral window
+        - 100: never visited by any sample in the modeled window
     """
     if trajectories.ndim != 3 or trajectories.shape[-1] != 2:
         raise ValueError(f"Expected (N, T, 2) trajectories, got {trajectories.shape}")
 
     num_samples = max(trajectories.shape[0], 1)
-    width = max(round(forward_m / resolution_m), 1)
-    height = max(round(lateral_m / resolution_m), 1)
+    width = max(math.ceil(forward_m / resolution_m), 1)
+    height = max(math.ceil(lateral_m / resolution_m), 1)
 
     votes = np.zeros((height, width), dtype=np.int32)
     half_lateral = lateral_m / 2.0
@@ -68,10 +68,9 @@ def rasterize_trajectories_to_costmap(
                 continue
             if y_lat < -half_lateral or y_lat > half_lateral:
                 continue
-            col = int(x_fwd / resolution_m)
-            row = int((y_lat + half_lateral) / resolution_m)
-            if 0 <= row < height and 0 <= col < width:
-                visited_cells.add((row, col))
+            col = min(int(x_fwd / resolution_m), width - 1)
+            row = min(int((y_lat + half_lateral) / resolution_m), height - 1)
+            visited_cells.add((row, col))
         for row, col in visited_cells:
             votes[row, col] += 1
 
