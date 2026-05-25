@@ -43,14 +43,40 @@ def truncate_display_string(arg: Any, max: int | None = None) -> str:
 
 
 def extract_json_from_llm_response(response: str) -> Any:
-    start_idx = response.find("{")
-    end_idx = response.rfind("}") + 1
+    """Parse JSON object or array from an LLM text response."""
+    if not response:
+        return None
 
-    if start_idx >= 0 and end_idx > start_idx:
-        json_str = response[start_idx:end_idx]
+    text = response.strip()
+    if text.lower() in ("none", "null"):
+        return None
+
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:])
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3].rstrip()
+        text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start_obj = text.find("{")
+    end_obj = text.rfind("}") + 1
+    if start_obj >= 0 and end_obj > start_obj:
         try:
-            return json.loads(json_str)
-        except Exception:
+            return json.loads(text[start_obj:end_obj])
+        except json.JSONDecodeError:
+            pass
+
+    start_arr = text.find("[")
+    end_arr = text.rfind("]") + 1
+    if start_arr >= 0 and end_arr > start_arr:
+        try:
+            return json.loads(text[start_arr:end_arr])
+        except json.JSONDecodeError:
             pass
 
     return None

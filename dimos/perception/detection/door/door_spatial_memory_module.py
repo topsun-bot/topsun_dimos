@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DIMOS Module wrapper for DoorSpatialMemory.
+"""DIMOS Module wrapper for SpatialLandmarkMemory.
 
-Exposes door memory operations as RPC methods so it can be wired
+Exposes spatial landmark operations as RPC methods so it can be wired
 into blueprints and injected into skill containers via Spec protocols.
 """
 
@@ -25,50 +25,50 @@ from typing import Any
 from dimos.constants import STATE_DIR
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.perception.detection.door.door_spatial_memory import DoorSpatialMemory
+from dimos.perception.detection.door.door_spatial_memory import SpatialLandmarkMemory
 from dimos.types.spatial_record import SpatialRecord, RecordType
 from dimos.utils.logging_config import setup_logger
 
-_DOOR_MEMORY_DIR = STATE_DIR / "door_memory"
+_LANDMARK_MEMORY_DIR = STATE_DIR / "landmark_memory"
 
 logger = setup_logger()
-_DOOR_DB_PATH = _DOOR_MEMORY_DIR / "doors.json"
-_SNAPSHOTS_DIR = _DOOR_MEMORY_DIR / "snapshots"
+_LANDMARK_DB_PATH = _LANDMARK_MEMORY_DIR / "landmarks.json"
+_SNAPSHOTS_DIR = _LANDMARK_MEMORY_DIR / "snapshots"
 
 
-class DoorSpatialMemoryConfig(ModuleConfig):
-    db_path: str = str(_DOOR_DB_PATH)
+class SpatialLandmarkMemoryConfig(ModuleConfig):
+    db_path: str = str(_LANDMARK_DB_PATH)
     snapshots_dir: str = str(_SNAPSHOTS_DIR)
 
 
-class DoorSpatialMemoryModule(Module):
-    """DIMOS Module wrapping DoorSpatialMemory for blueprint registration.
+class SpatialLandmarkMemoryModule(Module):
+    """DIMOS Module wrapping SpatialLandmarkMemory for blueprint registration.
 
-    Exposes all door CRUD and query operations as ``@rpc`` methods.
+    Exposes all landmark CRUD and query operations as ``@rpc`` methods.
     """
 
-    config: DoorSpatialMemoryConfig
+    config: SpatialLandmarkMemoryConfig
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._memory = DoorSpatialMemory(
+        self._memory = SpatialLandmarkMemory(
             db_path=self.config.db_path,
             snapshots_dir=self.config.snapshots_dir,
         )
 
     @rpc
     def start(self) -> None:
-        """Start the module and load persisted doors."""
+        """Start the module and load persisted landmarks."""
         super().start()
         loaded = self._memory.load()
         if loaded:
-            logger.info("Loaded %d door(s) from %s", self._memory.count(), self.config.db_path)
+            logger.info("Loaded %d landmark(s) from %s", self._memory.count(), self.config.db_path)
         else:
-            logger.info("Starting with empty door memory")
+            logger.info("Starting with empty landmark memory")
 
     @rpc
     def stop(self) -> None:
-        """Persist doors and shut down."""
+        """Persist landmarks and shut down."""
         self._memory.save()
         super().stop()
 
@@ -77,7 +77,7 @@ class DoorSpatialMemoryModule(Module):
     # ------------------------------------------------------------------
 
     @rpc
-    def record_door_str(
+    def record_landmark_str(
         self,
         name: str,
         pos_x: float,
@@ -86,7 +86,7 @@ class DoorSpatialMemoryModule(Module):
         rot_roll: float,
         rot_pitch: float,
         rot_yaw: float,
-        record_type: str = "door",
+        record_type: str = "landmark",
         state: str = "",
         confidence: float = 0.0,
     ) -> str:
@@ -102,16 +102,16 @@ class DoorSpatialMemoryModule(Module):
             state=state,
             confidence=confidence,
         )
-        return self._memory.record_door(rec)
+        return self._memory.record(rec)
 
     @rpc
-    def record_door(self, door: SpatialRecord) -> str:
-        """Record a spatial record. Returns record_id."""
-        return self._memory.record_door(door)
+    def record(self, rec: SpatialRecord) -> str:
+        """Record a spatial landmark. Returns record_id."""
+        return self._memory.record(rec)
 
     @rpc
-    def get_all_doors(self) -> list[SpatialRecord]:
-        return self._memory.get_all_doors()
+    def get_all(self) -> list[SpatialRecord]:
+        return self._memory.get_all()
 
     @rpc
     def count(self) -> int:
@@ -146,6 +146,10 @@ class DoorSpatialMemoryModule(Module):
         return self._memory.query_by_text(query, limit)
 
     @rpc
+    def resolve_by_query(self, query: str) -> SpatialRecord | None:
+        return self._memory.resolve_by_query(query)
+
+    @rpc
     def get_by_id(self, record_id: str) -> SpatialRecord | None:
         return self._memory.get_by_id(record_id)
 
@@ -162,9 +166,20 @@ class DoorSpatialMemoryModule(Module):
     # ------------------------------------------------------------------
 
     @rpc
+    def save_snapshot(self, record_id: str, image_bytes: bytes) -> str | None:
+        return self._memory.save_snapshot(record_id, image_bytes)
+
+    @rpc
     def save(self) -> bool:
         return self._memory.save()
 
     @rpc
     def load(self) -> bool:
         return self._memory.load()
+
+    @rpc
+    def clear_all(self) -> int:
+        """Clear all landmarks from memory and disk. Returns number removed."""
+        n = self._memory.clear_all()
+        logger.info("Landmark memory cleared (%d record(s) removed)", n)
+        return n

@@ -74,8 +74,9 @@ class OpenAITTSNode(AbstractTextConsumer, AbstractAudioEmitter, AbstractTextEmit
         self.speed = speed
         self.buffer_size = buffer_size
 
-        # Initialize OpenAI client
-        self.client = OpenAI(api_key=api_key)
+        # Initialize OpenAI client with explicit base_url so it doesn't
+        # inherit OPENAI_BASE_URL from env (which may point to DeepSeek etc.)
+        self.client = OpenAI(api_key=api_key, base_url="https://api.openai.com/v1")
 
         # Initialize state
         self.audio_subject = Subject()  # type: ignore[var-annotated]

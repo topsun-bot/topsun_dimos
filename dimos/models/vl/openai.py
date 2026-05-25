@@ -29,6 +29,7 @@ logger = setup_logger()
 class OpenAIVlModelConfig(VlModelConfig):
     model_name: str = "gpt-4o-mini"
     api_key: str | None = None
+    base_url: str | None = None
 
 
 class OpenAIVlModel(VlModel):
@@ -36,13 +37,24 @@ class OpenAIVlModel(VlModel):
 
     @cached_property
     def _client(self) -> OpenAI:
-        api_key = self.config.api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "OpenAI API key must be provided or set in OPENAI_API_KEY environment variable"
-            )
+        # Determine effective base_url first to pick the right key
+        base_url = self.config.base_url or os.getenv("DIMOS_VLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
 
-        return OpenAI(api_key=api_key)
+        # Key selection: match to the endpoint
+        is_dashscope = base_url and "dashscope" in base_url.lower()
+        if is_dashscope:
+            api_key = self.config.api_key or os.getenv("DASHSCOPE_API_KEY")
+        else:
+            api_key = self.config.api_key or os.getenv("DIMOS_VLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+
+        if not api_key:
+            env_hint = "DASHSCOPE_API_KEY" if is_dashscope else "DIMOS_VLM_API_KEY or OPENAI_API_KEY"
+            raise ValueError(f"VLM API key must be provided via {env_hint}")
+
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return OpenAI(**kwargs)
 
     def query(
         self,
@@ -75,7 +87,7 @@ class OpenAIVlModel(VlModel):
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_base64}"},
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
                         },
                         {"type": "text", "text": query},
                     ],
@@ -105,7 +117,7 @@ class OpenAIVlModel(VlModel):
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/png;base64,{self._prepare_image(img)[0].to_base64()}"
+                    "url": f"data:image/jpeg;base64,{self._prepare_image(img)[0].to_base64()}"
                 },
             }
             for img in images

@@ -540,6 +540,27 @@ def agent_send_cmd(
     typer.echo(text)
 
 
+@main.command("tell")
+def tell_cmd(
+    message: str = typer.Argument(..., help="Natural language message to the robot"),
+    timeout: float = typer.Option(60.0, "--timeout", "-t", help="Max wait time in seconds"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Only print agent text responses"),
+) -> None:
+    """Send a natural language command and wait for the agent's response.
+
+    This publishes your message on the /human_input LCM topic, then subscribes
+    to /agent and /agent_idle to stream the response back synchronously.
+
+    Works with any running blueprint that includes an agent module
+    (e.g. unitree-go2-agentic, unitree-go2-spatial-agentic).
+    """
+    from dimos.robot.cli.tell import tell_robot
+
+    result = tell_robot(message, timeout=timeout, quiet=quiet, write=typer.echo)
+    if result < 0:
+        raise typer.Exit(1)
+
+
 @main.command()
 def restart(
     force: bool = typer.Option(False, "--force", "-f", help="Force kill before restarting"),

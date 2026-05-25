@@ -86,3 +86,5 @@ htmlcov/
 recording*.db
 
 .ai_longrun_harness
+
+uv.lock

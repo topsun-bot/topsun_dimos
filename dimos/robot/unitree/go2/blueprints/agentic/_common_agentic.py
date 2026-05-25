@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dimos.agents.skills.door_navigation import DoorNavigationSkill
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.agents.skills.person_follow import PersonFollowSkillContainer
 from dimos.agents.skills.speak_skill import SpeakSkill
@@ -28,7 +27,6 @@ _common_agentic = autoconnect(
     UnitreeSkillContainer.blueprint(),
     WebInput.blueprint(),
     SpeakSkill.blueprint(),
-    DoorNavigationSkill.blueprint(),
 )
 
 __all__ = ["_common_agentic"]

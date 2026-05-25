@@ -13,20 +13,11 @@
 # limitations under the License.
 
 """
-DoorRecord — backward-compatible alias for SpatialRecord.
+LandmarkRecord — alias for SpatialRecord.
 
-New code should import from ``dimos.types.spatial_record`` instead.
+Import from ``dimos.types.spatial_record`` instead for new code.
 """
 
-from enum import Enum
+from dimos.types.spatial_record import SpatialRecord
 
-from dimos.types.spatial_record import SpatialRecord, RecordType
-
-
-class DoorState(Enum):
-    OPEN = "open"
-    CLOSED = "closed"
-    UNKNOWN = "unknown"
-
-
-DoorRecord = SpatialRecord
+LandmarkRecord = SpatialRecord

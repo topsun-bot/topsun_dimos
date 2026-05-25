@@ -17,7 +17,6 @@
 
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
-from dimos.agents.skills.door_navigation import DoorNavigationSkill
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.agents.skills.speak_skill import SpeakSkill
 from dimos.core.coordination.blueprints import autoconnect
@@ -32,10 +31,10 @@ unitree_g1_agentic_sim_deepseek = autoconnect(
         system_prompt=G1_SYSTEM_PROMPT,
         model="deepseek-v4-pro",
         model_provider="openai",
-        model_kwargs={"model_kwargs": {"extra_body": {"thinking": {"type": "none"}}}},
+        model_kwargs={"model_kwargs": {"extra_body": {"thinking": {"type": "disabled"}}}},
+        supports_vision=False,
     ),
     NavigationSkillContainer.blueprint(),
-    DoorNavigationSkill.blueprint(),
     SpeakSkill.blueprint(),
     UnitreeG1SkillContainer.blueprint(),
 )

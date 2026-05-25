@@ -283,8 +283,10 @@ class GlobalPlanner(Resource):
 
         logger.info("Replanning.", attempt=self._replan_limiter.get_attempt())
 
-        assert current_odom is not None
-        assert current_goal is not None
+        if current_odom is None or current_goal is None:
+            logger.warning("Skipping replan: odom or goal disappeared")
+            self.cancel_goal()
+            return
 
         if current_goal.position.distance(current_odom.position) < self._replan_goal_tolerance:
             self.cancel_goal(arrived=True)

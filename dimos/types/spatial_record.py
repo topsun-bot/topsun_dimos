@@ -27,7 +27,6 @@ from typing import Any
 
 
 class RecordType(Enum):
-    DOOR = "door"
     ROOM = "room"
     LANDMARK = "landmark"
     UNKNOWN = "unknown"
@@ -93,8 +92,8 @@ class SpatialRecord:
         ) ** 0.5
 
     # ------------------------------------------------------------------
-    # Backward-compatible alias
+    # Backward-compatible alias (deprecated — use SpatialRecord)
     # ------------------------------------------------------------------
 
 
-DoorRecord = SpatialRecord
+LandmarkRecord = SpatialRecord

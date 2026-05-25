@@ -29,7 +29,7 @@ Pipeline::
     CLIP zero-shot: "open" vs "closed"     ──► state
         │
         ▼
-    fuse with odometry ──► SpatialRecord ──► DoorSpatialMemory
+    fuse with odometry ──► SpatialRecord ──► SpatialLandmarkMemory
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ import torch
 from PIL import Image as PILImage
 
 from dimos.types.spatial_record import SpatialRecord, RecordType
-from dimos.perception.detection.door.door_spatial_memory import DoorSpatialMemory
+from dimos.perception.detection.door.door_spatial_memory import SpatialLandmarkMemory
 from dimos.perception.detection.detectors.yolo import Yolo2DDetector
 
 # CLIP zero-shot text prompts
@@ -185,16 +185,16 @@ class DoorDetector:
     def detect_and_record(
         self,
         frame: np.ndarray,
-        memory: DoorSpatialMemory,
+        memory: SpatialLandmarkMemory,
         robot_position: tuple[float, float, float],
         robot_rotation: tuple[float, float, float],
         frame_id: str = "",
     ) -> list[SpatialRecord]:
-        """Detect doors, create SpatialRecords, and store in memory.
+        """Detect landmarks, create SpatialRecords, and store in memory.
 
         Args:
             frame: RGB image (H, W, 3).
-            memory: DoorSpatialMemory instance.
+            memory: SpatialLandmarkMemory instance.
             robot_position: (x, y, z) in world frame.
             robot_rotation: (roll, pitch, yaw) in world frame.
             frame_id: Optional frame identifier.
@@ -215,7 +215,7 @@ class DoorDetector:
 
             rec = SpatialRecord(
                 name="",
-                record_type=RecordType.DOOR,
+                record_type=RecordType.LANDMARK,
                 position=(door_x, door_y, robot_position[2]),
                 rotation=robot_rotation,
                 state=det["door_state"],
@@ -223,7 +223,7 @@ class DoorDetector:
                 timestamp=time.time(),
                 last_seen=time.time(),
             )
-            stored_id = memory.record_door(rec)
+            stored_id = memory.record(rec)
 
             if det["cropped_bytes"]:
                 path = memory.save_snapshot(stored_id, det["cropped_bytes"])

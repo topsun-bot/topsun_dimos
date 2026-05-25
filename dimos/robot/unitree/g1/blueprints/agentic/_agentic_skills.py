@@ -17,7 +17,6 @@
 
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
-from dimos.agents.skills.door_navigation import DoorNavigationSkill
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.agents.skills.speak_skill import SpeakSkill
 from dimos.core.coordination.blueprints import autoconnect
@@ -28,7 +27,6 @@ _agentic_skills = autoconnect(
     McpServer.blueprint(),
     McpClient.blueprint(system_prompt=G1_SYSTEM_PROMPT),
     NavigationSkillContainer.blueprint(),
-    DoorNavigationSkill.blueprint(),
     SpeakSkill.blueprint(),
     UnitreeG1SkillContainer.blueprint(),
 )

@@ -44,6 +44,47 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger(level=logging.INFO)
 
 
+def _create_opencv_tracker() -> Any:
+    """Create a visual tracker (CSRT preferred; MIL/KCF fallbacks for slim OpenCV builds)."""
+    factories: list[Any] = []
+    legacy = getattr(cv2, "legacy", None)
+    if legacy is not None:
+        for name in ("TrackerCSRT_create", "TrackerKCF_create", "TrackerMOSSE_create"):
+            fn = getattr(legacy, name, None)
+            if fn is not None:
+                factories.append(fn)
+
+    for cls_name, create_name in (
+        ("TrackerCSRT", "TrackerCSRT_create"),
+        ("TrackerKCF", "TrackerKCF_create"),
+        ("TrackerMIL", "TrackerMIL_create"),
+        ("TrackerMOSSE", "TrackerMOSSE_create"),
+        ("TrackerNano", "TrackerNano_create"),
+    ):
+        cls = getattr(cv2, cls_name, None)
+        if cls is not None and hasattr(cls, "create"):
+            factories.append(cls.create)
+        create_fn = getattr(cv2, create_name, None)
+        if create_fn is not None:
+            factories.append(create_fn)
+
+    last_err: Exception | None = None
+    for factory in factories:
+        try:
+            tracker = factory()
+            if tracker is not None:
+                logger.info("Using OpenCV tracker: %s", getattr(factory, "__name__", factory))
+                return tracker
+        except Exception as exc:
+            last_err = exc
+            logger.debug("Tracker factory %s failed: %s", factory, exc)
+
+    raise RuntimeError(
+        "No OpenCV visual tracker available in this build. "
+        "Install opencv-contrib-python or use the perception extra."
+    ) from last_err
+
+
 class ObjectTracker2DConfig(ModuleConfig):
     frame_id: str = "camera_link"
 
@@ -131,14 +172,26 @@ class ObjectTracker2D(Module):
             logger.warning(f"Invalid initial bbox provided: {bbox}. Tracking not started.")
             return {"status": "invalid_bbox"}
 
+        fh, fw = self._latest_rgb_frame.shape[:2]
+        if w * h > int(0.55 * fw * fh):
+            logger.warning(
+                "BBox too large for tracking (%dx%d in %dx%d frame)", w, h, fw, fh
+            )
+            return {"status": "invalid_bbox", "reason": "bbox_too_large"}
+
         self.tracking_bbox = (x1, y1, w, h)  # type: ignore[assignment]
-        self.tracker = cv2.legacy.TrackerCSRT_create()  # type: ignore[attr-defined]
         self.tracking_initialized = False
         logger.info(f"Tracking target set with bbox: {self.tracking_bbox}")
 
-        # Convert RGB to BGR for CSRT (OpenCV expects BGR)
         frame_bgr = cv2.cvtColor(self._latest_rgb_frame, cv2.COLOR_RGB2BGR)
-        init_success = self.tracker.init(frame_bgr, self.tracking_bbox)  # type: ignore[attr-defined]
+        try:
+            self.tracker = _create_opencv_tracker()
+            init_success = self.tracker.init(frame_bgr, self.tracking_bbox)  # type: ignore[attr-defined]
+        except cv2.error as exc:
+            logger.error("Tracker init OpenCV error: %s", exc)
+            self.stop_track()
+            return {"status": "init_failed", "reason": str(exc)}
+
         if init_success:
             self.tracking_initialized = True
             logger.info("Tracker initialized successfully.")

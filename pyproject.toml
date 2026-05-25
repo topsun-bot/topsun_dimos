@@ -109,6 +109,7 @@ dependencies = [
     "transformers>=4.53.3",
     "ultralytics>=8.4.14",
     "chromadb>=1.5.0",
+    "dashscope>=1.25.18",
 ]
 
 
@@ -122,6 +123,7 @@ rerun-bridge = "dimos.visualization.rerun.bridge:app"
 doclinks = "dimos.utils.docs.doclinks:main"
 dtop = "dimos.utils.cli.dtop:main"
 dtop-plot = "dimos.utils.cli.dtop_plot:main"
+tell-robot = "dimos.utils.cli.tell_robot:main"
 
 [project.urls]
 Homepage = "https://dimensionalos.com"
