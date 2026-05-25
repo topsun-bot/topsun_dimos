@@ -36,14 +36,58 @@ _modules_to_try = [
 
 def _resolve_type(type_name: str) -> type:
     for module_name in _modules_to_try:
+        submodule_path = f"{module_name}.{type_name}"
+        try:
+            submodule = importlib.import_module(submodule_path)
+        except ImportError:
+            continue
+        if hasattr(submodule, type_name):
+            obj = getattr(submodule, type_name)
+            if isinstance(obj, type):
+                return obj  # type: ignore[no-any-return]
+
+    for module_name in _modules_to_try:
         try:
             module = importlib.import_module(module_name)
             if hasattr(module, type_name):
-                return getattr(module, type_name)  # type: ignore[no-any-return]
+                obj = getattr(module, type_name)
+                if isinstance(obj, type):
+                    return obj  # type: ignore[no-any-return]
         except ImportError:
             continue
 
     raise ValueError(f"Could not find type '{type_name}' in any known message modules")
+
+
+def _build_topic_send_eval_context() -> dict[str, object]:
+    eval_context: dict[str, object] = {}
+    for module_name in _modules_to_try:
+        try:
+            module = importlib.import_module(module_name)
+            for name in getattr(module, "__all__", dir(module)):
+                if name.startswith("_"):
+                    continue
+                obj = getattr(module, name, None)
+                if obj is not None and isinstance(obj, type):
+                    eval_context[name] = obj
+        except ImportError:
+            continue
+
+    for type_name in (
+        "PoseStamped",
+        "PointStamped",
+        "Vector3",
+        "Quaternion",
+        "Twist",
+        "Path",
+        "Bool",
+    ):
+        try:
+            eval_context[type_name] = _resolve_type(type_name)
+        except ValueError:
+            pass
+
+    return eval_context
 
 
 def _decode_typed_lcm_message(channel: str, data: bytes) -> object:
@@ -108,27 +152,7 @@ def topic_echo(topic: str, type_name: str | None) -> None:
 
 
 def topic_send(topic: str, message_expr: str) -> None:
-    eval_context: dict[str, object] = {}
-    modules_to_import = [
-        "dimos.msgs.geometry_msgs",
-        "dimos.msgs.nav_msgs",
-        "dimos.msgs.sensor_msgs",
-        "dimos.msgs.std_msgs",
-        "dimos.msgs.vision_msgs",
-        "dimos.msgs.foxglove_msgs",
-        "dimos.msgs.tf2_msgs",
-    ]
-
-    for module_name in modules_to_import:
-        try:
-            module = importlib.import_module(module_name)
-            for name in getattr(module, "__all__", dir(module)):
-                if not name.startswith("_"):
-                    obj = getattr(module, name, None)
-                    if obj is not None:
-                        eval_context[name] = obj
-        except ImportError:
-            continue
+    eval_context = _build_topic_send_eval_context()
 
     try:
         message = eval(message_expr, eval_context)

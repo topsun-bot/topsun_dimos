@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import threading
 import time
 
@@ -38,6 +39,12 @@ class SpeakSkill(Module):
     @rpc
     def start(self) -> None:
         super().start()
+        if not os.getenv("OPENAI_API_KEY"):
+            logger.warning(
+                "OPENAI_API_KEY not set; SpeakSkill TTS disabled. "
+                "Set OPENAI_API_KEY to enable speech output."
+            )
+            return
         self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
         self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
         self._audio_output.consume_audio(self._tts_node.emit_audio())
@@ -69,7 +76,7 @@ class SpeakSkill(Module):
             speak("Hello, I am your robot assistant.")
         """
         if self._tts_node is None:
-            return "Error: TTS not initialized"
+            return "TTS disabled (OPENAI_API_KEY not set)"
 
         if not blocking:
             thread = threading.Thread(
@@ -96,7 +103,7 @@ class SpeakSkill(Module):
         # Use lock to prevent simultaneous speech
         with self._audio_lock:
             if self._tts_node is None:
-                return "Error: TTS not initialized"
+                return "TTS disabled (OPENAI_API_KEY not set)"
 
             text_subject: Subject[str] = Subject()
             audio_complete = threading.Event()

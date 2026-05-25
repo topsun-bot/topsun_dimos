@@ -56,11 +56,14 @@ def get_assets() -> dict[str, bytes]:
 
 
 def load_model(
-    input_device: InputController, robot: str, scene_xml: str
+    input_device: InputController,
+    robot: str,
+    scene_xml: str,
+    config: GlobalConfig | None = None,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
     mujoco.set_mjcb_control(None)
 
-    xml_string = get_model_xml(robot, scene_xml)
+    xml_string = get_model_xml(robot, scene_xml, config=config)
     model = mujoco.MjModel.from_xml_string(xml_string, assets=get_assets())
     data = mujoco.MjData(model)
 
@@ -98,7 +101,7 @@ def load_model(
     return model, data
 
 
-def get_model_xml(robot: str, scene_xml: str) -> str:
+def get_model_xml(robot: str, scene_xml: str, config: GlobalConfig | None = None) -> str:
     root = ET.fromstring(scene_xml)
     root.set("model", f"{robot}_scene")
     root.insert(0, ET.Element("include", file=f"{robot}.xml"))
@@ -113,8 +116,115 @@ def get_model_xml(robot: str, scene_xml: str) -> str:
     map_elem.set("znear", "0.01")
     map_elem.set("zfar", "10000")
 
-    _add_person_object(root)
+    if config is not None and _should_inject_navigation_test_obstacles(config):
+        _strip_office_furniture_for_navigation_mvp(root)
+        _add_navigation_test_obstacles(root)
+    elif config is not None:
+        _add_person_object(root)
 
+    return ET.tostring(root, encoding="unicode")
+
+
+def _should_inject_navigation_test_obstacles(config: GlobalConfig) -> bool:
+    return config.mujoco_navigation_test_obstacles or config.obstacle_crossing_mvp
+
+
+_FURNITURE_BODY_MARKERS: tuple[str, ...] = (
+    "Chair",
+    "Desk",
+    "Table",
+    "Desktop",
+    "meetingTable",
+    "SwivlChair",
+    "woodenDesk",
+    "BigWhite",
+    "SmallWhite",
+    "Shelving",
+)
+
+
+def _strip_office_furniture_for_navigation_mvp(root: ET.Element) -> None:
+    """Remove chairs, desks, tables, and shelving from office1 for isolated MVP testing."""
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        return
+
+    to_remove: list[ET.Element] = []
+    for body in worldbody.findall("body"):
+        name = body.get("name", "")
+        if any(marker in name for marker in _FURNITURE_BODY_MARKERS):
+            to_remove.append(body)
+
+    for body in to_remove:
+        worldbody.remove(body)
+
+
+def _add_navigation_test_obstacles(root: ET.Element) -> None:
+    """Add thin door-sill thresholds along the north corridor for obstacle MVP sim tests."""
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+
+    if asset.find("material[@name='mat_mvp_obstacle_low']") is None:
+        ET.SubElement(asset, "material", name="mat_mvp_obstacle_low", rgba="0.92 0.55 0.12 1")
+        ET.SubElement(asset, "material", name="mat_mvp_obstacle_high", rgba="0.85 0.15 0.12 1")
+        ET.SubElement(asset, "material", name="mat_mvp_obstacle_medium", rgba="0.75 0.35 0.15 1")
+
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        worldbody = ET.SubElement(root, "worldbody")
+
+    if worldbody.find("body[@name='mvp_navigation_obstacles']") is not None:
+        return
+
+    # Robot default spawn is (-1, 1). Thin thresholds span the corridor (+Y north), away from
+    # the origin furniture cluster (stripped when this inject runs).
+    obstacle_body = ET.SubElement(worldbody, "body", name="mvp_navigation_obstacles")
+    # Sill centers along +Y north corridor; adjacent spacing ≥ 1.5 m (here 1.7 m).
+    # Half-size: sx = half span along corridor width (~1.5 m total), sy = half thickness
+    # (~0.05 m along travel), sz = half height. X center aligned with typical northbound path.
+    obstacles: list[tuple[str, str, str, str, str]] = [
+        # name, pos (center), half-size (box: sx sy sz), type, material
+        (
+            "mvp_threshold_low",
+            "-1.12 1.45 0.025",
+            "0.75 0.025 0.025",
+            "box",
+            "mat_mvp_obstacle_low",
+        ),
+        (
+            "mvp_threshold_medium",
+            "-1.12 3.15 0.075",
+            "0.75 0.025 0.075",
+            "box",
+            "mat_mvp_obstacle_medium",
+        ),
+        (
+            "mvp_threshold_high",
+            "-1.12 4.85 0.29",
+            "0.75 0.025 0.29",
+            "box",
+            "mat_mvp_obstacle_high",
+        ),
+    ]
+    for name, pos, size, geom_type, material in obstacles:
+        ET.SubElement(
+            obstacle_body,
+            "geom",
+            name=name,
+            type=geom_type,
+            pos=pos,
+            size=size,
+            material=material,
+            contype="1",
+            conaffinity="1",
+        )
+
+
+def inject_navigation_test_obstacles(scene_xml: str) -> str:
+    root = ET.fromstring(scene_xml)
+    _strip_office_furniture_for_navigation_mvp(root)
+    _add_navigation_test_obstacles(root)
     return ET.tostring(root, encoding="unicode")
 
 
@@ -153,4 +263,9 @@ def load_scene_xml(config: GlobalConfig) -> str:
     mujoco_room = config.mujoco_room or "office1"
     xml_file = (_get_data_dir() / f"scene_{mujoco_room}.xml").as_posix()
     with open(xml_file) as f:
-        return f.read()
+        scene_xml = f.read()
+
+    if _should_inject_navigation_test_obstacles(config):
+        scene_xml = inject_navigation_test_obstacles(scene_xml)
+
+    return scene_xml

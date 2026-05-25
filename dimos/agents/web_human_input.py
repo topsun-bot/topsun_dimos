@@ -12,30 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from threading import Thread
-from typing import TYPE_CHECKING
 
 import reactivex as rx
 import reactivex.operators as ops
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
+from dimos.core.global_config import global_config
 from dimos.core.module import Module
 from dimos.core.transport import pLCMTransport
+from dimos.stream.audio.base import AudioEvent
 from dimos.stream.audio.node_normalizer import AudioNormalizer
 from dimos.utils.logging_config import setup_logger
 from dimos.web.robot_web_interface import RobotWebInterface
 
-if TYPE_CHECKING:
-    from dimos.stream.audio.base import AudioEvent
-
 logger = setup_logger()
+
+try:
+    from huggingface_hub.errors import LocalEntryNotFoundError
+except ImportError:
+    LocalEntryNotFoundError = type(  # type: ignore[misc,assignment]
+        "LocalEntryNotFoundError",
+        (Exception,),
+        {},
+    )
 
 
 class WebInput(Module):
     _web_interface: RobotWebInterface | None = None
     _thread: Thread | None = None
     _human_transport: pLCMTransport[str] | None = None
+    _stt_disabled: bool = False
 
     @rpc
     def start(self) -> None:
@@ -43,7 +53,16 @@ class WebInput(Module):
 
         self._human_transport = pLCMTransport("/human_input")
 
-        audio_subject: rx.subject.Subject[AudioEvent] = rx.subject.Subject()
+        audio_subject: rx.subject.Subject[AudioEvent] | None = None
+
+        if global_config.web_input_stt_enabled:
+            audio_subject = self._try_init_stt_pipeline()
+        else:
+            self._stt_disabled = True
+            logger.warning(
+                "WebInput STT disabled (web_input_stt_enabled=False). "
+                "Web UI text input only; use dimos agent-send or MCP."
+            )
 
         self._web_interface = RobotWebInterface(
             port=5555,
@@ -51,30 +70,45 @@ class WebInput(Module):
             audio_subject=audio_subject,
         )
 
-        normalizer = AudioNormalizer()
-
-        # Here to prevent unwanted imports in the file.
-        from dimos.stream.audio.stt.node_whisper import WhisperNode
-
-        stt_node = WhisperNode()
-
-        # Connect audio pipeline: browser audio → normalizer → whisper
-        normalizer.consume_audio(audio_subject.pipe(ops.share()))
-        stt_node.consume_audio(normalizer.emit_audio())
-
-        # Subscribe to both text input sources
-        # 1. Direct text from web interface
+        # Direct text from web interface
         unsub = self._web_interface.query_stream.subscribe(self._human_transport.publish)
-        self.register_disposable(unsub)
-
-        # 2. Transcribed text from STT
-        unsub = stt_node.emit_text().subscribe(self._human_transport.publish)
         self.register_disposable(unsub)
 
         self._thread = Thread(target=self._web_interface.run, daemon=True)
         self._thread.start()
 
         logger.info("Web interface started at http://localhost:5555")
+
+    def _try_init_stt_pipeline(self) -> rx.subject.Subject[AudioEvent] | None:
+        """Wire browser audio → Whisper STT. Returns audio subject or None on failure."""
+        from dimos.stream.audio.stt.node_whisper import WhisperNode
+
+        try:
+            audio_subject: rx.subject.Subject[AudioEvent] = rx.subject.Subject()
+            normalizer = AudioNormalizer()
+            stt_node = WhisperNode()
+
+            normalizer.consume_audio(audio_subject.pipe(ops.share()))
+            stt_node.consume_audio(normalizer.emit_audio())
+
+            unsub = stt_node.emit_text().subscribe(self._human_transport.publish)
+            self.register_disposable(unsub)
+            return audio_subject
+        except LocalEntryNotFoundError as exc:
+            self._stt_disabled = True
+            logger.warning(
+                "WebInput STT disabled: Whisper model not in local cache and "
+                "HuggingFace download unavailable (%s). Web UI text input only.",
+                exc,
+            )
+            return None
+        except Exception as exc:
+            self._stt_disabled = True
+            logger.warning(
+                "WebInput STT disabled: Whisper init failed (%s). Web UI text input only.",
+                exc,
+            )
+            return None
 
     @rpc
     def stop(self) -> None:

@@ -113,7 +113,7 @@ uv pip install 'dimos[base,unitree,sim]'
 dimos --simulation run unitree-go2
 ```
 
-Full navigation stack in MuJoCo — same code, simulated robot.
+Full navigation stack in MuJoCo — same code, simulated robot. By default this also starts the DimOS native Rerun viewer (`dimos-viewer`) alongside the MuJoCo window. Use `--viewer rerun-web` for the browser UI (Command Center at [localhost:7779](http://localhost:7779)). Pass `--viewer none` to disable DimOS visualization only.
 
 ## Agentic Control
 

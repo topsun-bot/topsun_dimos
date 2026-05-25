@@ -1,0 +1,66 @@
+Thu May 21 09:07:17 2026
+ERROR: could not create window
+
+Thu May 21 09:22:12 2026
+ERROR: could not create window
+
+Thu May 21 10:56:26 2026
+ERROR: could not initialize GLFW
+
+Thu May 21 10:56:58 2026
+ERROR: could not create window
+
+Thu May 21 10:57:37 2026
+ERROR: could not create window
+
+Thu May 21 10:58:33 2026
+ERROR: could not create window
+
+Thu May 21 11:16:49 2026
+ERROR: could not create window
+
+Thu May 21 11:17:41 2026
+ERROR: could not create window
+
+Thu May 21 11:18:33 2026
+ERROR: could not create window
+
+Thu May 21 11:20:06 2026
+ERROR: could not create window
+
+Thu May 21 11:20:37 2026
+ERROR: could not create window
+
+Thu May 21 11:23:26 2026
+ERROR: could not create window
+
+Thu May 21 11:29:10 2026
+ERROR: could not create window
+
+Thu May 21 11:29:53 2026
+ERROR: could not create window
+
+Thu May 21 11:29:59 2026
+ERROR: could not create window
+
+Thu May 21 11:30:19 2026
+ERROR: could not create window
+
+Thu May 21 11:33:02 2026
+ERROR: could not create window
+
+Thu May 21 11:43:20 2026
+ERROR: could not create window
+
+Thu May 21 11:46:24 2026
+ERROR: could not create window
+
+Thu May 21 13:32:05 2026
+ERROR: could not create window
+
+Thu May 21 13:46:00 2026
+ERROR: could not create window
+
+Thu May 21 13:46:52 2026
+ERROR: could not create window
+

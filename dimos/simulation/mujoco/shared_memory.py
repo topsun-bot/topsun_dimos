@@ -177,6 +177,12 @@ class ShmReader:
             return linear, angular
         return None
 
+    def read_odom_position(self) -> NDArray[Any] | None:
+        if self._get_seq(2) <= 0:
+            return None
+        odom_array: NDArray[Any] = np.ndarray((8,), dtype=np.float64, buffer=self.shm.odom.buf)
+        return odom_array[0:3].copy()
+
     def _increment_seq(self, index: int) -> None:
         seq_array: NDArray[Any] = np.ndarray((8,), dtype=np.int64, buffer=self.shm.seq.buf)
         seq_array[index] += 1

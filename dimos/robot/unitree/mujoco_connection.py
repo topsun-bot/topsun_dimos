@@ -20,7 +20,6 @@ import base64
 from collections.abc import Callable
 import functools
 import json
-import os
 from pathlib import Path
 import pickle
 import subprocess
@@ -54,6 +53,7 @@ from dimos.simulation.mujoco.constants import (
     VIDEO_HEIGHT,
     VIDEO_WIDTH,
 )
+from dimos.simulation.mujoco.display_env import build_mujoco_subprocess_env, explain_mujoco_headless
 from dimos.simulation.mujoco.shared_memory import ShmWriter
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
@@ -116,7 +116,7 @@ class MujocoConnection:
             # use @rpath which doesn't always resolve inside venvs, so we
             # point DYLD_LIBRARY_PATH at the real libpython directory.
             executable = sys.executable if sys.platform != "darwin" else "mjpython"
-            env = os.environ.copy()
+            env = build_mujoco_subprocess_env()
             if sys.platform == "darwin":
                 # on some systems mujoco looks in the wrong place for shared libraries. So we force it look in the right place
                 libdir = Path(sysconfig.get_config_var("LIBDIR") or "")
@@ -124,9 +124,20 @@ class MujocoConnection:
                     existing = env.get("DYLD_LIBRARY_PATH", "")
                     env["DYLD_LIBRARY_PATH"] = f"{libdir}:{existing}" if existing else str(libdir)
 
+            headless, headless_reason = explain_mujoco_headless(self.global_config, env)
+            logger.info(
+                "Starting MuJoCo subprocess",
+                headless=headless,
+                reason=headless_reason,
+                display=env.get("DISPLAY"),
+                wayland_display=env.get("WAYLAND_DISPLAY"),
+                mujoco_gl=env.get("MUJOCO_GL"),
+                mujoco_offscreen_gl=self.global_config.mujoco_offscreen_gl,
+            )
+
+            # Inherit stderr so viewer errors and headless logs appear in dimos log output.
             self.process = subprocess.Popen(
                 [executable, str(LAUNCHER_PATH), config_pickle, shm_names_json],
-                stderr=subprocess.PIPE,
                 env=env,
             )
 

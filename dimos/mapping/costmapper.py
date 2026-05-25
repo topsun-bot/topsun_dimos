@@ -21,6 +21,7 @@ from reactivex import operators as ops
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.experimental.navigation_obstacle_mvp.mvp_costmap import apply_mvp_sill_lethal_zones
 from dimos.mapping.pointclouds.occupancy import (
     OCCUPANCY_ALGOS,
     HeightCostConfig,
@@ -59,10 +60,15 @@ class CostMapper(Module):
             elapsed_ms = (time.perf_counter() - start) * 1000
             return grid, elapsed_ms, rx_monotonic
 
+        stream = self.global_map.observable()  # type: ignore[no-untyped-call]
+        if self.config.g.simulation:
+            # MuJoCo sim: dense global_map updates are the main CPU sink for navigation.
+            stream = stream.pipe(ops.throttle_first(0.15))
+
         self.register_disposable(
-            self.global_map.observable()  # type: ignore[no-untyped-call]
-            .pipe(ops.map(_calculate_and_time))
-            .subscribe(lambda result: _publish_costmap(result[0], result[1], result[2]))
+            stream.pipe(ops.map(_calculate_and_time)).subscribe(
+                lambda result: _publish_costmap(result[0], result[1], result[2])
+            )
         )
 
     @rpc
@@ -72,4 +78,12 @@ class CostMapper(Module):
     # @timed()  # TODO: fix thread leak in timed decorator
     def _calculate_costmap(self, msg: PointCloud2) -> OccupancyGrid:
         fn = OCCUPANCY_ALGOS[self.config.algo]
-        return fn(msg, **asdict(self.config.config))
+        kwargs = asdict(self.config.config)
+        if self.config.g.simulation:
+            kwargs["resolution"] = max(kwargs.get("resolution", 0.05), 0.08)
+        grid = fn(msg, **kwargs)
+        return apply_mvp_sill_lethal_zones(
+            grid,
+            obstacle_crossing_mvp=self.config.g.obstacle_crossing_mvp,
+            simulation=self.config.g.simulation,
+        )

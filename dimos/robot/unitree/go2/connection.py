@@ -128,7 +128,11 @@ def make_connection(ip: str | None, cfg: GlobalConfig) -> Go2ConnectionProtocol:
 
         return DimSimConnection(cfg)
     elif connection_type == "webrtc":
-        assert ip is not None, "IP address must be provided"
+        if ip is None:
+            raise ValueError(
+                "Robot IP is required for hardware mode. Pass --robot-ip <IP>, "
+                "or use --simulation mujoco / --replay for offline modes."
+            )
         return UnitreeWebRTCConnection(ip)
     else:
         raise ValueError(f"Unknown simulator {cfg.simulation!r}. Choose from: mujoco, dimsim")

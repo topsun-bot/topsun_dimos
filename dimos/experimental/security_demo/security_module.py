@@ -308,6 +308,12 @@ class SecurityModule(Module):
             _draw_skeleton(annotated, best)
         self.detection.publish(Image.from_numpy(annotated, format=image.format))
 
+        if not self._tracker.available:
+            logger.warning(
+                "Person detected but EdgeTAM is unavailable (no CUDA); continuing patrol"
+            )
+            return
+
         # Init EdgeTAM with YOLO bbox for continuous tracking
         box = np.array(list(best.bbox), dtype=np.float32)
         self._tracker.init_track(image=image, box=box, obj_id=1)

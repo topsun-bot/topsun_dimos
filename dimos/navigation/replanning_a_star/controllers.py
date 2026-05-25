@@ -104,9 +104,9 @@ class PController:
         return velocity
 
     def _angular_twist(self, angular_velocity: float) -> Twist:
-        # In simulation, we need stroger values
-        if self._global_config.simulation and abs(angular_velocity) < 0.8:
-            angular_velocity = 0.8 * np.sign(angular_velocity)
+        # In simulation, we need stronger values (MuJoCo policy lags small cmd_vel).
+        if self._global_config.simulation and abs(angular_velocity) < 1.2:
+            angular_velocity = 1.2 * np.sign(angular_velocity)
 
         return Twist(
             linear=Vector3(0.0, 0.0, 0.0),

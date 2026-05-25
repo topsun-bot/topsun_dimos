@@ -94,6 +94,12 @@ class MovementManager(Module):
             return
 
         logger.debug("Goal", x=round(msg.x, 1), y=round(msg.y, 1), z=round(msg.z, 1))
+        logger.info(
+            "Click goal relayed",
+            x=round(msg.x, 3),
+            y=round(msg.y, 3),
+            frame_id=msg.frame_id or "map",
+        )
         self.way_point.publish(msg)
         self.goal.publish(msg)
 

@@ -15,9 +15,13 @@
 # Process-wide library defaults.
 # Modules that need different settings can override in their own start().
 
+from dimos.core.torch_cuda_warnings import configure_torch_cuda_warning_filters
+
 
 def apply_library_config() -> None:
     """Apply process-wide library defaults. Call once per process."""
+    configure_torch_cuda_warning_filters()
+
     # Limit OpenCV internal threads to avoid idle thread contention.
     try:
         import cv2

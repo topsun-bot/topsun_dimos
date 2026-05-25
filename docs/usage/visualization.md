@@ -10,8 +10,12 @@ Choose your viewer via the CLI:
 # Rerun native viewer (default) - dimos-viewer with built-in teleop + click-to-navigate
 dimos run unitree-go2
 
+# MuJoCo simulation: DimOS viewer (rerun native) starts automatically
+dimos --simulation mujoco run unitree-go2
+
 # Explicitly select the viewer backend:
 dimos --viewer rerun run unitree-go2
+dimos --viewer rerun-web run unitree-go2  # browser + Command Center
 dimos --viewer foxglove run unitree-go2
 dimos --viewer none run unitree-go2
 ```
@@ -44,6 +48,21 @@ dimos --rerun-web --rerun-open native run unitree-go2
 - Native desktop application (opens automatically)
 - Better performance with larger maps/higher resolution
 - No browser or web server required
+
+---
+
+### Rerun Web (`rerun-web`, `--viewer rerun-web`)
+
+**What you get:**
+- Same stack as Rerun (`RerunBridgeModule` + Command Center)
+- Browser-based dashboard at http://localhost:7779 opens automatically
+- Rerun 3D viewer + command center sidebar in one page
+- Teleop controls and goal setting via the web UI
+- Works well alongside the MuJoCo passive viewer window
+
+Use `--viewer rerun-web` when you prefer the browser UI. MuJoCo simulation without
+`--viewer` defaults to native `rerun` (dimos-viewer desktop app).
+Use `--viewer none` to disable DimOS visualization only (MuJoCo window is separate).
 
 ---
 

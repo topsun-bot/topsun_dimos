@@ -259,7 +259,11 @@ class VoxelGridMapper(StreamModule[PointCloud2, PointCloud2]):
         cfg = self.config.model_dump(
             include=set(VoxelGridMapperConfig.model_fields) - set(ModuleConfig.model_fields)
         )
-        return stream.transform(VoxelMapTransformer(**cfg))
+        emit_every = 1
+        if self.config.g.simulation:
+            emit_every = 2
+            cfg["voxel_size"] = max(cfg.get("voxel_size", 0.05), 0.08)
+        return stream.transform(VoxelMapTransformer(emit_every=emit_every, **cfg))
 
     lidar: In[PointCloud2]
     global_map: Out[PointCloud2]

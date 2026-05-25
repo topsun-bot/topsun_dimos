@@ -48,22 +48,38 @@ class SAM2InferenceState(TypedDict):
 
 
 class EdgeTAMProcessor(Detector):
-    _predictor: "SAM2VideoPredictor"
+    _predictor: "SAM2VideoPredictor | None"
     _inference_state: SAM2InferenceState | None
     _frame_count: int
     _is_tracking: bool
     _buffer_size: int
+    _available: bool
+
+    @property
+    def available(self) -> bool:
+        return self._available
 
     def __init__(
         self,
     ) -> None:
+        self._predictor = None
+        self._inference_state = None
+        self._frame_count = 0
+        self._is_tracking = False
+        self._buffer_size = 100
+        self._available = False
+
         local_config_path = Path(__file__).parent / "configs" / "edgetam.yaml"
 
         if not local_config_path.exists():
             raise FileNotFoundError(f"EdgeTAM config not found at {local_config_path}")
 
         if not torch.cuda.is_available():
-            raise RuntimeError("EdgeTAM requires a CUDA-capable GPU")
+            logger.warning(
+                "EdgeTAM requires a CUDA-capable GPU; visual tracking is disabled "
+                "(security patrol / person follow will skip EdgeTAM-based follow)"
+            )
+            return
 
         cfg = OmegaConf.load(local_config_path)
 
@@ -82,32 +98,39 @@ class EdgeTAMProcessor(Detector):
             logger.warning(f"Config target is {cfg.model._target_}, forcing SAM2VideoPredictor")
             cfg.model._target_ = "sam2.sam2_video_predictor.SAM2VideoPredictor"
 
-        self._predictor = instantiate(cfg.model, _recursive_=True)
+        try:
+            self._predictor = instantiate(cfg.model, _recursive_=True)
 
-        # Suppress the per-frame "propagate in video" tqdm bar from sam2
-        import sam2.sam2_video_predictor as _svp
+            # Suppress the per-frame "propagate in video" tqdm bar from sam2
+            import sam2.sam2_video_predictor as _svp
 
-        _svp.tqdm = lambda iterable, *a, **kw: iterable
+            _svp.tqdm = lambda iterable, *a, **kw: iterable
 
-        ckpt_path = str(get_data("models_edgetam") / "edgetam.pt")
+            ckpt_path = str(get_data("models_edgetam") / "edgetam.pt")
 
-        sd = torch.load(ckpt_path, map_location="cpu", weights_only=True)["model"]
-        missing_keys, unexpected_keys = self._predictor.load_state_dict(sd)
-        if missing_keys:
-            raise RuntimeError("Missing keys in checkpoint")
-        if unexpected_keys:
-            raise RuntimeError("Unexpected keys in checkpoint")
+            sd = torch.load(ckpt_path, map_location="cpu", weights_only=True)["model"]
+            missing_keys, unexpected_keys = self._predictor.load_state_dict(sd)
+            if missing_keys:
+                raise RuntimeError("Missing keys in checkpoint")
+            if unexpected_keys:
+                raise RuntimeError("Unexpected keys in checkpoint")
 
-        self._predictor = self._predictor.to("cuda")
-        self._predictor.eval()
+            self._predictor = self._predictor.to("cuda")
+            self._predictor.eval()
+        except Exception:
+            self._predictor = None
+            logger.warning(
+                "EdgeTAM failed to initialize on CUDA; visual tracking is disabled",
+                exc_info=True,
+            )
+            return
 
-        self._inference_state = None
-        self._frame_count = 0
-        self._is_tracking = False
-        self._buffer_size = 100  # Keep last N frames in memory to avoid OOM
+        self._available = True
 
     def _prepare_frame(self, image: Image) -> torch.Tensor:
         """Prepare frame for SAM2 (resize, normalize, convert to tensor)."""
+        if self._predictor is None:
+            raise RuntimeError("EdgeTAM predictor is not initialized")
 
         cv_image = image.to_opencv()
         rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
@@ -148,6 +171,9 @@ class EdgeTAMProcessor(Detector):
         Returns:
             ImageDetections2D with initial segmentation mask
         """
+        if not self._available or self._predictor is None:
+            return ImageDetections2D(image=image)
+
         if self._inference_state is not None:
             self.stop()
 
@@ -192,6 +218,9 @@ class EdgeTAMProcessor(Detector):
             ImageDetections2D with tracked object segmentation masks
         """
         if not self._is_tracking or self._inference_state is None:
+            return ImageDetections2D(image=image)
+
+        if not self._available or self._predictor is None:
             return ImageDetections2D(image=image)
 
         self._frame_count += 1

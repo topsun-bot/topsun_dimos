@@ -36,9 +36,16 @@ import typer
 from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
 from dimos.constants import CONFIG_DIR, LOG_DIR
 from dimos.core.daemon import daemonize, install_signal_handlers
-from dimos.core.global_config import GlobalConfig, global_config
+from dimos.core.global_config import (
+    GlobalConfig,
+    apply_simulation_viewer_defaults,
+    global_config,
+    normalize_global_config_argv,
+)
 from dimos.core.run_registry import get_most_recent, is_pid_alive, stop_entry
+from dimos.core.torch_cuda_warnings import configure_torch_cuda_warning_filters
 from dimos.robot.unitree.go2.cli.go2tool import app as go2tool_app
+from dimos.simulation.mujoco.display_env import snapshot_gui_env
 from dimos.utils.logging_config import setup_logger
 from dimos.visualization.rerun.constants import RerunOpenOption
 
@@ -53,6 +60,7 @@ main = typer.Typer(
 )
 
 load_dotenv()
+snapshot_gui_env()
 
 SIMULATORS = ("mujoco", "dimsim")
 
@@ -71,7 +79,8 @@ def _normalize_simulation_argv(argv: list[str]) -> list[str]:
 
 
 def cli_main() -> None:
-    sys.argv = _normalize_simulation_argv(sys.argv)
+    configure_torch_cuda_warning_filters()
+    sys.argv = normalize_global_config_argv(_normalize_simulation_argv(sys.argv))
     main()
 
 
@@ -243,7 +252,10 @@ def run(
 
     setup_exception_handler()
 
-    cli_config_overrides: dict[str, Any] = ctx.obj
+    cli_config_overrides: dict[str, Any] = apply_simulation_viewer_defaults(
+        ctx.obj or {},
+        argv=sys.argv,
+    )
 
     # this is a workaround until we have a proper way to have delayed-module-choice in blueprints
     # ex: vis_module(viewer=global_config.viewer) is wrong (viewer will always be default value) without this patch

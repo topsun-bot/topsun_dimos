@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Callable
+import os
 from queue import Empty, Queue
 from threading import Event, RLock, Thread
 import time
@@ -210,6 +211,14 @@ class McpClient(Module):
 
     @rpc
     def on_system_modules(self, _modules: list[RPCClient]) -> None:
+        if self.config.model_fixture is None and not os.getenv("OPENAI_API_KEY"):
+            logger.warning(
+                "OPENAI_API_KEY not set; McpClient LLM agent disabled. "
+                "MCP tools remain available via `dimos mcp call`. "
+                "Set OPENAI_API_KEY to enable agent-send / LLM reasoning."
+            )
+            return
+
         tools = self._fetch_tools()
 
         model: str | Any = self.config.model
@@ -312,7 +321,19 @@ class McpClient(Module):
 
             with self._lock:
                 if not self._state_graph:
-                    raise ValueError("No state graph initialized")
+                    logger.warning(
+                        "LLM agent disabled (OPENAI_API_KEY not set); message ignored. "
+                        "Use `dimos mcp call` to invoke skills directly."
+                    )
+                    reply = HumanMessage(
+                        content=(
+                            "LLM agent disabled: OPENAI_API_KEY not set. "
+                            "Use `dimos mcp call <tool>` to invoke skills directly."
+                        )
+                    )
+                    self.agent.publish(reply)
+                    self.agent_idle.publish(True)
+                    continue
                 self._process_message(self._state_graph, message)
 
     def _process_message(

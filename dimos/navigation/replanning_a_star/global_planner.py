@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from itertools import pairwise
 import math
 from threading import Event, RLock, Thread, current_thread
 import time
@@ -23,6 +24,12 @@ from reactivex.disposable import CompositeDisposable
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.global_config import GlobalConfig
 from dimos.core.resource import Resource
+from dimos.experimental.navigation_obstacle_mvp.mvp_costmap import (
+    apply_mvp_sill_lethal_zones,
+    find_blocking_sill,
+    mvp_detour_waypoints,
+    path_crosses_sill_center,
+)
 from dimos.mapping.occupancy.path_resampling import smooth_resample_path
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -61,6 +68,7 @@ class GlobalPlanner(Resource):
     _stop_planner: Event
     _replan_event: Event
     _replan_reason: StopMessage | None
+    _last_stop_message: StopMessage | None
     _lock: RLock
     _safe_goal_clearance: float
 
@@ -85,15 +93,21 @@ class GlobalPlanner(Resource):
         )
 
         stuck_threshold = self._stuck_threshold
+        stuck_time_window = self._stuck_time_window
         if global_config.simulation:
             stuck_threshold = 1.0
+            stuck_time_window = 15.0
+        if global_config.obstacle_crossing_mvp:
+            stuck_time_window = max(stuck_time_window, 20.0)
+            stuck_threshold = max(stuck_threshold, 1.5)
 
-        self._position_tracker = PositionTracker(self._stuck_time_window, stuck_threshold)
+        self._position_tracker = PositionTracker(stuck_time_window, stuck_threshold)
         self._replan_limiter = ReplanLimiter()
         self._disposables = CompositeDisposable()
         self._stop_planner = Event()
         self._replan_event = Event()
         self._replan_reason = None
+        self._last_stop_message = None
         self._lock = RLock()
         self._reset_safe_goal_clearance()
 
@@ -127,6 +141,11 @@ class GlobalPlanner(Resource):
         self._position_tracker.add_position(msg)
 
     def handle_global_costmap(self, msg: OccupancyGrid) -> None:
+        msg = apply_mvp_sill_lethal_zones(
+            msg,
+            obstacle_crossing_mvp=self._global_config.obstacle_crossing_mvp,
+            simulation=self._global_config.simulation,
+        )
         self._navigation_map.update(msg)
         self._navigation_map_near.update(msg)
 
@@ -242,11 +261,15 @@ class GlobalPlanner(Resource):
                 last_stuck_check = time.perf_counter()
                 continue
 
-            _, new_id = self._local_planner.get_unique_state()
+            planner_state, new_id = self._local_planner.get_unique_state()
 
             if new_id != last_id:
                 last_id = new_id
                 last_stuck_check = time.perf_counter()
+                continue
+
+            # In-place rotation does not change XY — skip stuck detection until driving.
+            if planner_state in ("initial_rotation", "final_rotation"):
                 continue
 
             if (
@@ -274,7 +297,11 @@ class GlobalPlanner(Resource):
             self.cancel_goal(arrived=True)
         elif stop_message == "obstacle_found":
             logger.info("Replanning path due to obstacle found.")
+            self._last_stop_message = "obstacle_found"
             self._replan_path()
+        elif stop_message == "obstacle_abort":
+            logger.info("Cancelling goal due to obstacle abort.")
+            self.cancel_goal()
         elif stop_message == "error":
             logger.info("Failure in navigation.")
             self._replan_path()
@@ -330,7 +357,16 @@ class GlobalPlanner(Resource):
             self.cancel_goal()
             return
 
-        path = self._find_wide_path(safe_goal, current_odom.position)
+        use_mvp_detour = (
+            self._global_config.obstacle_crossing_mvp
+            and self._last_stop_message == "obstacle_found"
+        )
+        self._last_stop_message = None
+
+        if use_mvp_detour:
+            path = self._find_mvp_detour_path(safe_goal, current_odom.position)
+        else:
+            path = self._find_wide_path(safe_goal, current_odom.position)
 
         if not path:
             logger.warning(
@@ -344,6 +380,68 @@ class GlobalPlanner(Resource):
         self.path.on_next(resampled_path)
 
         self._local_planner.start_planning(resampled_path)
+
+    def _find_mvp_detour_path(self, goal: Vector3, robot_pos: Vector3) -> Path | None:
+        blocking = find_blocking_sill(robot_pos, goal)
+        if blocking is None:
+            return self._find_wide_path(goal, robot_pos)
+
+        waypoints = mvp_detour_waypoints(blocking, robot_pos)
+        segments: list[Vector3] = [robot_pos, *waypoints, goal]
+        combined = Path()
+
+        for start, end in pairwise(segments):
+            segment = self._find_wide_path(end, start)
+            if not segment or not segment.poses:
+                logger.warning(
+                    "MVP detour segment failed.",
+                    start_x=round(start.x, 2),
+                    start_y=round(start.y, 2),
+                    end_x=round(end.x, 2),
+                    end_y=round(end.y, 2),
+                )
+                return self._find_wide_path(goal, robot_pos)
+
+            if combined.poses:
+                combined.poses.extend(segment.poses[1:])
+            else:
+                combined.poses.extend(segment.poses)
+
+        if path_crosses_sill_center(
+            [pose.position for pose in combined.poses],
+            blocking,
+        ):
+            logger.warning(
+                "MVP detour path still crosses sill center; retrying with wider offset.",
+                sill=blocking.name,
+            )
+            wide_waypoints = mvp_detour_waypoints(blocking, robot_pos, lateral_offset_m=1.0)
+            return self._find_mvp_detour_path_via_waypoints(goal, robot_pos, wide_waypoints)
+
+        logger.info(
+            "Found MVP detour path around sill.",
+            sill=blocking.name,
+            waypoint_count=len(waypoints),
+        )
+        return combined if combined.poses else None
+
+    def _find_mvp_detour_path_via_waypoints(
+        self,
+        goal: Vector3,
+        robot_pos: Vector3,
+        waypoints: list[Vector3],
+    ) -> Path | None:
+        segments: list[Vector3] = [robot_pos, *waypoints, goal]
+        combined = Path()
+        for start, end in pairwise(segments):
+            segment = self._find_wide_path(end, start)
+            if not segment or not segment.poses:
+                return self._find_wide_path(goal, robot_pos)
+            if combined.poses:
+                combined.poses.extend(segment.poses[1:])
+            else:
+                combined.poses.extend(segment.poses)
+        return combined if combined.poses else None
 
     def _find_wide_path(self, goal: Vector3, robot_pos: Vector3) -> Path | None:
         #        sizes_to_try: list[float] = [2.2, 1.7, 1.3, 1]

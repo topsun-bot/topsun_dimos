@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import resource
 import subprocess
@@ -131,7 +132,19 @@ class MulticastConfiguratorLinux(SystemConfigurator):
             print(f"ERROR: failed checking multicast route: {error}")
             self.route_ok = False
 
-        return bool(self.loopback_ok and self.route_ok)
+        if self.loopback_ok and self.route_ok:
+            return True
+
+        # Functional fallback: LCM often works on loopback without explicit MULTICAST
+        # flags or 224.0.0.0/4 route (e.g. after reboot before sudo setup).
+        try:
+            import lcm as lcm_mod
+
+            url = os.environ.get("LCM_DEFAULT_URL", "udpm://239.255.76.67:7667?ttl=0")
+            lcm_mod.LCM(url)
+            return True
+        except RuntimeError:
+            return False
 
     def explanation(self) -> str | None:
         output = ""

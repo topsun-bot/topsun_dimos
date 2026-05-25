@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import os
 from threading import Event, RLock, Thread
 import time
@@ -23,8 +24,16 @@ from reactivex import Subject
 
 from dimos.core.global_config import GlobalConfig
 from dimos.core.resource import Resource
+from dimos.experimental.navigation_obstacle_mvp.forward_obstacle_height import (
+    MVP_SILLS,
+    infer_forward_obstacle_height_cm,
+    nearest_non_cross_sill_distance_m,
+    resolve_obstacle_height_cm,
+)
+from dimos.experimental.navigation_obstacle_mvp.obstacle_decision import decide_obstacle_action
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.navigation.base import NavigationState
@@ -38,9 +47,16 @@ from dimos.utils.trigonometry import angle_diff
 PlannerState: TypeAlias = Literal[
     "idle", "initial_rotation", "path_following", "final_rotation", "arrived"
 ]
-StopMessage: TypeAlias = Literal["arrived", "obstacle_found", "error"]
+StopMessage: TypeAlias = Literal["arrived", "obstacle_found", "obstacle_abort", "error"]
 
 logger = setup_logger()
+
+# Brief linear slowdown only when very close to the low sill (cross height ≤10 cm).
+_MVP_CROSS_CREEP_LINEAR_SCALE = 0.35
+_MVP_CROSS_CREEP_DISTANCE_M = 0.15
+# Stop and replan before wedging on medium/high sills when already this close.
+_MVP_DETOUR_PREEMPT_DISTANCE_M = 0.6
+_MVP_DETOUR_PREEMPT_MIN_HEIGHT_CM = 18.0
 
 
 class LocalPlanner(Resource):
@@ -69,6 +85,9 @@ class LocalPlanner(Resource):
     _orientation_tolerance: float = 0.35
     _navigation_costmap_interval: float = 1.0
     _navigation_costmap_last: float = 0.0
+    _mvp_cross_creep: bool = False
+    _mvp_detour_hold_active: bool = False
+    _nav_cmd_vel_log_last: float = 0.0
 
     def __init__(
         self, global_config: GlobalConfig, navigation_map: NavigationMap, goal_tolerance: float
@@ -90,10 +109,18 @@ class LocalPlanner(Resource):
         if global_config.nerf_speed < 1.0:
             speed *= global_config.nerf_speed
 
+        control_frequency = self._control_frequency
+        orientation_tolerance = self._orientation_tolerance
+        if global_config.simulation:
+            control_frequency = 15.0
+            orientation_tolerance = 0.45
+
+        self._control_frequency = control_frequency
+        self._orientation_tolerance = orientation_tolerance
         self._controller = PController(
             self._global_config,
             speed,
-            self._control_frequency,
+            control_frequency,
         )
 
     def start(self) -> None:
@@ -116,6 +143,7 @@ class LocalPlanner(Resource):
             self._path_clearance = PathClearance(self._global_config, self._path)
             self._path_distancer = PathDistancer(self._path)
             self._pose_index = 0
+            self._mvp_detour_hold_active = False
             self._thread = Thread(target=self._thread_entrypoint, daemon=True)
             self._thread.start()
 
@@ -202,10 +230,21 @@ class LocalPlanner(Resource):
 
             self._send_navigation_costmap(path, path_clearance)
 
+            with self._lock:
+                current_odom = self._current_odom
+
+            self._update_mvp_cross_motion_limits(current_odom)
+
+            if self._try_mvp_detour_preempt(current_odom):
+                self.cmd_vel.on_next(Twist())
+                elapsed = time.perf_counter() - start_time
+                sleep_time = max(0.0, (1.0 / self._control_frequency) - elapsed)
+                stop_event.wait(sleep_time)
+                continue
+
             if path_clearance.is_obstacle_ahead():
-                logger.info("Obstacle detected ahead, stopping local planner.")
-                self.stopped_navigating.on_next("obstacle_found")
-                break
+                if self._handle_obstacle_ahead(current_odom):
+                    break
 
             with self._lock:
                 state: PlannerState = self._state
@@ -223,6 +262,9 @@ class LocalPlanner(Resource):
                 cmd_vel = None
 
             if cmd_vel is not None:
+                if self._mvp_cross_creep and state == "path_following":
+                    cmd_vel = self._scale_twist_for_mvp_cross(cmd_vel)
+                self._log_nav_cmd_vel(cmd_vel)
                 self.cmd_vel.on_next(cmd_vel)
 
             elapsed = time.perf_counter() - start_time
@@ -231,6 +273,83 @@ class LocalPlanner(Resource):
 
         if stop_event.is_set():
             logger.info("Local planner loop exited due to stop event.")
+
+    def _try_mvp_detour_preempt(self, current_odom: PoseStamped | None) -> bool:
+        """Trigger replan before wedging on medium/high sills at close range."""
+        if self._mvp_detour_hold_active:
+            return True
+
+        if not self._global_config.obstacle_crossing_mvp or current_odom is None:
+            return False
+
+        with self._lock:
+            if self._state != "path_following":
+                return False
+
+        nearest = nearest_non_cross_sill_distance_m(
+            current_odom.position.x,
+            current_odom.position.y,
+        )
+        if nearest is None:
+            return False
+
+        dist_m, height_cm = nearest
+        if dist_m >= _MVP_DETOUR_PREEMPT_DISTANCE_M:
+            return False
+        if height_cm < _MVP_DETOUR_PREEMPT_MIN_HEIGHT_CM:
+            return False
+        if decide_obstacle_action(obstacle_height_cm=height_cm) == "cross":
+            return False
+
+        action = decide_obstacle_action(obstacle_height_cm=height_cm)
+        logger.info(
+            "MVP detour preempt at non-cross sill.",
+            distance_m=round(dist_m, 3),
+            obstacle_height_cm=height_cm,
+            action=action,
+        )
+        self.cmd_vel.on_next(Twist())
+        self._mvp_detour_hold_active = True
+        if action == "stop":
+            self.stopped_navigating.on_next("obstacle_abort")
+        else:
+            self.stopped_navigating.on_next("obstacle_found")
+        return True
+
+    def _handle_obstacle_ahead(self, current_odom: PoseStamped | None) -> bool:
+        """Return True when local planning should stop for the detected obstacle."""
+        if not self._global_config.obstacle_crossing_mvp:
+            logger.info("Obstacle detected ahead, stopping local planner.")
+            self.stopped_navigating.on_next("obstacle_found")
+            return True
+
+        obstacle_height_cm = resolve_obstacle_height_cm(
+            configured_height_cm=self._global_config.obstacle_crossing_mvp_height_cm,
+            current_odom=current_odom,
+        )
+        action = decide_obstacle_action(obstacle_height_cm=obstacle_height_cm)
+        logger.info(
+            "Obstacle detected ahead, applying MVP decision.",
+            obstacle_height_cm=obstacle_height_cm,
+            action=action,
+        )
+
+        if action == "cross":
+            with self._lock:
+                in_path_following = self._state == "path_following"
+            self._mvp_cross_creep = in_path_following and self._should_creep_for_mvp_cross(
+                current_odom
+            )
+            return False
+
+        self._mvp_cross_creep = False
+        if action == "detour":
+            self.cmd_vel.on_next(Twist())
+            self.stopped_navigating.on_next("obstacle_found")
+            return True
+
+        self.stopped_navigating.on_next("obstacle_abort")
+        return True
 
     def _compute_initial_rotation(self) -> Twist:
         with self._lock:
@@ -251,6 +370,40 @@ class LocalPlanner(Resource):
             return self._compute_path_following()
 
         return self._controller.rotate(yaw_error)
+
+    def _update_mvp_cross_motion_limits(self, current_odom: PoseStamped | None) -> None:
+        """Apply brief creep only when very close to the low cross sill (≤10 cm)."""
+        self._mvp_cross_creep = False
+        if not self._global_config.obstacle_crossing_mvp or current_odom is None:
+            return
+
+        with self._lock:
+            if self._state != "path_following":
+                return
+
+        inferred_height_cm = infer_forward_obstacle_height_cm(
+            current_odom.position.x,
+            current_odom.position.y,
+            forward_yaw=current_odom.orientation.euler[2],
+        )
+        if inferred_height_cm is None:
+            return
+
+        if decide_obstacle_action(obstacle_height_cm=inferred_height_cm) != "cross":
+            return
+
+        self._mvp_cross_creep = self._should_creep_for_mvp_cross(current_odom)
+
+    @staticmethod
+    def _should_creep_for_mvp_cross(current_odom: PoseStamped | None) -> bool:
+        if current_odom is None:
+            return False
+        low = MVP_SILLS[0]
+        dist = math.hypot(
+            current_odom.position.x - low.x,
+            current_odom.position.y - low.y,
+        )
+        return dist <= _MVP_CROSS_CREEP_DISTANCE_M
 
     def get_distance_to_path(self) -> float | None:
         with self._lock:
@@ -309,6 +462,31 @@ class LocalPlanner(Resource):
 
         return self._controller.rotate(yaw_error)
 
+    def _log_nav_cmd_vel(self, cmd_vel: Twist) -> None:
+        if cmd_vel.is_zero():
+            return
+        now = time.perf_counter()
+        if now - self._nav_cmd_vel_log_last < 2.0:
+            return
+        self._nav_cmd_vel_log_last = now
+        logger.info(
+            "Publishing nav_cmd_vel",
+            linear_x=round(cmd_vel.linear.x, 3),
+            linear_y=round(cmd_vel.linear.y, 3),
+            angular_z=round(cmd_vel.angular.z, 3),
+        )
+
+    @staticmethod
+    def _scale_twist_for_mvp_cross(cmd_vel: Twist) -> Twist:
+        return Twist(
+            linear=Vector3(
+                cmd_vel.linear.x * _MVP_CROSS_CREEP_LINEAR_SCALE,
+                cmd_vel.linear.y * _MVP_CROSS_CREEP_LINEAR_SCALE,
+                cmd_vel.linear.z,
+            ),
+            angular=cmd_vel.angular,
+        )
+
     def _reset_state(self) -> None:
         with self._lock:
             self._change_state("idle")
@@ -316,6 +494,8 @@ class LocalPlanner(Resource):
             self._path_clearance = None
             self._path_distancer = None
             self._pose_index = 0
+            self._mvp_cross_creep = False
+            self._mvp_detour_hold_active = False
             self._controller.reset_errors()
 
     def _send_navigation_costmap(self, path: Path, path_clearance: PathClearance) -> None:

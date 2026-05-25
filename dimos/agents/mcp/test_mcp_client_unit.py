@@ -208,6 +208,43 @@ def test_tool_stream_progress_frame_becomes_human_message(mcp_client: McpClient)
     assert str(msg.content) == "[tool:follow_person] Found a person"
 
 
+def test_on_system_modules_skips_agent_without_openai_api_key(mcp_client: McpClient) -> None:
+    mcp_client.config.model_fixture = None
+    mcp_client._state_graph = None
+    mcp_client._thread = MagicMock()
+    mcp_client._thread.is_alive.return_value = False
+
+    with patch.dict("os.environ", {}, clear=True):
+        with patch.object(mcp_client, "_fetch_tools") as fetch_tools:
+            mcp_client.on_system_modules([])
+
+    fetch_tools.assert_not_called()
+    assert mcp_client._state_graph is None
+    mcp_client._thread.start.assert_not_called()
+
+
+def test_thread_loop_reports_disabled_agent(mcp_client: McpClient) -> None:
+    import threading
+
+    mcp_client._stop_event = threading.Event()
+    mcp_client._lock = threading.RLock()
+    mcp_client._state_graph = None
+    mcp_client._message_queue = Queue()
+    mcp_client.agent = MagicMock()
+    mcp_client.agent_idle = MagicMock()
+
+    mcp_client._message_queue.put(HumanMessage(content="hello"))
+
+    worker = threading.Thread(target=mcp_client._thread_loop, daemon=True)
+    worker.start()
+    worker.join(timeout=2.0)
+    mcp_client._stop_event.set()
+    worker.join(timeout=1.0)
+
+    mcp_client.agent.publish.assert_called_once()
+    mcp_client.agent_idle.publish.assert_called_once_with(True)
+
+
 def test_mcp_tool_call_sends_progress_token(mcp_client: McpClient) -> None:
     """Every `tools/call` request carries a `_meta.progressToken`."""
     captured: dict[str, object] = {}

@@ -19,8 +19,12 @@ from numpy.typing import NDArray
 
 from dimos.core.global_config import GlobalConfig
 from dimos.mapping.occupancy.path_mask import make_path_mask
-from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
+
+# height_cost occupancy maps terrain slope to 0–100; lethal binary maps use 100.
+# Match gradient.GradientStrategy default obstacle_threshold (50).
+_OBSTACLE_AHEAD_COST_THRESHOLD = 50
 
 
 class PathClearance:
@@ -86,7 +90,8 @@ class PathClearance:
         if costmap is None:
             return True
 
-        return bool(np.any(costmap.grid[self.mask] == CostValues.OCCUPIED))
+        corridor = costmap.grid[self.mask]
+        return bool(np.any(corridor >= _OBSTACLE_AHEAD_COST_THRESHOLD))
 
     def _pose_distance(self, index1: int, index2: int) -> float:
         p1 = self._path.poses[index1].position
