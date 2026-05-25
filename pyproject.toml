@@ -141,7 +141,6 @@ dimos = "dimos.robot.cli.dimos:cli_main"
 rerun-bridge = "dimos.visualization.rerun.bridge:app"
 doclinks = "dimos.utils.docs.doclinks:main"
 dtop = "dimos.utils.cli.dtop:main"
-dtop-plot = "dimos.utils.cli.dtop_plot:main"
 tell-robot = "dimos.utils.cli.tell_robot:main"
 
 [project.urls]

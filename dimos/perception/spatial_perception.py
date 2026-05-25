@@ -221,6 +221,7 @@ class SpatialMemory(Module):
             chroma_client=self._chroma_client,
             visual_memory=self._visual_memory,
             embedding_provider=self.embedding_provider,
+            max_stored_frames=self.max_stored_frames,
         )
 
         room_collection_name = f"{self.collection_name}_room_images"
@@ -375,15 +376,16 @@ class SpatialMemory(Module):
                 self.stored_frame_count += 1
                 self._stored_frame_ids.append(frame_id)
 
-                # Evict oldest frames when exceeding the max cap
-                while len(self._stored_frame_ids) > self.max_stored_frames:
-                    evict_id = self._stored_frame_ids.pop(0)
-                    try:
-                        self.vector_db.image_collection.delete(ids=[evict_id])
-                    except Exception:
-                        pass
-                    if self._visual_memory is not None:
-                        self._visual_memory.images.pop(evict_id, None)
+                # Evict oldest frames when exceeding the max cap (0 = unlimited)
+                if self.max_stored_frames > 0:
+                    while len(self._stored_frame_ids) > self.max_stored_frames:
+                        evict_id = self._stored_frame_ids.pop(0)
+                        try:
+                            self.vector_db.image_collection.delete(ids=[evict_id])
+                        except Exception:
+                            pass
+                        if self._visual_memory is not None:
+                            self._visual_memory.images.pop(evict_id, None)
 
             logger.info(
                 f"Stored frame at position ({current_pose.position.x:.2f}, {current_pose.position.y:.2f}, {current_pose.position.z:.2f}), "
@@ -513,15 +515,16 @@ class SpatialMemory(Module):
             self.stored_frame_count += 1
             self._stored_frame_ids.append(frame_id)
 
-            # Evict oldest frames when exceeding the max cap
-            while len(self._stored_frame_ids) > self.max_stored_frames:
-                evict_id = self._stored_frame_ids.pop(0)
-                try:
-                    self.vector_db.image_collection.delete(ids=[evict_id])
-                except Exception:
-                    pass
-                if self._visual_memory is not None:
-                    self._visual_memory.images.pop(evict_id, None)
+            # Evict oldest frames when exceeding the max cap (0 = unlimited)
+            if self.max_stored_frames > 0:
+                while len(self._stored_frame_ids) > self.max_stored_frames:
+                    evict_id = self._stored_frame_ids.pop(0)
+                    try:
+                        self.vector_db.image_collection.delete(ids=[evict_id])
+                    except Exception:
+                        pass
+                    if self._visual_memory is not None:
+                        self._visual_memory.images.pop(evict_id, None)
 
             logger.info(
                 f"Stored frame at position ({position_v3.x:.2f}, {position_v3.y:.2f}, {position_v3.z:.2f}), "

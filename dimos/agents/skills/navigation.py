@@ -74,9 +74,12 @@ _VLM_OBJECT_LIST_PROMPT = (
     "禁止英文：不要写 computer/desk/chair/monitor/table。\n"
     "正确示例：电脑、书桌、办公椅、灭火器、电视。\n"
     "Return ONLY a JSON array: "
-    '[{"name": "<中文名>", "description": "<简短中文说明>"}]. '
-    "跳过墙面、地面、天花板、门。若无物体，返回 []."
+    '[{"name": "<中文名>", "description": "<简短中文说明>", "bbox": [x1, y1, x2, y2]}]. '
+    "bbox 为物体在画面中的边界框（像素坐标）。跳过墙面、地面、天花板、门。若无物体，返回 []."
 )
+
+# Camera horizontal FOV in degrees for bbox-to-bearing conversion.
+_CAMERA_HFOV_DEG = float(__import__("os").getenv("DIMOS_CAMERA_HFOV_DEG", "69"))
 
 # Fallback when VLM still returns English object names (legacy tags / weak compliance).
 _VLM_NAME_EN_TO_ZH: dict[str, str] = {
@@ -757,6 +760,11 @@ class NavigationSkillContainer(Module):
         if not rooms:
             logger.info("[L4]   No room-type landmarks — sweep skipped")
             return None
+        # Look up stored object bearing if available
+        obj_rec = self._resolve_landmark_from_query(query)
+        stored_yaw: float | None = None
+        if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
+            stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
         logger.info("[L4]   Sweeping %d room(s) ...", len(rooms))
         for ri, room in enumerate(rooms):
             rname = room.name or room.record_id
@@ -778,6 +786,11 @@ class NavigationSkillContainer(Module):
             if "severe visual/odom drift" in nav_msg.lower():
                 logger.warning("Room sweep: drift abort at %r; trying next room", rname)
                 continue
+            # Use stored bearing if available, then VLM acquire + track
+            if stored_yaw is not None:
+                vis_msg = self._visual_acquire_object(query, stored_yaw)
+                if vis_msg:
+                    return vis_msg
             self._rotate_scan_in_place()
             found = self._navigate_to_object(query, timeout=8.0)
             if found:
@@ -791,7 +804,10 @@ class NavigationSkillContainer(Module):
             time.sleep(1.0)
             return
         try:
-            us.relative_move(forward=0.0, left=0.0, degrees=360.0)
+            if hasattr(us, "relative_move"):
+                us.relative_move(forward=0.0, left=0.0, degrees=360.0)
+            elif hasattr(us, "move"):
+                us.move(x=0.0, y=0.0, yaw=360.0)
         except Exception:
             logger.exception("360 scan rotation failed")
 
@@ -809,7 +825,7 @@ class NavigationSkillContainer(Module):
         dx = gx - float(self._latest_odom.position.x)
         dy = gy - float(self._latest_odom.position.y)
         if math.hypot(dx, dy) < 1e-6:
-            return float(self._latest_odom.orientation.z)
+            return float(self._latest_odom.orientation.to_euler().z)
         return math.atan2(dy, dx)
 
     def _room_name_at_position(self, x: float, y: float, *, radius: float = 2.5) -> str | None:
@@ -952,13 +968,14 @@ class NavigationSkillContainer(Module):
             return (active_goal, False)
         if room_name and clip_to_odom < 0.8:
             try:
+                euler = self._latest_odom.orientation.to_euler()
                 room_loc = RobotLocation(
                     name=room_name,
                     position=(ox, oy, float(self._latest_odom.position.z)),
                     rotation=(
-                        float(self._latest_odom.orientation.x),
-                        float(self._latest_odom.orientation.y),
-                        float(self._latest_odom.orientation.z),
+                        float(euler.x),
+                        float(euler.y),
+                        float(euler.z),
                     ),
                 )
                 self._spatial_memory.tag_location_with_image(room_loc, self._latest_image.data)
@@ -1109,6 +1126,62 @@ class NavigationSkillContainer(Module):
         out = us.execute_sport_command(cmd)
         return f"Reached '{target_name}', executing arrival_action={action!r}: {out}"
 
+    def _visual_acquire_object(
+        self, target_name: str, stored_yaw: float | None = None
+    ) -> str | None:
+        """After reaching object coordinates, visually locate and face the object.
+
+        If a stored bearing is available, rotate to face that direction first,
+        then use VLM detection + tracking to fine-align.
+
+        Args:
+            target_name: The object name to search for.
+            stored_yaw: If known, the world-frame yaw angle (radians) to face first.
+
+        Returns:
+            Success message if object was visually acquired, None otherwise.
+        """
+        # Step 1: face the stored bearing if available
+        if stored_yaw is not None:
+            euler = self._odom_euler_tuple()
+            if euler is not None:
+                diff = stored_yaw - euler[2]
+                diff = math.atan2(math.sin(diff), math.cos(diff))
+                diff_deg = math.degrees(diff)
+                if abs(diff_deg) > 5.0:
+                    logger.info(
+                        "[visual_acquire] turning %.1f° to face '%s' (stored yaw=%.1f°)",
+                        diff_deg,
+                        target_name,
+                        math.degrees(stored_yaw),
+                    )
+                    self._rotate_in_place_degrees(diff_deg)
+                    time.sleep(0.5)
+
+        # Step 2: VLM detection + tracking in current view
+        try:
+            result = self._navigate_to_object(target_name, timeout=15.0)
+            if result:
+                logger.info("[visual_acquire] ✓ '%s' found in current view", target_name)
+                return f"Visually acquired '{target_name}'"
+        except Exception:
+            logger.exception("[visual_acquire] VLM re-scan error for '%s'", target_name)
+
+        # Step 3: 360° scan if not in current view
+        logger.info("[visual_acquire] '%s' not in view; doing 360° scan ...", target_name)
+        self._rotate_scan_in_place()
+        time.sleep(0.5)
+        try:
+            result = self._navigate_to_object(target_name, timeout=10.0)
+            if result:
+                logger.info("[visual_acquire] ✓ '%s' found after 360° scan", target_name)
+                return f"Visually acquired '{target_name}' after 360° scan"
+        except Exception:
+            logger.exception("[visual_acquire] VLM re-scan after 360° error for '%s'", target_name)
+
+        logger.warning("[visual_acquire] ✗ '%s' not found visually", target_name)
+        return None
+
     def _parse_vlm_object_list_response(self, response: str | None) -> list[dict[str, Any]]:
         parsed = extract_json_from_llm_response(response or "")
         if parsed is None:
@@ -1147,8 +1220,10 @@ class NavigationSkillContainer(Module):
         room_name: str | None = None,
         frame_poses: list[tuple[tuple[float, float, float], tuple[float, float, float]]]
         | None = None,
+        frames: list[Any] | None = None,
     ) -> int:
         stored = 0
+        hfov_rad = math.radians(_CAMERA_HFOV_DEG)
         for obj in objects:
             name = _normalize_vlm_object_name((obj.get("name") or "").strip())
             if not name:
@@ -1160,6 +1235,50 @@ class NavigationSkillContainer(Module):
             )
             if indices:
                 desc = f"{desc} (views {indices})".strip() if desc else f"views {indices}"
+
+            # Compute object bearing from bbox if available
+            bbox = obj.get("bbox")
+            # Single frame without explicit image_indices defaults to view 0
+            _eff_idx = view_idx
+            if _eff_idx is None and frames is not None and len(frames) == 1:
+                _eff_idx = 0
+            if bbox and frames and _eff_idx is not None and 0 <= _eff_idx < len(frames):
+                try:
+                    bbox_ok = (
+                        isinstance(bbox, (list, tuple))
+                        and len(bbox) == 4
+                        and all(isinstance(v, (int, float)) for v in bbox)
+                    )
+                    if bbox_ok:
+                        frame = frames[_eff_idx]
+                        if hasattr(frame, "shape") and len(frame.shape) >= 2:
+                            h, w = frame.shape[:2]
+                            x1, y1, x2, y2 = (float(v) for v in bbox)
+                            # Normalize to pixel coords (0-1 fraction, 0-1000, or absolute)
+                            mx = max(x1, y1, x2, y2)
+                            if mx <= 1.0:
+                                x1, x2 = x1 * w, x2 * w
+                            elif mx <= 1000.0 and min(x1, y1, x2, y2) >= 0.0:
+                                x1, x2 = x1 / 1000.0 * w, x2 / 1000.0 * w
+                            if 0 <= x1 < x2 <= w * 2:
+                                cx = (x1 + x2) / 2.0
+                                angle_offset = (cx / w - 0.5) * hfov_rad
+                                robot_yaw = float(obj_rot[2])
+                                object_yaw = robot_yaw + angle_offset
+                                obj_rot = (0.0, 0.0, object_yaw)
+                                logger.info(
+                                    "VLM bbox bearing: '%s' cx=%.0f/%d "
+                                    "angle_offset=%.1f° robot_yaw=%.1f° → object_yaw=%.1f°",
+                                    name,
+                                    cx,
+                                    w,
+                                    math.degrees(angle_offset),
+                                    math.degrees(robot_yaw),
+                                    math.degrees(object_yaw),
+                                )
+                except Exception:
+                    logger.debug("bbox-to-bearing failed for '%s'", name, exc_info=True)
+
             meta: dict[str, Any] = {
                 "observed_position": list(obj_pos),
                 "observed_rotation": list(obj_rot),
@@ -1258,7 +1377,9 @@ class NavigationSkillContainer(Module):
             return
 
         if n == 1:
-            prompt = _VLM_OBJECT_LIST_PROMPT + ' Include "image_indices": [0] for each object.'
+            prompt = (
+                _VLM_OBJECT_LIST_PROMPT + ' Include "image_indices": [0] for each object.'
+            )
         else:
             prompt = (
                 f"以下 {n} 张图（编号 0 到 {n - 1}）来自房间「{room_name}」的 360° 环视。\n"
@@ -1266,7 +1387,8 @@ class NavigationSkillContainer(Module):
                 "【硬性要求】name 必须是 1–4 个汉字（如：电脑、书桌、办公椅），禁止 computer/desk/chair。\n"
                 "Return ONLY a JSON array: "
                 '[{"name": "<中文名>", "description": "<简短中文说明>", '
-                '"image_indices": [0, 2]}]. '
+                '"image_indices": [0, 2], "bbox": [x1, y1, x2, y2]}]. '
+                "bbox 为物体在对应照片中的边界框（像素坐标）。"
                 "跳过墙面、地面、天花板、门。若无物体，返回 []."
             )
 
@@ -1292,6 +1414,7 @@ class NavigationSkillContainer(Module):
             rotation,
             room_name=room_name,
             frame_poses=frame_poses,
+            frames=frames,
         )
         logger.info(
             "[VLM] panorama DONE room=%r stored=%d object(s) from %d frame(s)",
@@ -1335,10 +1458,16 @@ class NavigationSkillContainer(Module):
             return f"No objects parsed from VLM response: {(response or '')[:200]}"
 
         pos = self._latest_odom.position if self._latest_odom else None
-        rot = self._latest_odom.orientation if self._latest_odom else None
+        euler_tuple = self._odom_euler_tuple()
         position = (float(pos.x), float(pos.y), float(pos.z)) if pos else (0.0, 0.0, 0.0)
-        rotation = (float(rot.x), float(rot.y), float(rot.z)) if rot else (0.0, 0.0, 0.0)
-        stored = self._store_detected_objects(objects, position, rotation)
+        rotation = euler_tuple if euler_tuple else (0.0, 0.0, 0.0)
+        stored = self._store_detected_objects(
+            objects,
+            position,
+            rotation,
+            frames=[self._latest_image.data],
+            frame_poses=[(position, rotation)],
+        )
         names = [(o.get("name") or "").strip() for o in objects if (o.get("name") or "").strip()]
 
         if stored:
@@ -1454,7 +1583,11 @@ class NavigationSkillContainer(Module):
         logger.info("[L5]   ✓ VLM batch confirmed '%s' in indices: %s", query, matched_indices)
 
         # Navigate to the first confirmed match
-        idx = int(matched_indices[0])
+        try:
+            idx = int(matched_indices[0])
+        except (ValueError, TypeError):
+            logger.warning("VLM batch query: non-numeric index %r", matched_indices[0])
+            return None
         if idx < 0 or idx >= len(candidates):
             logger.warning("VLM batch query: index %d out of range", idx)
             return None
@@ -1488,6 +1621,15 @@ class NavigationSkillContainer(Module):
                     if "severe visual/odom drift" in nav_msg.lower():
                         logger.warning("[vlm_memory] drift at room '%s'", room_name)
                         return None
+                    # Use stored bearing if object was previously tagged
+                    obj_rec = self._resolve_landmark_from_query(query)
+                    stored_yaw: float | None = None
+                    if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
+                        stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
+                    if stored_yaw is not None:
+                        vis_msg = self._visual_acquire_object(query, stored_yaw)
+                        if vis_msg:
+                            return vis_msg
                     found = self._navigate_to_object(query, timeout=15.0)
                     if found:
                         return found
@@ -1496,9 +1638,7 @@ class NavigationSkillContainer(Module):
                         f"reached the room but could not track '{query}' in view. {nav_msg}"
                     )
 
-        pos_x = float(meta.get("pos_x", 0))
-        pos_y = float(meta.get("pos_y", 0))
-        if abs(pos_x) < 1e-6 and abs(pos_y) < 1e-6:
+        if "pos_x" not in meta or "pos_y" not in meta:
             logger.warning(
                 "[vlm_memory] no coordinates for '%s' (source=%s meta=%s)",
                 query,
@@ -1506,17 +1646,37 @@ class NavigationSkillContainer(Module):
                 meta,
             )
             return None
+        pos_x = float(meta["pos_x"])
+        pos_y = float(meta["pos_y"])
 
         goal_pose = PoseStamped(
             position=make_vector3(pos_x, pos_y, 0.0),
             orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
             frame_id="map",
         )
-        return self._navigate_to(
-            goal_pose,
+        self._navigation.set_goal(goal_pose)
+        # Block until arrival (cap at 120s)
+        deadline = time.time() + 120.0
+        arrived = False
+        while time.time() < deadline:
+            if self._navigation.is_goal_reached():
+                arrived = True
+                break
+            time.sleep(0.5)
+        prefix = (
             f"Found '{query}' via VLM batch inspection of {len(candidates)} stored images "
-            f"(source={source}, index={idx}).",
+            f"(source={source}, index={idx})."
         )
+        if not arrived:
+            return f"{prefix} Navigation started but did not reach target within timeout."
+        # Try visual acquire if object has stored bearing
+        obj_rec = self._resolve_landmark_from_query(query)
+        if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
+            stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
+            vis_msg = self._visual_acquire_object(query, stored_yaw)
+            if vis_msg:
+                return f"{prefix} ({vis_msg})"
+        return prefix
 
     def _navigate_using_semantic_map(self, query: str) -> str | None:
         results = self._spatial_memory.query_by_text(query)
@@ -1783,14 +1943,17 @@ class NavigationSkillContainer(Module):
                     time.sleep(0.25)
 
             if is_object_landmark:
-                goal_yaw = self._yaw_toward_point(target.position[0], target.position[1])
+                # Prefer stored object yaw; fall back to approach bearing
+                obj_yaw = target.rotation[2]
+                if abs(obj_yaw) < 1e-6:
+                    obj_yaw = self._yaw_toward_point(target.position[0], target.position[1])
                 standoff_pose = PoseStamped(
                     position=make_vector3(
                         target.position[0],
                         target.position[1],
                         target.position[2],
                     ),
-                    orientation=Quaternion.from_euler(Vector3(0.0, 0.0, goal_yaw)),
+                    orientation=Quaternion.from_euler(Vector3(0.0, 0.0, obj_yaw)),
                     frame_id="map",
                 )
             else:
@@ -1871,9 +2034,27 @@ class NavigationSkillContainer(Module):
         err = _try_navigate()
         if err is None:
             tname = target.name or target.record_id
+            vis_msg = ""
+            if is_object_landmark:
+                stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
+                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
+                if vis_msg:
+                    logger.info("[L3] Visual acquire: %s", vis_msg)
+                else:
+                    logger.warning("[L3] Visual acquire: '%s' not found in view", tname)
             if run_arrival_action:
-                return self._run_arrival_action(arrival_action, tname)
-            return f"Arrived near '{tname}' standoff (arrival_action not run)."
+                action_msg = self._run_arrival_action(arrival_action, tname)
+                if vis_msg:
+                    return f"{action_msg} ({vis_msg})"
+                if is_object_landmark:
+                    return f"{action_msg} (could not visually acquire '{tname}')"
+                return action_msg
+            base = f"Arrived near '{tname}' standoff"
+            if vis_msg:
+                return f"{base} ({vis_msg})"
+            if is_object_landmark:
+                return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
+            return f"{base} (arrival_action not run)."
 
         # Severe drift recovery: re-plan topology from current odom position
         logger.warning(
@@ -1885,9 +2066,27 @@ class NavigationSkillContainer(Module):
         err2 = _try_navigate()
         if err2 is None:
             tname = target.name or target.record_id
+            vis_msg = ""
+            if is_object_landmark:
+                stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
+                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
+                if vis_msg:
+                    logger.info("[L3] Visual acquire (retry): %s", vis_msg)
+                else:
+                    logger.warning("[L3] Visual acquire (retry): '%s' not found in view", tname)
             if run_arrival_action:
-                return self._run_arrival_action(arrival_action, tname)
-            return f"Arrived near '{tname}' standoff after drift recovery (arrival_action not run)."
+                action_msg = self._run_arrival_action(arrival_action, tname)
+                if vis_msg:
+                    return f"{action_msg} ({vis_msg})"
+                if is_object_landmark:
+                    return f"{action_msg} (could not visually acquire '{tname}')"
+                return action_msg
+            base = f"Arrived near '{tname}' standoff after drift recovery"
+            if vis_msg:
+                return f"{base} ({vis_msg})"
+            if is_object_landmark:
+                return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
+            return f"{base} (arrival_action not run)."
 
         return (
             "Navigation aborted: severe visual/odom drift persisted after re-plan. "

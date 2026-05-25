@@ -26,7 +26,7 @@ def _label_matches_query(label: str, query: str) -> bool:
     if not query:
         return True
     if not label:
-        return True
+        return False
     l, q = label.lower().strip(), query.lower().strip()
     if l == q or q in l or l in q:
         return True
