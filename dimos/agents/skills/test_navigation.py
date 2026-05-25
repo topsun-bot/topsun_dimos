@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+import pytest
 
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.core.core import rpc
