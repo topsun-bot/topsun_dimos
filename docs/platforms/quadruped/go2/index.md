@@ -139,12 +139,47 @@ The agent subscribes to camera, LiDAR, and spatial memory streams — it sees wh
 | Blueprint | Description |
 |-----------|-------------|
 | `unitree-go2-basic` | Connection + visualization (no navigation) |
-| `unitree-go2` | Full navigation stack |
+| `unitree-go2` | Full navigation stack (legacy: Go2 built-in 4D LiDAR + VoxelGridMapper + CostMapper + ReplanningAStar) |
+| `unitree-go2-nav-onboard` | **New (jtlinux)**: Mid-360 + FAST-LIO2 + PGO + nav_stack (planner=simple); long-range drift correction |
 | `unitree-go2-agentic` | Navigation + LLM agent + MCP tool access |
 | `unitree-go2-agentic-ollama` | Agent with local Ollama models |
 | `unitree-go2-spatial` | Navigation + spatial memory |
 | `unitree-go2-detection` | Navigation + object detection |
 | `unitree-go2-ros` | ROS 2 bridge mode |
+
+## Mid-360 + nav_stack onboard mode (`unitree-go2-nav-onboard`)
+
+For long-range navigation with drift correction, use the new `unitree-go2-nav-onboard`
+blueprint. It runs a Livox Mid-360 LiDAR + FAST-LIO2 + PGO loop closure + nav_stack
+(SimplePlanner / LocalPlanner / PathFollower) entirely on the Jetson Orin NX expansion
+board mounted on the Go2.
+
+| Aspect | Legacy `unitree-go2` | New `unitree-go2-nav-onboard` |
+|---|---|---|
+| LiDAR | Go2 built-in 4D voxelmap | Livox Mid-360 (40-line, 360°×59°, 40 m @ 10%) |
+| Odometry | WebRTC-derived | FAST-LIO2 (LiDAR+IMU tightly coupled) |
+| Loop closure | None | PGO (GTSAM iSAM2 + PCL ICP) |
+| TF | Single world | Layered map / odom / body / sensor |
+| Planner | ReplanningAStar | SimplePlanner (default) or FarPlanner |
+| Controller | MovementManager P-control | PathFollower (Pure Pursuit + PID yaw) |
+| Default `max_speed` | 1.0 m/s | **0.4 m/s** (conservative merge default; can tune up to 0.6 in experiments) |
+
+### Quick start
+
+```bash
+# On the Orin NX expansion board (192.168.123.18)
+export LIDAR_HOST_IP=192.168.123.18
+export LIDAR_IP=192.168.123.20
+unset ROBOT_IP   # auto-discovery via dimos go2tool
+
+dimos --viewer rerun run unitree-go2-nav-onboard --daemon
+dimos status
+dimos log -f
+```
+
+For full deployment / runbook / rollback, see
+[`jiangtao/runbook/go2-nav-onboard.md`](/jiangtao/runbook/go2-nav-onboard.md)
+and [`jiangtao/plan/plan.md`](/jiangtao/plan/plan.md).
 
 ## Deep Dive
 

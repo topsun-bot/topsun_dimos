@@ -100,7 +100,7 @@ inline std::pair<int, std::string> write_sdk_config(const std::string& host_ip,
         "    \"host_net_info\": [\n"
         "      {\n"
         "        \"host_ip\": \"%s\",\n"
-        "        \"multicast_ip\": \"224.1.1.5\",\n"
+     //   "        \"multicast_ip\": \"224.1.1.5\",\n"
         "        \"cmd_data_port\": %d,\n"
         "        \"push_msg_port\": %d,\n"
         "        \"point_data_port\": %d,\n"

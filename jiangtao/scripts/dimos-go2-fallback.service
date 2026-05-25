@@ -1,0 +1,36 @@
+# dimos-go2-fallback.service
+# 当 dimos-go2-nav.service 失败时，由 systemd 通过 OnFailure 自动启动这个，
+# 跑老的 unitree-go2 蓝图作为 fallback——详见 plan.md §11.2 回滚命令清单 + E-6 任务。
+#
+# 永远不要把这个 unit 设成 enable（否则会和主 unit 抢端口）。
+
+[Unit]
+Description=DimOS Go2 fallback (旧 unitree-go2 蓝图，仅用于主 unit 失败后接管)
+After=network-online.target
+
+[Service]
+Type=simple
+User=unitree
+Group=unitree
+WorkingDirectory=/home/unitree/jiangtao/topsun_dimos
+
+# 旧蓝图不需要 mid-360 / Go2 EDU 网段，只用 WebRTC 控制 Go2
+Environment="DIMOS_VIEWER=rerun"
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dimos-go2-fallback
+
+# 启动前确保新蓝图进程已经清理（防止端口冲突）
+ExecStartPre=-/home/unitree/jiangtao/topsun_dimos/.venv/bin/dimos stop --force
+ExecStart=/home/unitree/jiangtao/topsun_dimos/.venv/bin/dimos run unitree-go2
+ExecStop=/home/unitree/jiangtao/topsun_dimos/.venv/bin/dimos stop
+
+# 失败不再 restart，让人介入排查
+Restart=no
+
+TimeoutStopSec=15s
+KillMode=mixed
+KillSignal=SIGTERM
+
+# 不挂 [Install] 段，禁止 systemctl enable

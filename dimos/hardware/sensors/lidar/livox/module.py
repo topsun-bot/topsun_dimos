@@ -55,8 +55,12 @@ class Mid360Config(NativeModuleConfig):
     cwd: str | None = "cpp"
     executable: str = "result/bin/mid360_native"
     build_command: str | None = "nix build .#mid360_native"
-    host_ip: str = "192.168.1.5"
-    lidar_ip: str = "192.168.1.155"
+    # Livox 出厂默认 IP
+    # host_ip: str = "192.168.1.5"
+    # lidar_ip: str = "192.168.1.155"
+    # go2上 配置ip
+    host_ip: str = "192.168.1.18"
+    lidar_ip: str = "192.168.1.20"
     frequency: float = 10.0
     enable_imu: bool = True
     frame_id: str = "lidar_link"

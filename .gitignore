@@ -7,6 +7,9 @@
 
 .vscode/
 
+# Personal Cursor rules / scripts (not shared)
+.cursor/
+
 # Ignore Python cache files
 __pycache__/
 *.pyc

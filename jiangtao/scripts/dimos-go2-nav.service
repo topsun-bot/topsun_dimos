@@ -1,0 +1,71 @@
+# dimos-go2-nav.service
+# 拓展坞（Jetson Orin NX）上自动启动 Go2 + Mid-360 onboard 导航蓝图。
+#
+# 安装：
+#   sudo cp jiangtao/scripts/dimos-go2-nav.service /etc/systemd/system/
+#   sudo cp jiangtao/scripts/dimos-go2-fallback.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable dimos-go2-nav.service       # 开机自启
+#   sudo systemctl start dimos-go2-nav.service        # 立即启动
+#
+# 状态 / 日志：
+#   systemctl status dimos-go2-nav
+#   journalctl -u dimos-go2-nav -f
+#
+# 停止：
+#   sudo systemctl stop dimos-go2-nav
+#
+# Fallback 策略（E-6）：
+#   本 unit 退出非 0 时，systemd 会触发 OnFailure=dimos-go2-fallback.service，
+#   后者跑老的 unitree-go2 蓝图作为安全网（详见 plan.md §11.2）。
+
+[Unit]
+Description=DimOS Go2 + Mid-360 onboard navigation (jtlinux)
+Documentation=file:///home/unitree/jiangtao/topsun_dimos/jiangtao/runbook/go2-nav-onboard.md
+After=network-online.target
+Wants=network-online.target
+# 失败 30 秒内自动启动老蓝图，详见 dimos-go2-fallback.service
+OnFailure=dimos-go2-fallback.service
+
+[Service]
+Type=simple
+User=unitree
+Group=unitree
+WorkingDirectory=/home/unitree/jiangtao/topsun_dimos
+
+# 环境变量
+Environment="LIDAR_HOST_IP=192.168.123.18"
+Environment="LIDAR_IP=192.168.123.20"
+# ROBOT_IP 不设则走 jtlinux 81e9f144 的自动发现
+# 如确认是某台具体 Go2 可显式设定，例如：
+#   Environment="ROBOT_IP=192.168.123.161"
+Environment="DIMOS_VIEWER=rerun"
+
+# 日志：dimos 自己写到 ~/.local/state/dimos/logs/<run-id>/ 下
+# stdout/stderr 走 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dimos-go2-nav
+
+# 启动命令——用 .venv 的 dimos 而不是依赖 PATH
+ExecStart=/home/unitree/jiangtao/topsun_dimos/.venv/bin/dimos run unitree-go2-nav-onboard
+# Stop 用 dimos stop 触发 SIGTERM（5s 后自动 SIGKILL）
+ExecStop=/home/unitree/jiangtao/topsun_dimos/.venv/bin/dimos stop
+
+# 失败重启策略（仅前 3 次自动 restart，超过则 OnFailure 接管）
+Restart=on-failure
+RestartSec=10s
+StartLimitInterval=300s
+StartLimitBurst=3
+
+# 资源限制（防止 SLAM 跑飞吞内存）
+MemoryHigh=10G
+MemoryMax=12G
+
+# 优雅停止：先发 SIGTERM 给 dimos stop，超时再 SIGKILL
+TimeoutStopSec=15s
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
