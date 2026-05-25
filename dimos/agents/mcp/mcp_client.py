@@ -35,6 +35,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.rpc_client import RPCClient
 from dimos.core.stream import In, Out
+from dimos.core.transport import pLCMTransport
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.sequential_ids import SequentialIds
 
@@ -53,6 +54,12 @@ class McpClient(Module):
     agent: Out[BaseMessage]
     human_input: In[str]
     agent_idle: Out[bool]
+
+    _stream_transport_pins = {
+        "human_input": pLCMTransport,
+        "agent": pLCMTransport,
+        "agent_idle": pLCMTransport,
+    }
 
     _lock: RLock
     _state_graph: CompiledStateGraph[Any, Any, Any, Any] | None
