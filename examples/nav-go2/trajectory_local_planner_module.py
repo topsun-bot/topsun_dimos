@@ -148,7 +148,8 @@ class TrajectoryLocalPlannerModule(Module):
         if self._uses_navigation_map():
             return
         lidar_xy = self._pointcloud_to_lidar_xy(cloud)
-        stamp = cloud.ts if getattr(cloud, "ts", None) else time.time()
+        cloud_ts = getattr(cloud, "ts", None)
+        stamp = cloud_ts if cloud_ts is not None else time.time()
         with self._lidar_lock:
             self._latest_lidar_xy = lidar_xy
             self._latest_lidar_frame_id = cloud.frame_id
@@ -179,19 +180,18 @@ class TrajectoryLocalPlannerModule(Module):
                 logger.warning("%s inference skipped: %s", self.engine_name, exc)
             return
 
-        grid = rasterize_trajectories_to_costmap(
-            result.trajectories,
-            forward_m=self.config.grid_forward_m,
-            lateral_m=self.config.grid_lateral_m,
-            resolution_m=self.config.grid_resolution_m,
-            frame_id=self.config.trajectory_frame_id,
-            ts=image.ts,
-        )
-        if self.config.publish_debug_traversability_map:
-            self.traversability_map.publish(grid)
-
         try:
             self._validate_trajectories(result.trajectories)
+            grid = rasterize_trajectories_to_costmap(
+                result.trajectories,
+                forward_m=self.config.grid_forward_m,
+                lateral_m=self.config.grid_lateral_m,
+                resolution_m=self.config.grid_resolution_m,
+                frame_id=self.config.trajectory_frame_id,
+                ts=image.ts,
+            )
+            if self.config.publish_debug_traversability_map:
+                self.traversability_map.publish(grid)
             best_trajectory = self._select_best_trajectory(result.trajectories, image.ts)
             local_waypoints = self._trajectory_to_path(
                 best_trajectory,

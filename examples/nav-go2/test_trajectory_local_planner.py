@@ -32,6 +32,7 @@ from trajectory_local_planner_module import (
 )
 
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
 
 class DummyTrajectoryEngine:
@@ -49,6 +50,14 @@ class DummyTrajectoryEngine:
     def infer_exploration(self) -> TrajectoryInferenceResult:
         return TrajectoryInferenceResult(
             trajectories=np.array([[[0.5, 0.0], [1.0, 0.0]]], dtype=np.float64),
+            chosen_waypoint=np.array([1.0, 0.0], dtype=np.float64),
+        )
+
+
+class BadTrajectoryEngine(DummyTrajectoryEngine):
+    def infer_exploration(self) -> TrajectoryInferenceResult:
+        return TrajectoryInferenceResult(
+            trajectories=np.array([[0.5, 0.0]], dtype=np.float64),
             chosen_waypoint=np.array([1.0, 0.0], dtype=np.float64),
         )
 
@@ -167,6 +176,27 @@ def test_lidar_freshness_uses_selection_timestamp() -> None:
     assert stale_xy.shape == (0, 2)
 
 
+def test_lidar_zero_timestamp_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = TrajectoryLocalPlannerModule.__new__(TrajectoryLocalPlannerModule)
+    module.config = TrajectoryLocalPlannerConfig(waypoint_selection="multi_waypoints")
+    module._lidar_lock = threading.Lock()
+    module._latest_lidar_xy = np.empty((0, 2), dtype=np.float64)
+    module._latest_lidar_frame_id = None
+    module._latest_lidar_time_s = None
+    monkeypatch.setattr("trajectory_local_planner_module.time.time", lambda: 123.0)
+
+    cloud = PointCloud2.from_numpy(
+        np.array([[1.0, 0.0, 0.0]], dtype=np.float32),
+        frame_id="base_link",
+        timestamp=0.0,
+    )
+    module._on_lidar(cloud)
+
+    assert module._latest_lidar_time_s == 0.0
+
+
 def test_selection_failure_still_throttles_inference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -181,6 +211,23 @@ def test_selection_failure_still_throttles_inference(
         raise RuntimeError("selection unavailable")
 
     module._select_best_trajectory = fail_selection
+    monkeypatch.setattr("trajectory_local_planner_module.time.monotonic", lambda: 10.0)
+
+    image = Image.from_numpy(np.zeros((4, 4, 3), dtype=np.uint8), format=ImageFormat.RGB, ts=50.0)
+    module._on_image(image)
+
+    assert module._last_infer_monotonic == 10.0
+
+
+def test_invalid_trajectories_are_handled_before_rasterizing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = TrajectoryLocalPlannerModule.__new__(TrajectoryLocalPlannerModule)
+    module.config = TrajectoryLocalPlannerConfig(min_inference_interval_s=1.0)
+    module._engine = BadTrajectoryEngine()
+    module._frame_count = 0
+    module._last_infer_monotonic = 0.0
+    module.traversability_map = type("Publisher", (), {"publish": lambda self, value: None})()
     monkeypatch.setattr("trajectory_local_planner_module.time.monotonic", lambda: 10.0)
 
     image = Image.from_numpy(np.zeros((4, 4, 3), dtype=np.uint8), format=ImageFormat.RGB, ts=50.0)
