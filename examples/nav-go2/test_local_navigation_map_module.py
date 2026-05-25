@@ -22,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from local_navigation_map_module import LocalNavigationMapConfig, LocalNavigationMapModule
 
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+
 
 def test_costmap_freshness_uses_selection_time_not_wall_clock(
     monkeypatch: pytest.MonkeyPatch,
@@ -78,3 +80,15 @@ def test_trajectory_transform_lookup_uses_selection_time() -> None:
             "time_tolerance": 1.0,
         }
     ]
+
+
+def test_navigation_map_snapshot_copies_costmap_grid() -> None:
+    module = LocalNavigationMapModule.__new__(LocalNavigationMapModule)
+    module.config = LocalNavigationMapConfig()
+    grid = OccupancyGrid(grid=np.array([[0, 100]], dtype=np.int8), ts=42.0)
+    module._last_occupancy_grid = grid
+
+    snapshot = module._navigation_map_snapshot_locked()
+    grid.grid[0, 0] = 100
+
+    assert snapshot.binary_costmap.grid.tolist() == [[0, 100]]

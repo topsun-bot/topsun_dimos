@@ -110,7 +110,7 @@ class LocalNavigationMapModule(Module):
         """Return the best trajectory index using the latest local NavigationMap."""
         with self._lock:
             self._ensure_recent_map_locked(time_point)
-            navigation_map = self._navigation_map
+            navigation_map = self._navigation_map_snapshot_locked()
             map_frame_id = self._last_map_frame_id
 
         try:
@@ -138,6 +138,17 @@ class LocalNavigationMapModule(Module):
         age = abs(time_point - self._last_costmap_time_s)
         if age > self.config.local_map_max_age_s:
             raise RuntimeError(f"Latest global_costmap too far from selection time: {age:.2f}s")
+
+    def _navigation_map_snapshot_locked(self) -> NavigationMap:
+        if self._last_occupancy_grid is None:
+            raise RuntimeError("No recent global_costmap available for navigation map")
+
+        snapshot = NavigationMap(
+            self.config.g,
+            self.config.navigation_map_gradient_strategy,
+        )
+        snapshot.update(self._last_occupancy_grid.copy())
+        return snapshot
 
     def _trajectories_in_map_frame(
         self,

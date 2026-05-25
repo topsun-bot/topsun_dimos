@@ -173,6 +173,7 @@ class TrajectoryLocalPlannerModule(Module):
             if not self._engine.ready:
                 self._engine.initialize()
             result = self._engine.infer_exploration()
+            self._last_infer_monotonic = now
         except TrajectoryNavigationRuntimeError as exc:
             if self._frame_count % 30 == 1:
                 logger.warning("%s inference skipped: %s", self.engine_name, exc)
@@ -206,7 +207,6 @@ class TrajectoryLocalPlannerModule(Module):
             )
             return
 
-        self._last_infer_monotonic = now
         self.local_waypoints.publish(local_waypoints)
         transformed_waypoints = self._path_to_frame(
             local_waypoints,
@@ -303,7 +303,7 @@ class TrajectoryLocalPlannerModule(Module):
         if lidar_xy.shape[0] == 0 or lidar_frame is None or lidar_time is None:
             return np.empty((0, 2), dtype=np.float64), None
 
-        age = time.time() - lidar_time
+        age = abs(time_point - lidar_time)
         if age > self.config.lidar_max_age_s:
             if self._frame_count % 30 == 1:
                 logger.warning("Latest lidar too old (%.2fs); skipping collision check", age)
