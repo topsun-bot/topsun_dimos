@@ -382,12 +382,23 @@ class SpatialVectorDB:
         """
         Tag a location with a semantic name/description for text-based retrieval.
 
+        Replaces any existing entry with the same location_name (dedup by name).
+
         Args:
             location: RobotLocation object with position/rotation data
         """
 
         location_id = location.location_id
         metadata = location.to_vector_metadata()
+        location_name = metadata.get("location_name", location.name)
+
+        # Dedup by name: remove existing entries with the same location_name
+        try:
+            existing = self.location_collection.get(where={"location_name": location_name})
+            if existing and existing.get("ids"):
+                self.location_collection.delete(ids=existing["ids"])
+        except Exception:
+            pass
 
         self.location_collection.add(
             ids=[location_id], documents=[location.name], metadatas=[metadata]

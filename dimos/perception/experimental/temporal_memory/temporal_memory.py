@@ -138,6 +138,7 @@ class TemporalMemory(Module):
 
         self._stopped = False
         self._distance_threads: list[threading.Thread] = []
+        self._max_distance_threads: int = 5
 
         # Robot pose for entity world positioning
         self._robot_x: float = 0.0
@@ -431,22 +432,24 @@ class TemporalMemory(Module):
 
         # VLM Call #2: distance estimation (background thread)
         if self._graph_db and self.config.enable_distance_estimation and window_frames:
-            mid_frame = window_frames[len(window_frames) // 2]
-            if mid_frame.image:
-                thread = threading.Thread(
-                    target=self._graph_db.estimate_and_save_distances,
-                    args=(
-                        parsed,
-                        mid_frame.image,
-                        self.vlm,
-                        w_end,
-                        self.config.max_distance_pairs,
-                    ),
-                    daemon=True,
-                )
-                thread.start()
-                self._distance_threads = [t for t in self._distance_threads if t.is_alive()]
-                self._distance_threads.append(thread)
+            # Clean up dead threads first
+            self._distance_threads = [t for t in self._distance_threads if t.is_alive()]
+            if len(self._distance_threads) < self._max_distance_threads:
+                mid_frame = window_frames[len(window_frames) // 2]
+                if mid_frame.image:
+                    thread = threading.Thread(
+                        target=self._graph_db.estimate_and_save_distances,
+                        args=(
+                            parsed,
+                            mid_frame.image,
+                            self.vlm,
+                            w_end,
+                            self.config.max_distance_pairs,
+                        ),
+                        daemon=True,
+                    )
+                    thread.start()
+                    self._distance_threads.append(thread)
 
         # Update state
         needs_summary = self._state.update_from_window(

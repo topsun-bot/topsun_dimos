@@ -64,7 +64,7 @@ class LocalPlanner(Resource):
     _goal_tolerance: float
     _controller: Controller
 
-    _speed: float = 0.55
+    _speed: float = 0.7
     _control_frequency: float = 10
     _orientation_tolerance: float = 0.35
     _navigation_costmap_interval: float = 1.0
@@ -87,6 +87,12 @@ class LocalPlanner(Resource):
         self._goal_tolerance = goal_tolerance
 
         speed = self._speed
+        env_speed = os.getenv("DIMOS_NAV_SPEED")
+        if env_speed:
+            try:
+                speed = max(0.2, min(1.0, float(env_speed)))
+            except ValueError:
+                logger.warning("Invalid DIMOS_NAV_SPEED=%r; using %.2f", env_speed, speed)
         if global_config.nerf_speed < 1.0:
             speed *= global_config.nerf_speed
 
@@ -269,8 +275,11 @@ class LocalPlanner(Resource):
             path_distancer = self._path_distancer
             current_odom = self._current_odom
 
-        assert path_distancer is not None
-        assert current_odom is not None
+        if path_distancer is None or current_odom is None:
+            logger.warning("Skipping path following: path or odom disappeared")
+            with self._lock:
+                self._change_state("idle")
+            return Twist()
 
         current_pos = np.array([current_odom.position.x, current_odom.position.y])
 
@@ -294,8 +303,11 @@ class LocalPlanner(Resource):
             path = self._path
             current_odom = self._current_odom
 
-        assert path is not None
-        assert current_odom is not None
+        if path is None or current_odom is None:
+            logger.warning("Skipping final rotation: path or odom disappeared")
+            with self._lock:
+                self._change_state("idle")
+            return Twist()
 
         goal_yaw = path.poses[-1].orientation.euler[2]
         robot_yaw = current_odom.orientation.euler[2]
