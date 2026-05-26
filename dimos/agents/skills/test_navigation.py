@@ -453,9 +453,7 @@ def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
     nav._speak_skill = _FakeSpeak()
     # Pretend the camera sees the trash can; this test is about arrival logic,
     # not visual acquisition.
-    nav._visual_acquire_object = (
-        lambda name, stored_yaw=None, **_kw: f"Visually acquired '{name}'"
-    )
+    nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: f"Visually acquired '{name}'"
 
     result = nav._navigate_to_landmark(
         target,
@@ -631,9 +629,7 @@ def test_verify_object_in_view_returns_yes_when_visually_acquired() -> None:
     nav = _nav_container()
     nav._latest_image = SimpleNamespace(data=object())
     nav._landmark_memory = SimpleNamespace(resolve_by_query=lambda _q: None)
-    nav._visual_acquire_object = (
-        lambda name, stored_yaw=None, **_kw: f"Visually acquired '{name}'"
-    )
+    nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: f"Visually acquired '{name}'"
 
     result = nav.verify_object_in_view("展示板")
 
@@ -659,9 +655,7 @@ def test_verify_object_in_view_forwards_landmark_state_as_description() -> None:
 
     captured: list[dict[str, object]] = []
 
-    def _stub_visual_acquire(
-        name: str, stored_yaw: float | None = None, **kwargs: object
-    ) -> str:
+    def _stub_visual_acquire(name: str, stored_yaw: float | None = None, **kwargs: object) -> str:
         captured.append({"name": name, "stored_yaw": stored_yaw, **kwargs})
         return f"Visually acquired '{name}'"
 

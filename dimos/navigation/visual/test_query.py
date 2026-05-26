@@ -114,9 +114,7 @@ def test_get_object_bbox_returns_none_when_present_false() -> None:
 
 
 def test_get_object_bbox_returns_bbox_when_present() -> None:
-    model = _StubVlModel(
-        '{"present": true, "name": "水桶", "bbox": [10, 20, 110, 220]}'
-    )
+    model = _StubVlModel('{"present": true, "name": "水桶", "bbox": [10, 20, 110, 220]}')
     bbox = get_object_bbox_from_image(model, _img(), "水桶")
     assert bbox == (10.0, 20.0, 110.0, 220.0)
 

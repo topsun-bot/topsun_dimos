@@ -811,9 +811,7 @@ class NavigationSkillContainer(Module):
                 continue
             # Use stored bearing if available, then VLM acquire + track
             if stored_yaw is not None:
-                vis_msg = self._visual_acquire_object(
-                    query, stored_yaw, description=description
-                )
+                vis_msg = self._visual_acquire_object(query, stored_yaw, description=description)
                 if vis_msg:
                     return vis_msg
             self._rotate_scan_in_place()
@@ -1181,9 +1179,7 @@ class NavigationSkillContainer(Module):
             logger.exception("[visual_acquire] VLM bbox check failed for %r", query)
             return None
 
-    def _vlm_object_present_in_view(
-        self, query: str, *, description: str | None = None
-    ) -> bool:
+    def _vlm_object_present_in_view(self, query: str, *, description: str | None = None) -> bool:
         """Single-call yes/no presence check on the latest camera frame.
 
         Args:
@@ -1289,9 +1285,7 @@ class NavigationSkillContainer(Module):
                     self._announce_object_found(target_name)
                 return f"Visually acquired '{target_name}' after {rotated}° scan"
 
-        logger.warning(
-            "[visual_acquire] ✗ '%s' not found after full 6×60° scan", target_name
-        )
+        logger.warning("[visual_acquire] ✗ '%s' not found after full 6×60° scan", target_name)
         return None
 
     def _parse_vlm_object_list_response(self, response: str | None) -> list[dict[str, Any]]:
@@ -1577,13 +1571,9 @@ class NavigationSkillContainer(Module):
         if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
             description = obj_rec.state or None
             if description:
-                logger.info(
-                    "[verify_object_in_view] using stored description=%r", description
-                )
+                logger.info("[verify_object_in_view] using stored description=%r", description)
 
-        result = self._visual_acquire_object(
-            name, stored_yaw=None, description=description
-        )
+        result = self._visual_acquire_object(name, stored_yaw=None, description=description)
         if result is not None:
             return f"YES: {result}. The camera currently sees '{name}'."
         return (
