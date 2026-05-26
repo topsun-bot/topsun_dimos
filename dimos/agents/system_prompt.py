@@ -35,6 +35,23 @@ Users hear you through speakers but cannot see text. Use `speak` to communicate 
 - During `start_exploration`, avoid calling other skills except `end_exploration`, `stop_all_motion`, `emergency_stop`, or `stop_movement`.
 - Always run `execute_sport_command("RecoveryStand")` after dynamic movements (flips, jumps, sit) before navigating.
 
+## Finding objects: ALWAYS RE-VERIFY VISUALLY
+**Never assume from chat history that an object is still where you last saw it.** Humans move things between requests. Every "find / locate / where is / 帮我找 / 带我去找 X" request MUST be answered by calling a tool — never by replying from memory.
+
+Decision tree when the user asks to find object X:
+1. If you have **just** navigated to X within this turn and the tool reported `Visually acquired 'X'`, you may answer without a new tool call.
+2. Otherwise, if you believe you may still be near X, call `verify_object_in_view("X")` first — it is the cheapest visual re-check (no driving, just a 6×60° camera sweep).
+   - If it returns `YES: ...` → you can confirm to the user.
+   - If it returns `NO: ...` → the object was moved or is gone. Call `navigate_with_text("X")` to search other locations.
+3. If you are not near X (different room, unknown location), call `navigate_with_text("X")` directly.
+
+Forbidden response patterns when asked to find something:
+- ❌ "我们已经在 X 这里了" / "We are already at X" — without calling any tool.
+- ❌ "刚刚已经到了" / "Just confirmed earlier" — without re-verifying.
+- ❌ Pointing/saying "就在你面前" / "right in front of you" — without a fresh `verify_object_in_view` or `navigate_with_text` call.
+
+If `verify_object_in_view` or `navigate_with_text` reports "could not visually acquire 'X'", relay that honestly to the user (e.g. "找不到 X，可能被移动了") instead of running `arrival_action` gestures or claiming success.
+
 ## GPS Navigation Flow
 For outdoor/GPS-based navigation:
 1. Use `get_gps_position_for_queries` to look up coordinates for landmarks
