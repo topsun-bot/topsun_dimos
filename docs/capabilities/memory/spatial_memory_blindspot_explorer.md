@@ -1054,6 +1054,46 @@ dimos tell '停止导航'
 dimos tell '列出刚才新探索区域的物品'
 ```
 
+### 13.5 `dimos tell` 超时排查
+
+如果测试时看到：
+
+```text
+Sending: 检查附近有没有空间记忆盲区，有的话过去探索一下
+---
+---
+(timeout waiting for agent response)
+(no response from agent — is an agent module deployed?)
+```
+
+这不是空间记忆盲区算法返回的失败结果，而是自然语言 agent 链路没有返回任何消息。`dimos tell` 的链路是：向 `/human_input` 发布文本，然后等待 `/agent` 或 `/agent_idle`。如果超时期间没有收到 agent 输出，就会打印这两行。
+
+常见原因：
+
+- 当前没有运行 DimOS 实例。可先执行 `dimos status` 检查；若显示 `No running DimOS instance`，需要先启动 blueprint。
+- 启动的是非 agentic blueprint，里面没有 `McpClient` agent 模块，因此没有模块订阅 `/human_input` 并回复 `/agent`。
+- agentic blueprint 还没完成启动，或 `McpClient` 因模型/API key/MCP server 连接失败等原因崩溃或卡住。
+- 使用了只包含 `McpServer` 的配置。`McpServer` 只暴露工具；自然语言 `dimos tell` 还需要 `McpClient.blueprint()` 把用户文本映射成工具调用。
+- 本次指令被 agent 映射到长时间 `patrol_memory_blindspots`，但 `dimos tell` 的等待时间太短。短时验证建议用更明确的 one-shot 指令，或增加 `--timeout`。
+
+建议验证顺序：
+
+```bash
+dimos status
+dimos log -n 100
+dimos mcp status
+dimos mcp list-tools | rg 'explore_memory_blindspot|patrol_memory_blindspots'
+dimos tell --timeout 180 '检查附近有没有空间记忆盲区，有的话过去探索一下'
+```
+
+如果只想绕过 LLM/agent 路由，直接验证 skill 是否已暴露，可以用 MCP 直接调用：
+
+```bash
+dimos mcp call explore_memory_blindspot --arg search_radius_m=5 --arg coverage_radius_m=1
+```
+
+如果这个 MCP 直接调用能返回结果，而 `dimos tell` 仍然超时，问题在 agent 输入/输出或模型调用链路，不在 `explore_memory_blindspot` 本身。
+
 预期新增功能链路：
 
 ```text
