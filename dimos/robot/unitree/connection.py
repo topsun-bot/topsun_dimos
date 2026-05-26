@@ -15,6 +15,7 @@
 import asyncio
 from dataclasses import dataclass
 import functools
+import os
 import threading
 import time
 from typing import Any, TypeAlias
@@ -85,12 +86,16 @@ class SerializableVideoFrame:
 class UnitreeWebRTCConnection(Resource):
     _SPORT_API_ID_RAGEMODE: int = 2059
 
-    def __init__(self, ip: str, mode: str = "ai") -> None:
+    def __init__(self, ip: str, mode: str = "ai", aes_128_key: str | None = None) -> None:
         self.ip = ip
         self.mode = mode
         self.stop_timer: threading.Timer | None = None
         self.cmd_vel_timeout = 0.2
-        self.conn = LegionConnection(WebRTCConnectionMethod.LocalSTA, ip=self.ip)
+        # 优先使用显式传入的 key, 其次从环境变量读取
+        if not aes_128_key:
+            aes_128_key = os.environ.get("UNITREE_AES_128_KEY")
+        extra: dict[str, Any] = {"aes_128_key": aes_128_key} if aes_128_key else {}
+        self.conn = LegionConnection(WebRTCConnectionMethod.LocalSTA, ip=self.ip, **extra)
         self.connect()
 
     def connect(self) -> None:

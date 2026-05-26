@@ -86,3 +86,7 @@ htmlcov/
 
 # Memory2 autorecord
 recording*.db
+
+# 个人/工具目录, 非业务模块, 不纳入版本管理
+.cursor/
+jiangtao/
