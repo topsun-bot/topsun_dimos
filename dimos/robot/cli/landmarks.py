@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import typer
 
@@ -103,7 +102,9 @@ def import_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Only print what would be done"),
     no_backup: bool = typer.Option(False, "--no-backup", help="Skip backing up existing data"),
     clear_session_id: bool = typer.Option(
-        True, "--clear-session-id/--keep-session-id", help="Clear session_id on import (default: clear)"
+        True,
+        "--clear-session-id/--keep-session-id",
+        help="Clear session_id on import (default: clear)",
     ),
     pack_dir: Path = typer.Option(
         None, "--pack-dir", help="Custom pack directory (overrides default lookup)"
@@ -149,7 +150,10 @@ def import_cmd(
 def export_cmd(
     pack_name: str = typer.Argument(..., help="Name for the exported pack"),
     output_dir: Path = typer.Option(
-        None, "--output", "-o", help="Custom output directory (default: fixtures/landmark_packs/<name>)"
+        None,
+        "--output",
+        "-o",
+        help="Custom output directory (default: fixtures/landmark_packs/<name>)",
     ),
 ) -> None:
     """Export current landmark_memory/ into a pack."""

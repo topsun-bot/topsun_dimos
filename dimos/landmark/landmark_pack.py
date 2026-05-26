@@ -23,11 +23,11 @@ Pack format:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
+from pathlib import Path
 import shutil
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import yaml
@@ -284,9 +284,7 @@ def export_pack(
             "origin_note": "Replay 起始位姿需与录包时一致",
             "counts": {
                 "rooms": summary.get("ROOM", 0),
-                "landmarks": sum(
-                    v for k, v in summary.items() if k not in ("ROOM", "UNKNOWN")
-                ),
+                "landmarks": sum(v for k, v in summary.items() if k not in ("ROOM", "UNKNOWN")),
             },
             "demo_queries": [],
         }
