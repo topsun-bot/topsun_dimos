@@ -12,15 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+import hashlib
+import io
+import json
+import os
 import threading
 import time
 
+import numpy as np
 from reactivex import Subject
 
 from dimos.agents.annotation import skill
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
 from dimos.core.module import Module
+from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.stream.audio.node_output import SounddeviceAudioOutput
 from dimos.stream.audio.tts.node_openai import OpenAITTSNode, Voice
 from dimos.utils.logging_config import setup_logger
@@ -31,6 +38,7 @@ logger = setup_logger()
 class SpeakSkill(Module):
     _tts_node: OpenAITTSNode | None = None
     _audio_output: SounddeviceAudioOutput | None = None
+    _connection: GO2ConnectionSpec | None = None
     _audio_lock: threading.Lock = threading.Lock()
     _bg_threads: list[threading.Thread] = []
     _bg_threads_lock: threading.Lock = threading.Lock()
@@ -38,7 +46,15 @@ class SpeakSkill(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
+        dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if dashscope_key:
+            from dimos.stream.audio.tts.node_dashscope import DashScopeTTSNode
+
+            logger.info("SpeakSkill: 使用 DashScope CosyVoice TTS (DASHSCOPE_API_KEY 已配置)")
+            self._tts_node = DashScopeTTSNode(api_key=dashscope_key)  # type: ignore[assignment]
+        else:
+            logger.info("SpeakSkill: 使用 OpenAI TTS")
+            self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
         self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
         self._audio_output.consume_audio(self._tts_node.emit_audio())
 
@@ -98,6 +114,10 @@ class SpeakSkill(Module):
             if self._tts_node is None:
                 return "Error: TTS not initialized"
 
+            go2_result = self._speak_on_go2_if_available(text)
+            if go2_result is not None:
+                return go2_result
+
             text_subject: Subject[str] = Subject()
             audio_complete = threading.Event()
             self._tts_node.consume_text(text_subject)
@@ -129,3 +149,130 @@ class SpeakSkill(Module):
             subscription.dispose()
 
             return f"Spoke: {text}"
+
+    def _speak_on_go2_if_available(self, text: str) -> str | None:
+        """优先通过 Go2 AudioHub 播放, 让声音从机器人扬声器发出."""
+        if self._connection is None or not os.environ.get("DASHSCOPE_API_KEY"):
+            return None
+
+        try:
+            audio_bytes = self._synthesize_dashscope_audio(text)
+            wav_bytes = self._convert_audio_to_wav(audio_bytes)
+            audio_name = f"dimos_tts_{hashlib.sha1(text.encode()).hexdigest()[:12]}"
+
+            unique_id = self._find_go2_audio(audio_name)
+            if unique_id is None:
+                self._upload_go2_audio(audio_name, wav_bytes)
+                unique_id = self._wait_for_go2_audio(audio_name)
+
+            if unique_id is None:
+                raise RuntimeError(f"Go2 AudioHub did not expose uploaded file {audio_name}")
+
+            self._play_go2_audio(unique_id)
+            return f"Spoke on Go2: {text}"
+        except Exception:
+            logger.exception("Go2 AudioHub speech failed; falling back to local audio output")
+            return None
+
+    def _synthesize_dashscope_audio(self, text: str) -> bytes:
+        import dashscope
+        from dashscope.audio.tts_v2 import SpeechSynthesizer
+
+        dashscope.api_key = os.environ["DASHSCOPE_API_KEY"]
+        synthesizer = SpeechSynthesizer(model="cosyvoice-v3-flash", voice="longanyang")
+        audio = synthesizer.call(text)
+        if not audio:
+            raise RuntimeError("DashScope TTS returned empty audio")
+        return audio
+
+    def _convert_audio_to_wav(self, audio_bytes: bytes) -> bytes:
+        import soundfile as sf  # type: ignore[import-untyped]
+
+        audio, sample_rate = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+
+        target_rate = 44100
+        if sample_rate != target_rate:
+            duration = len(audio) / float(sample_rate)
+            src_t = np.linspace(0.0, duration, num=len(audio), endpoint=False)
+            dst_len = max(1, int(duration * target_rate))
+            dst_t = np.linspace(0.0, duration, num=dst_len, endpoint=False)
+            audio = np.interp(dst_t, src_t, audio).astype(np.float32)
+
+        out = io.BytesIO()
+        sf.write(out, audio, target_rate, format="WAV", subtype="PCM_16")
+        return out.getvalue()
+
+    def _get_go2_audio_list(self) -> list[dict[str, object]]:
+        from unitree_webrtc_connect.constants import AUDIO_API, RTC_TOPIC
+
+        response = self._connection.publish_request(
+            RTC_TOPIC["AUDIO_HUB_REQ"],
+            {"api_id": AUDIO_API["GET_AUDIO_LIST"], "parameter": json.dumps({})},
+        )
+        data = response.get("data", {}) if isinstance(response, dict) else {}
+        payload = data.get("data", "{}") if isinstance(data, dict) else "{}"
+        if isinstance(payload, str):
+            parsed = json.loads(payload)
+        elif isinstance(payload, dict):
+            parsed = payload
+        else:
+            return []
+        audio_list = parsed.get("audio_list", [])
+        return audio_list if isinstance(audio_list, list) else []
+
+    def _find_go2_audio(self, audio_name: str) -> str | None:
+        for item in self._get_go2_audio_list():
+            if item.get("CUSTOM_NAME") == audio_name:
+                unique_id = item.get("UNIQUE_ID")
+                return str(unique_id) if unique_id else None
+        return None
+
+    def _wait_for_go2_audio(self, audio_name: str) -> str | None:
+        for _ in range(10):
+            unique_id = self._find_go2_audio(audio_name)
+            if unique_id is not None:
+                return unique_id
+            time.sleep(0.3)
+        return None
+
+    def _upload_go2_audio(self, audio_name: str, wav_bytes: bytes) -> None:
+        from unitree_webrtc_connect.constants import AUDIO_API, RTC_TOPIC
+
+        file_md5 = hashlib.md5(wav_bytes).hexdigest()
+        b64_data = base64.b64encode(wav_bytes).decode("utf-8")
+        chunk_size = 4096
+        chunks = [b64_data[i : i + chunk_size] for i in range(0, len(b64_data), chunk_size)]
+
+        for index, chunk in enumerate(chunks, start=1):
+            parameter = {
+                "file_name": audio_name,
+                "file_type": "wav",
+                "file_size": len(wav_bytes),
+                "current_block_index": index,
+                "total_block_number": len(chunks),
+                "block_content": chunk,
+                "current_block_size": len(chunk),
+                "file_md5": file_md5,
+                "create_time": int(time.time() * 1000),
+            }
+            self._connection.publish_request(
+                RTC_TOPIC["AUDIO_HUB_REQ"],
+                {
+                    "api_id": AUDIO_API["UPLOAD_AUDIO_FILE"],
+                    "parameter": json.dumps(parameter, ensure_ascii=True),
+                },
+            )
+            time.sleep(0.05)
+
+    def _play_go2_audio(self, unique_id: str) -> None:
+        from unitree_webrtc_connect.constants import AUDIO_API, RTC_TOPIC
+
+        self._connection.publish_request(
+            RTC_TOPIC["AUDIO_HUB_REQ"],
+            {
+                "api_id": AUDIO_API["SELECT_START_PLAY"],
+                "parameter": json.dumps({"unique_id": unique_id}),
+            },
+        )

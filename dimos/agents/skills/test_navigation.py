@@ -253,6 +253,18 @@ class _FakeUnitree:
         return "ok"
 
 
+class _FakeSpeak:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[tuple[str, bool]] = []
+
+    def speak(self, text: str, blocking: bool = True) -> str:
+        self.calls.append((text, blocking))
+        if self.fail:
+            raise RuntimeError("tts failed")
+        return "ok"
+
+
 class _FakeTracker:
     def __init__(self) -> None:
         self.stopped = False
@@ -435,6 +447,7 @@ def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
     nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
     nav._relocalize_interval_s = 30.0
     nav._coordinate_frame_stale_reason = lambda target: None
+    nav._speak_skill = _FakeSpeak()
 
     result = nav._navigate_to_landmark(
         target,
@@ -445,6 +458,75 @@ def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
 
     assert "Arrived near" in result
     assert nav._navigation.goals == []
+    assert nav._speak_skill.calls == [("找到了", False)]
+
+
+def test_room_landmark_does_not_announce_object_found() -> None:
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="办公室",
+        record_type=RecordType.ROOM,
+        position=(0.0, 0.0, 0.0),
+    )
+    nav._navigation = _FakeNavigation()
+    nav._latest_odom = _pose(1.5, 0.0)
+    nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
+    nav._spatial_memory = SimpleNamespace(query_location_by_image=lambda image: None)
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._relocalize_interval_s = 30.0
+    nav._coordinate_frame_stale_reason = lambda target: None
+    nav._speak_skill = _FakeSpeak()
+
+    result = nav._navigate_to_landmark(
+        target,
+        arrival_action="stop",
+        arrival_distance=0.5,
+        run_arrival_action=True,
+        enable_visual_drift=True,
+    )
+
+    assert "arrival_action=stop" in result
+    assert nav._speak_skill.calls == []
+
+
+def test_navigate_to_object_announces_after_visual_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._navigation = _FakeNavigation()
+    nav._speak_skill = _FakeSpeak()
+    nav._object_tracking = SimpleNamespace(
+        track=lambda bbox: {"status": "tracking_started"},
+        is_tracking=lambda: True,
+        stop_track=lambda: None,
+    )
+    nav._get_bbox_for_current_frame = lambda query: [0.0, 0.0, 100.0, 100.0]
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
+
+    result = nav._navigate_to_object("水杯", timeout=1.0)
+
+    assert result == "Successfully arrived at '水杯'"
+    assert nav._speak_skill.calls == [("找到了", False)]
+
+
+def test_object_found_announcement_failure_does_not_fail_navigation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._navigation = _FakeNavigation()
+    nav._speak_skill = _FakeSpeak(fail=True)
+    nav._object_tracking = SimpleNamespace(
+        track=lambda bbox: {"status": "tracking_started"},
+        is_tracking=lambda: True,
+        stop_track=lambda: None,
+    )
+    nav._get_bbox_for_current_frame = lambda query: [0.0, 0.0, 100.0, 100.0]
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
+
+    result = nav._navigate_to_object("水杯", timeout=1.0)
+
+    assert result == "Successfully arrived at '水杯'"
+    assert nav._speak_skill.calls == [("找到了", False)]
 
 
 def test_stop_all_motion_cancels_tracking_and_recovers() -> None:

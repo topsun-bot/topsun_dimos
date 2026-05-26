@@ -20,6 +20,7 @@ from typing import Any, cast
 from reactivex.disposable import Disposable
 
 from dimos.agents.annotation import skill
+from dimos.agents.skills.speak_skill_spec import SpeakSkillSpec
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In
@@ -231,6 +232,7 @@ class NavigationSkillContainer(Module):
     _landmark_memory: SpatialLandmarkMemorySpec
     _navigation: NavigationInterfaceSpec
     _object_tracking: ObjectTrackingSpec | None = None
+    _speak_skill: SpeakSkillSpec | None = None
     _unitree_skill_container: UnitreeSkillContainer | None = None
     _frontier_explorer: WavefrontFrontierExplorer | None = None
     _memory_session_id: str = ""
@@ -268,6 +270,18 @@ class NavigationSkillContainer(Module):
 
     def _on_odom(self, odom: PoseStamped) -> None:
         self._latest_odom = odom
+
+    def _announce_object_found(self, target_name: str) -> None:
+        speaker = self._speak_skill
+        if speaker is None:
+            logger.info(
+                "Object found announcement skipped for '%s': no SpeakSkill wired", target_name
+            )
+            return
+        try:
+            speaker.speak("找到了", blocking=False)
+        except Exception:
+            logger.exception("Failed to announce object found for '%s'", target_name)
 
     @skill
     def tag_location(self, location_name: str, num_photos: int = 0) -> str:
@@ -652,7 +666,9 @@ class NavigationSkillContainer(Module):
             f"To cancel movement call the 'stop_navigation' tool."
         )
 
-    def _navigate_to_object(self, query: str, *, timeout: float = 30.0) -> str | None:
+    def _navigate_to_object(
+        self, query: str, *, timeout: float = 30.0, announce: bool = True
+    ) -> str | None:
         if self._object_tracking is None:
             return None
 
@@ -701,6 +717,8 @@ class NavigationSkillContainer(Module):
                 else:
                     logger.info("[L2]   ✓ Reached '%s'", query)
                     self._object_tracking.stop_track()
+                    if announce:
+                        self._announce_object_found(query)
                     return f"Successfully arrived at '{query}'"
 
             # Fast fallback: if tracking is consecutively lost for >5s, bail early
@@ -1127,7 +1145,7 @@ class NavigationSkillContainer(Module):
         return f"Reached '{target_name}', executing arrival_action={action!r}: {out}"
 
     def _visual_acquire_object(
-        self, target_name: str, stored_yaw: float | None = None
+        self, target_name: str, stored_yaw: float | None = None, *, announce: bool = True
     ) -> str | None:
         """After reaching object coordinates, visually locate and face the object.
 
@@ -1160,9 +1178,11 @@ class NavigationSkillContainer(Module):
 
         # Step 2: VLM detection + tracking in current view
         try:
-            result = self._navigate_to_object(target_name, timeout=15.0)
+            result = self._navigate_to_object(target_name, timeout=15.0, announce=False)
             if result:
                 logger.info("[visual_acquire] ✓ '%s' found in current view", target_name)
+                if announce:
+                    self._announce_object_found(target_name)
                 return f"Visually acquired '{target_name}'"
         except Exception:
             logger.exception("[visual_acquire] VLM re-scan error for '%s'", target_name)
@@ -1172,9 +1192,11 @@ class NavigationSkillContainer(Module):
         self._rotate_scan_in_place()
         time.sleep(0.5)
         try:
-            result = self._navigate_to_object(target_name, timeout=10.0)
+            result = self._navigate_to_object(target_name, timeout=10.0, announce=False)
             if result:
                 logger.info("[visual_acquire] ✓ '%s' found after 360° scan", target_name)
+                if announce:
+                    self._announce_object_found(target_name)
                 return f"Visually acquired '{target_name}' after 360° scan"
         except Exception:
             logger.exception("[visual_acquire] VLM re-scan after 360° error for '%s'", target_name)
@@ -1673,9 +1695,12 @@ class NavigationSkillContainer(Module):
         obj_rec = self._resolve_landmark_from_query(query)
         if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
             stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
-            vis_msg = self._visual_acquire_object(query, stored_yaw)
+            vis_msg = self._visual_acquire_object(query, stored_yaw, announce=False)
+            self._announce_object_found(query)
             if vis_msg:
                 return f"{prefix} ({vis_msg})"
+        else:
+            self._announce_object_found(query)
         return prefix
 
     def _navigate_using_semantic_map(self, query: str) -> str | None:
@@ -1702,6 +1727,7 @@ class NavigationSkillContainer(Module):
             return None
 
         message = f"Found a location in the semantic map matching '{query}'."
+        self._announce_object_found(query)
         return self._navigate_to(goal_pose, message)
 
     @skill
@@ -2037,19 +2063,23 @@ class NavigationSkillContainer(Module):
             vis_msg = ""
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
+                vis_msg = self._visual_acquire_object(tname, stored_yaw, announce=False) or ""
                 if vis_msg:
                     logger.info("[L3] Visual acquire: %s", vis_msg)
                 else:
                     logger.warning("[L3] Visual acquire: '%s' not found in view", tname)
             if run_arrival_action:
                 action_msg = self._run_arrival_action(arrival_action, tname)
+                if is_object_landmark:
+                    self._announce_object_found(tname)
                 if vis_msg:
                     return f"{action_msg} ({vis_msg})"
                 if is_object_landmark:
                     return f"{action_msg} (could not visually acquire '{tname}')"
                 return action_msg
             base = f"Arrived near '{tname}' standoff"
+            if is_object_landmark:
+                self._announce_object_found(tname)
             if vis_msg:
                 return f"{base} ({vis_msg})"
             if is_object_landmark:
@@ -2069,19 +2099,23 @@ class NavigationSkillContainer(Module):
             vis_msg = ""
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
+                vis_msg = self._visual_acquire_object(tname, stored_yaw, announce=False) or ""
                 if vis_msg:
                     logger.info("[L3] Visual acquire (retry): %s", vis_msg)
                 else:
                     logger.warning("[L3] Visual acquire (retry): '%s' not found in view", tname)
             if run_arrival_action:
                 action_msg = self._run_arrival_action(arrival_action, tname)
+                if is_object_landmark:
+                    self._announce_object_found(tname)
                 if vis_msg:
                     return f"{action_msg} ({vis_msg})"
                 if is_object_landmark:
                     return f"{action_msg} (could not visually acquire '{tname}')"
                 return action_msg
             base = f"Arrived near '{tname}' standoff after drift recovery"
+            if is_object_landmark:
+                self._announce_object_found(tname)
             if vis_msg:
                 return f"{base} ({vis_msg})"
             if is_object_landmark:
