@@ -152,7 +152,7 @@ def _normalize_record_types(records: list[dict[str, Any]]) -> None:
         normalized = rt.lower()
         if normalized not in _VALID_RECORD_TYPES:
             raise ValueError(
-                f"Unknown record_type '{rt}' at element {i} (name='{rec.get('name','?')}'); "
+                f"Unknown record_type '{rt}' at element {i} (name='{rec.get('name', '?')}'); "
                 f"expected one of {sorted(_VALID_RECORD_TYPES)}"
             )
         rec["record_type"] = normalized
@@ -303,9 +303,7 @@ def export_pack(
 
     records = json.loads(json_path.read_text())
     if not isinstance(records, list):
-        raise ValueError(
-            f"landmarks.json must be a JSON array, got {type(records).__name__}"
-        )
+        raise ValueError(f"landmarks.json must be a JSON array, got {type(records).__name__}")
     if not records:
         raise ValueError("landmarks.json is empty — nothing to export")
 

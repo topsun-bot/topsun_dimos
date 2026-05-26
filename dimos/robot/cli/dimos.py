@@ -225,7 +225,8 @@ def run(
     ),
     show_help: bool = typer.Option(False, "--help"),
     landmark_pack: str | None = typer.Option(
-        None, "--landmark-pack",
+        None,
+        "--landmark-pack",
         help="Import a landmark pack before starting the blueprint",
     ),
 ) -> None:
