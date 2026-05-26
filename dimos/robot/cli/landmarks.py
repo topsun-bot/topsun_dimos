@@ -79,20 +79,18 @@ def show_cmd(
 
     try:
         records = _load_landmarks_json(pdir)
+        typer.echo(f"\n─── Landmarks ({len(records)} total) ───")
+        summary = _landmark_summary(records)
+        for t, c in sorted(summary.items()):
+            typer.echo(f"  {t}: {c}")
+        for rec in records:
+            name = rec.get("name", "(unnamed)")
+            rtype = rec.get("record_type", "?")
+            desc = rec.get("description", "")
+            typer.echo(f"  [{rtype}] {name}" + (f" — {desc}" if desc else ""))
     except (FileNotFoundError, ValueError) as e:
         typer.echo(f"\n─── Landmarks ───\n  Error: {e}", err=True)
         raise typer.Exit(1)
-
-    typer.echo(f"\n─── Landmarks ({len(records)} total) ───")
-    summary = _landmark_summary(records)
-    for t, c in sorted(summary.items()):
-        typer.echo(f"  {t}: {c}")
-
-    for rec in records:
-        name = rec.get("name", "(unnamed)")
-        rtype = rec.get("record_type", "?")
-        desc = rec.get("description", "")
-        typer.echo(f"  [{rtype}] {name}" + (f" — {desc}" if desc else ""))
 
 
 @app.command("import")

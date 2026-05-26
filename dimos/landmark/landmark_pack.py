@@ -31,14 +31,13 @@ import time
 from typing import Any
 import uuid
 
-import yaml
-
 from dimos.constants import DIMOS_PROJECT_ROOT, STATE_DIR
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
 LANDMARK_PACKS_DIR = DIMOS_PROJECT_ROOT / "fixtures" / "landmark_packs"
+USER_LANDMARK_PACKS_DIR = STATE_DIR / "landmark_packs"
 LANDMARK_MEMORY_DIR = STATE_DIR / "landmark_memory"
 
 
@@ -49,18 +48,22 @@ def _dimos_is_running() -> bool:
 
 
 def _default_pack_dir(pack_name: str) -> Path:
-    return LANDMARK_PACKS_DIR / pack_name
+    """Return the project fixtures dir for *pack_name*, falling back to user dir."""
+    p = LANDMARK_PACKS_DIR / pack_name
+    if p.is_dir():
+        return p
+    return USER_LANDMARK_PACKS_DIR / pack_name
 
 
 def list_packs() -> list[str]:
-    """List available pack names under fixtures/landmark_packs/."""
-    if not LANDMARK_PACKS_DIR.exists():
-        return []
-    packs: list[str] = []
-    for d in sorted(LANDMARK_PACKS_DIR.iterdir()):
-        if d.is_dir() and (d / "manifest.yaml").exists():
-            packs.append(d.name)
-    return packs
+    """List available pack names from project fixtures and user state dir."""
+    seen: set[str] = set()
+    for base in (LANDMARK_PACKS_DIR, USER_LANDMARK_PACKS_DIR):
+        if base.exists():
+            for d in sorted(base.iterdir()):
+                if d.is_dir() and (d / "manifest.yaml").exists() and d.name not in seen:
+                    seen.add(d.name)
+    return sorted(seen)
 
 
 def load_manifest(pack_name: str, *, pack_dir: Path | None = None) -> dict[str, Any]:
@@ -68,6 +71,8 @@ def load_manifest(pack_name: str, *, pack_dir: Path | None = None) -> dict[str, 
 
     Raises FileNotFoundError if the pack or manifest is missing.
     """
+    import yaml
+
     pdir = pack_dir or _default_pack_dir(pack_name)
     manifest_path = pdir / "manifest.yaml"
     if not manifest_path.exists():
@@ -139,14 +144,18 @@ def _normalize_record_types(records: list[dict[str, Any]]) -> None:
                 f"landmarks.json element {i} must be a JSON object, got {type(rec).__name__}"
             )
         rt = rec.get("record_type")
-        if isinstance(rt, str):
-            normalized = rt.lower()
-            if normalized not in _VALID_RECORD_TYPES:
-                raise ValueError(
-                    f"Unknown record_type '{rt}' at element {i} (name='{rec.get('name','?')}'); "
-                    f"expected one of {sorted(_VALID_RECORD_TYPES)}"
-                )
-            rec["record_type"] = normalized
+        if not isinstance(rt, str):
+            raise ValueError(
+                f"landmarks.json element {i}: record_type must be a string, "
+                f"got {type(rt).__name__} ('{rt}')"
+            )
+        normalized = rt.lower()
+        if normalized not in _VALID_RECORD_TYPES:
+            raise ValueError(
+                f"Unknown record_type '{rt}' at element {i} (name='{rec.get('name','?')}'); "
+                f"expected one of {sorted(_VALID_RECORD_TYPES)}"
+            )
+        rec["record_type"] = normalized
 
 
 def import_pack(
@@ -188,6 +197,11 @@ def import_pack(
     _normalize_record_types(records)
 
     if dry_run:
+        if LANDMARK_MEMORY_DIR.exists():
+            logger.warning(
+                "[dry-run] Target %s already exists (a real import without --force would fail).",
+                LANDMARK_MEMORY_DIR,
+            )
         logger.info("[dry-run] Would copy from %s → %s", pdir, LANDMARK_MEMORY_DIR)
         logger.info("[dry-run] %d records in landmarks.json", len(records))
         for dest in _files_to_copy(pdir):
@@ -293,7 +307,7 @@ def export_pack(
     if not records:
         raise ValueError("landmarks.json is empty — nothing to export")
 
-    dest = output_dir or _default_pack_dir(pack_name)
+    dest = output_dir or USER_LANDMARK_PACKS_DIR / pack_name
     dest.mkdir(parents=True, exist_ok=True)
 
     # Write landmarks.json
@@ -330,6 +344,8 @@ def export_pack(
             },
             "demo_queries": [],
         }
+        import yaml
+
         manifest_path.write_text(yaml.dump(template, allow_unicode=True, sort_keys=False))
 
     logger.info("Exported pack '%s' → %s", pack_name, dest)
