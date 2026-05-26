@@ -1066,3 +1066,37 @@ dimos tell '列出刚才新探索区域的物品'
 → 返回本轮新探索区域识别到的物品清单
 → 继续寻找下一个未覆盖区域
 ```
+
+## 14. 真实修改内容
+
+本次实际落地 commit：
+
+```text
+74d78404 feat: add spatial memory blindspot exploration
+```
+
+真实修改文件和内容如下：
+
+| 文件 | 修改内容描述 |
+|---|---|
+| `dimos/perception/spatial_perception.py` | 在 `SpatialMemory` 增加 `get_memory_locations()` RPC，对外返回已存空间记忆帧的位置和时间戳，供记忆盲区判断使用。 |
+| `dimos/perception/spatial_memory_spec.py` | 在 `SpatialMemorySpec` 协议中补充 `get_memory_locations()` 方法声明，让导航 skill 可以通过现有 Spec 注入调用空间记忆查询能力。 |
+| `dimos/agents_deprecated/memory/spatial_vector_db.py` | 新增 `get_memory_locations()`，从 Chroma image collection 的 metadata 中读取 `frame_id`、`pos_x`、`pos_y`、`pos_z`、`timestamp`；同时修复 `query_by_location()` 和 `get_all_locations()`，统一优先使用 `pos_x/pos_y/pos_z`，兼容旧字段 `x/y/z`，避免两套坐标字段并存。 |
+| `dimos/agents/skills/navigation.py` | 在 `NavigationSkillContainer` 中接入现有 `global_costmap` 输入；新增记忆覆盖判断、costmap 安全 cell 过滤、未知边界识别、最近盲区目标选择逻辑；新增 `explore_memory_blindspot` one-shot skill；新增 `patrol_memory_blindspots` 长时间探索 skill；支持 `max_duration_sec`、可选 `max_goals`、单目标超时、连续失败退出、`stop_navigation` / `stop_all_motion` 中断；到达后可复用现有 VLM 识别物品，并为本轮新增 landmark 追加 `source=memory_blindspot_explorer`、`exploration_run_id`、`target_type`、`target_reason`、`target_pose` metadata。 |
+| `dimos/agents/system_prompt.py` | 在 Go2 agent 的导航规则中补充工具选择说明：用户要求探索未探索区域、补齐空间记忆、刷新空间记忆时优先调用 `patrol_memory_blindspots`；只检查附近单个盲区时调用 `explore_memory_blindspot`。 |
+| `dimos/agents/skills/test_navigation.py` | 增加 `FakeCostmap` 测试输入和空间记忆 stub 方法；新增单元测试覆盖 one-shot 盲区探索会发导航 goal、已有记忆覆盖区域不会重复选、连续探索会按 `max_goals` 停止、障碍物 cell 不会被选为目标；同时给旧 agent 测试补上 `global_costmap` 输入源，适配导航 skill 新增输入。 |
+
+实际验证命令和结果：
+
+```bash
+uv run ruff check dimos/agents/system_prompt.py dimos/agents/skills/navigation.py dimos/agents/skills/test_navigation.py dimos/agents_deprecated/memory/spatial_vector_db.py dimos/perception/spatial_perception.py dimos/perception/spatial_memory_spec.py
+# All checks passed
+
+uv run pytest dimos/agents/skills/test_navigation.py -q -k 'explore_memory_blindspot or patrol_memory_blindspots or blindspot_goal'
+# 4 passed
+
+uv run pytest dimos/agents/skills/test_navigation.py -q -k 'not go_to_semantic_location and not stop_movement and not start_exploration'
+# 14 passed
+```
+
+说明：曾额外运行包含 `test_go_to_semantic_location` 的旧 agent fixture 测试。日志显示 `navigate_with_text` 已成功调用并返回 “successfully navigated”，但测试等待 `finished_event` 超时，因此未作为本次新增功能的通过项记录。
