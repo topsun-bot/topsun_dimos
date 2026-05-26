@@ -174,8 +174,8 @@ class SpeakSkill(Module):
             return None
 
     def _synthesize_dashscope_audio(self, text: str) -> bytes:
-        import dashscope  # type: ignore[import-untyped]
-        from dashscope.audio.tts_v2 import SpeechSynthesizer  # type: ignore[import-untyped]
+        import dashscope  # type: ignore[import]
+        from dashscope.audio.tts_v2 import SpeechSynthesizer  # type: ignore[import]
 
         dashscope.api_key = os.environ["DASHSCOPE_API_KEY"]
         synthesizer = SpeechSynthesizer(model="cosyvoice-v3-flash", voice="longanyang")

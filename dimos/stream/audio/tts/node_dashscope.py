@@ -97,8 +97,8 @@ class DashScopeTTSNode(AbstractTextConsumer, AbstractTextEmitter):
 
     def _synthesize_speech(self, text: str) -> None:
         try:
-            import dashscope  # type: ignore[import-untyped]
-            from dashscope.audio.tts_v2 import SpeechSynthesizer  # type: ignore[import-untyped]
+            import dashscope  # type: ignore[import]
+            from dashscope.audio.tts_v2 import SpeechSynthesizer  # type: ignore[import]
 
             dashscope.api_key = self._api_key
             synthesizer = SpeechSynthesizer(model=self._model, voice=self._voice)
