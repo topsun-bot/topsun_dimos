@@ -6,7 +6,7 @@ BLUEPRINT="${2:-unitree-go2-agentic}"
 
 dimos stop 2>/dev/null || true
 dimos landmarks import "$PACK" --force
-dimos --replay run "$BLUEPRINT" --landmark-pack="$PACK" --daemon
+dimos --replay --landmark-pack="$PACK" run "$BLUEPRINT" --daemon
 
 sleep 15   # wait for modules to be ready
 

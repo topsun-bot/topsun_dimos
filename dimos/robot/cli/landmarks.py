@@ -129,6 +129,9 @@ def import_cmd(
     except FileExistsError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
     if dry_run:
         typer.echo(f"[dry-run] {result.record_count} records would be imported")

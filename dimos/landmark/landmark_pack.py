@@ -29,6 +29,7 @@ from pathlib import Path
 import shutil
 import time
 from typing import Any
+import uuid
 
 import yaml
 
@@ -96,7 +97,8 @@ def _backup_memory_dir() -> Path | None:
     if not LANDMARK_MEMORY_DIR.exists():
         return None
     ts = time.strftime("%Y%m%d_%H%M%S")
-    backup = LANDMARK_MEMORY_DIR.with_name(f"landmark_memory.backup.{ts}")
+    suffix = uuid.uuid4().hex[:6]
+    backup = LANDMARK_MEMORY_DIR.with_name(f"landmark_memory.backup.{ts}_{suffix}")
     shutil.copytree(LANDMARK_MEMORY_DIR, backup, symlinks=False)
     logger.info(f"Backed up existing landmark memory → {backup}")
     return backup
@@ -110,6 +112,14 @@ class ImportResult:
     record_count: int
     summary: dict[str, int]
     demo_queries: list[str] = field(default_factory=list)
+
+
+def _normalize_record_types(records: list[dict[str, Any]]) -> None:
+    """Lowercase record_type values so they match RecordType enum values."""
+    for rec in records:
+        rt = rec.get("record_type")
+        if isinstance(rt, str):
+            rec["record_type"] = rt.lower()
 
 
 def import_pack(
@@ -148,6 +158,7 @@ def import_pack(
 
     manifest = load_manifest(pack_name, pack_dir=pdir)
     records = _load_landmarks_json(pdir)
+    _normalize_record_types(records)
 
     if dry_run:
         logger.info("[dry-run] Would copy from %s → %s", pdir, LANDMARK_MEMORY_DIR)
@@ -283,8 +294,8 @@ def export_pack(
             },
             "origin_note": "Replay 起始位姿需与录包时一致",
             "counts": {
-                "rooms": summary.get("ROOM", 0),
-                "landmarks": sum(v for k, v in summary.items() if k not in ("ROOM", "UNKNOWN")),
+                "rooms": summary.get("room", 0),
+                "landmarks": sum(v for k, v in summary.items() if k not in ("room", "unknown")),
             },
             "demo_queries": [],
         }

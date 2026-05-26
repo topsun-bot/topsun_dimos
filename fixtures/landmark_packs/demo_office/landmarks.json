@@ -1,7 +1,7 @@
 [
   {
     "name": "厨房",
-    "record_type": "ROOM",
+    "record_type": "room",
     "position": [1.5, 2.0, 0.0],
     "rotation": [0.0, 0.0, 0.0],
     "description": "厨房区域，有冰箱和水槽",
@@ -17,7 +17,7 @@
   },
   {
     "name": "走廊",
-    "record_type": "ROOM",
+    "record_type": "room",
     "position": [3.0, 0.5, 0.0],
     "rotation": [0.0, 0.0, 1.57],
     "description": "连接各房间的主走廊",
@@ -33,7 +33,7 @@
   },
   {
     "name": "电脑",
-    "record_type": "LANDMARK",
+    "record_type": "landmark",
     "position": [4.5, 1.2, 0.0],
     "rotation": [0.0, 0.0, 0.0],
     "description": "办公桌上的台式电脑",

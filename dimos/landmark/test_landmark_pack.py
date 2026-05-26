@@ -68,7 +68,7 @@ def sample_pack_dir(tmp_path: Path):
             [
                 {
                     "name": "厨房",
-                    "record_type": "ROOM",
+                    "record_type": "room",
                     "position": [1.5, 2.0, 0.0],
                     "rotation": [0.0, 0.0, 0.0],
                     "description": "厨房",
@@ -84,7 +84,7 @@ def sample_pack_dir(tmp_path: Path):
                 },
                 {
                     "name": "电脑",
-                    "record_type": "LANDMARK",
+                    "record_type": "landmark",
                     "position": [4.5, 1.2, 0.0],
                     "rotation": [0.0, 0.0, 0.0],
                     "description": "台式电脑",
@@ -154,12 +154,12 @@ def test_load_manifest_missing():
 
 def test_landmark_summary():
     records = [
-        {"record_type": "ROOM", "name": "厨房"},
-        {"record_type": "ROOM", "name": "走廊"},
-        {"record_type": "LANDMARK", "name": "电脑"},
+        {"record_type": "room", "name": "厨房"},
+        {"record_type": "room", "name": "走廊"},
+        {"record_type": "landmark", "name": "电脑"},
     ]
     s = _landmark_summary(records)
-    assert s == {"ROOM": 2, "LANDMARK": 1}
+    assert s == {"room": 2, "landmark": 1}
 
 
 # ── import_pack ───────────────────────────────────────────────────
@@ -168,7 +168,7 @@ def test_landmark_summary():
 def test_import_pack_basic(sample_pack_dir: Path, tmp_state_dir: Path, mock_dimos_not_running):
     result = import_pack("test_pack", force=True, pack_dir=sample_pack_dir)
     assert result.record_count == 2
-    assert result.summary == {"ROOM": 1, "LANDMARK": 1}
+    assert result.summary == {"room": 1, "landmark": 1}
     assert (tmp_state_dir / "landmarks.json").exists()
     assert (tmp_state_dir / "snapshots" / "rec_test_01.jpg").exists()
 
@@ -235,7 +235,7 @@ def test_export_pack(tmp_state_dir: Path, tmp_path: Path):
     records = [
         {
             "name": "厨房",
-            "record_type": "ROOM",
+            "record_type": "room",
             "position": [1.0, 2.0, 0.0],
             "rotation": [0.0, 0.0, 0.0],
             "description": "",
@@ -313,15 +313,15 @@ def test_status_with_data(tmp_state_dir: Path):
     (tmp_state_dir / "landmarks.json").write_text(
         json.dumps(
             [
-                {"record_type": "ROOM", "name": "厨房"},
-                {"record_type": "LANDMARK", "name": "电脑"},
+                {"record_type": "room", "name": "厨房"},
+                {"record_type": "landmark", "name": "电脑"},
             ]
         )
     )
     s = status()
     assert s.exists
     assert s.record_count == 2
-    assert s.summary == {"ROOM": 1, "LANDMARK": 1}
+    assert s.summary == {"room": 1, "landmark": 1}
 
 
 # ── _default_pack_dir ─────────────────────────────────────────────
@@ -341,7 +341,7 @@ def test_import_result_fields():
         dest_dir=Path("/tmp/test"),
         backup_dir=None,
         record_count=3,
-        summary={"ROOM": 2, "LANDMARK": 1},
+        summary={"room": 2, "landmark": 1},
         demo_queries=["去厨房"],
     )
     assert r.pack_name == "test"
