@@ -1727,6 +1727,7 @@ class NavigationSkillContainer(Module):
             return None
 
         message = f"Found a location in the semantic map matching '{query}'."
+        # "找到了"指的是在语义地图中找到了匹配, 导航结果由 _navigate_to 异步完成
         self._announce_object_found(query)
         return self._navigate_to(goal_pose, message)
 

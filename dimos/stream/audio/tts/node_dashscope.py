@@ -21,9 +21,11 @@ import io
 import os
 import threading
 import time
+from typing import Any
 
 import numpy as np
 from reactivex import Observable, Subject
+from reactivex.abc import DisposableBase
 
 from dimos.stream.audio.base import AudioEvent
 from dimos.stream.audio.text.base import AbstractTextConsumer, AbstractTextEmitter
@@ -31,7 +33,6 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-# DashScope CosyVoice 默认参数
 _DEFAULT_MODEL = "cosyvoice-v3-flash"
 _DEFAULT_VOICE = "longanyang"
 _SAMPLE_RATE = 24000
@@ -52,31 +53,30 @@ class DashScopeTTSNode(AbstractTextConsumer, AbstractTextEmitter):
 
         self.audio_subject: Subject[AudioEvent] = Subject()
         self.text_subject: Subject[str] = Subject()
-        self.subscription = None
+        self._subscription: DisposableBase | None = None
         self.processing_thread: threading.Thread | None = None
         self.is_running = True
         self.text_queue: list[str] = []
         self.queue_lock = threading.Lock()
 
-    # ── 与 OpenAITTSNode 兼容的公共接口 ──
-
-    def emit_audio(self) -> Observable:  # type: ignore[type-arg]
+    def emit_audio(self) -> Observable[Any]:
         return self.audio_subject
 
-    def emit_text(self) -> Observable:  # type: ignore[type-arg]
+    def emit_text(self) -> Observable[Any]:
         return self.text_subject
 
-    def consume_text(self, text_observable: Observable) -> DashScopeTTSNode:  # type: ignore[type-arg]
-        logger.info("Starting DashScopeTTSNode (model=%s, voice=%s)", self._model, self._voice)
-        self.processing_thread = threading.Thread(target=self._process_queue, daemon=True)
-        self.processing_thread.start()
-        self.subscription = text_observable.subscribe(
+    def consume_text(self, text_observable: Observable[Any]) -> DashScopeTTSNode:
+        if self._subscription is not None:
+            self._subscription.dispose()
+        if self.processing_thread is None or not self.processing_thread.is_alive():
+            self.is_running = True
+            self.processing_thread = threading.Thread(target=self._process_queue, daemon=True)
+            self.processing_thread.start()
+        self._subscription = text_observable.subscribe(
             on_next=self._queue_text,
             on_error=lambda e: logger.error("Error in DashScopeTTSNode: %s", e),
         )
         return self
-
-    # ── 内部 ──
 
     def _queue_text(self, text: str) -> None:
         if not text.strip():
@@ -97,8 +97,8 @@ class DashScopeTTSNode(AbstractTextConsumer, AbstractTextEmitter):
 
     def _synthesize_speech(self, text: str) -> None:
         try:
-            import dashscope
-            from dashscope.audio.tts_v2 import SpeechSynthesizer
+            import dashscope  # type: ignore[import-untyped]
+            from dashscope.audio.tts_v2 import SpeechSynthesizer  # type: ignore[import-untyped]
 
             dashscope.api_key = self._api_key
             synthesizer = SpeechSynthesizer(model=self._model, voice=self._voice)
@@ -110,27 +110,23 @@ class DashScopeTTSNode(AbstractTextConsumer, AbstractTextEmitter):
 
             self.text_subject.on_next(text)
 
-            # CosyVoice 默认输出 mp3, 用 soundfile 解码
             audio_io = io.BytesIO(audio_bytes)
             try:
                 import soundfile as sf  # type: ignore[import-untyped]
 
                 with sf.SoundFile(audio_io, "r") as sound_file:
-                    audio_array = sound_file.read(dtype="float32")
+                    actual_sr: int = sound_file.samplerate
+                    audio_array: np.ndarray[Any, Any] = sound_file.read(dtype="float32")
             except Exception:
-                # mp3 可能需要额外依赖; 回退到简单 pcm 解析
-                logger.warning("soundfile 无法解码 DashScope 音频, 尝试 pydub 回退")
-                try:
-                    from pydub import AudioSegment  # type: ignore[import-untyped]
+                logger.warning("soundfile 无法解码 DashScope 音频, 跳过")
+                return
 
-                    audio_io.seek(0)
-                    seg = AudioSegment.from_file(audio_io, format="mp3")
-                    seg = seg.set_frame_rate(_SAMPLE_RATE).set_channels(1).set_sample_width(2)
-                    raw = np.frombuffer(seg.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
-                    audio_array = raw
-                except Exception as inner:
-                    logger.error("无法解码 DashScope TTS 音频: %s", inner)
-                    return
+            if actual_sr != _SAMPLE_RATE:
+                duration = len(audio_array) / float(actual_sr)
+                src_t = np.linspace(0.0, duration, num=len(audio_array), endpoint=False)
+                dst_len = max(1, int(duration * _SAMPLE_RATE))
+                dst_t = np.linspace(0.0, duration, num=dst_len, endpoint=False)
+                audio_array = np.interp(dst_t, src_t, audio_array).astype(np.float32)
 
             audio_event = AudioEvent(
                 data=audio_array,
@@ -150,8 +146,8 @@ class DashScopeTTSNode(AbstractTextConsumer, AbstractTextEmitter):
             self.text_queue.clear()
         if self.processing_thread and self.processing_thread.is_alive():
             self.processing_thread.join(timeout=2.0)
-        if self.subscription:
-            self.subscription.dispose()
-            self.subscription = None
+        if self._subscription:
+            self._subscription.dispose()
+            self._subscription = None
         self.audio_subject.on_completed()
         self.text_subject.on_completed()

@@ -29,6 +29,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.stream.audio.node_output import SounddeviceAudioOutput
+from dimos.stream.audio.tts.node_dashscope import DashScopeTTSNode
 from dimos.stream.audio.tts.node_openai import OpenAITTSNode, Voice
 from dimos.utils.logging_config import setup_logger
 
@@ -36,7 +37,7 @@ logger = setup_logger()
 
 
 class SpeakSkill(Module):
-    _tts_node: OpenAITTSNode | None = None
+    _tts_node: OpenAITTSNode | DashScopeTTSNode | None = None
     _audio_output: SounddeviceAudioOutput | None = None
     _connection: GO2ConnectionSpec | None = None
     _audio_lock: threading.Lock = threading.Lock()
@@ -48,10 +49,8 @@ class SpeakSkill(Module):
         super().start()
         dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
         if dashscope_key:
-            from dimos.stream.audio.tts.node_dashscope import DashScopeTTSNode
-
             logger.info("SpeakSkill: 使用 DashScope CosyVoice TTS (DASHSCOPE_API_KEY 已配置)")
-            self._tts_node = DashScopeTTSNode(api_key=dashscope_key)  # type: ignore[assignment]
+            self._tts_node = DashScopeTTSNode(api_key=dashscope_key)
         else:
             logger.info("SpeakSkill: 使用 OpenAI TTS")
             self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
@@ -175,12 +174,12 @@ class SpeakSkill(Module):
             return None
 
     def _synthesize_dashscope_audio(self, text: str) -> bytes:
-        import dashscope
-        from dashscope.audio.tts_v2 import SpeechSynthesizer
+        import dashscope  # type: ignore[import-untyped]
+        from dashscope.audio.tts_v2 import SpeechSynthesizer  # type: ignore[import-untyped]
 
         dashscope.api_key = os.environ["DASHSCOPE_API_KEY"]
         synthesizer = SpeechSynthesizer(model="cosyvoice-v3-flash", voice="longanyang")
-        audio = synthesizer.call(text)
+        audio: bytes = synthesizer.call(text)
         if not audio:
             raise RuntimeError("DashScope TTS returned empty audio")
         return audio
@@ -207,6 +206,7 @@ class SpeakSkill(Module):
     def _get_go2_audio_list(self) -> list[dict[str, object]]:
         from unitree_webrtc_connect.constants import AUDIO_API, RTC_TOPIC
 
+        assert self._connection is not None
         response = self._connection.publish_request(
             RTC_TOPIC["AUDIO_HUB_REQ"],
             {"api_id": AUDIO_API["GET_AUDIO_LIST"], "parameter": json.dumps({})},
@@ -240,6 +240,7 @@ class SpeakSkill(Module):
     def _upload_go2_audio(self, audio_name: str, wav_bytes: bytes) -> None:
         from unitree_webrtc_connect.constants import AUDIO_API, RTC_TOPIC
 
+        assert self._connection is not None
         file_md5 = hashlib.md5(wav_bytes).hexdigest()
         b64_data = base64.b64encode(wav_bytes).decode("utf-8")
         chunk_size = 4096
@@ -269,6 +270,7 @@ class SpeakSkill(Module):
     def _play_go2_audio(self, unique_id: str) -> None:
         from unitree_webrtc_connect.constants import AUDIO_API, RTC_TOPIC
 
+        assert self._connection is not None
         self._connection.publish_request(
             RTC_TOPIC["AUDIO_HUB_REQ"],
             {
