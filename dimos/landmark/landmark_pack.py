@@ -48,9 +48,9 @@ def _dimos_is_running() -> bool:
 
 
 def _default_pack_dir(pack_name: str) -> Path:
-    """Return the bundled packs dir for *pack_name*, falling back to user dir."""
+    """Return the user dir for *pack_name* if it has a manifest, else bundled dir."""
     p = USER_LANDMARK_PACKS_DIR / pack_name
-    if p.is_dir():
+    if p.is_dir() and (p / "manifest.yaml").exists():
         return p
     return _BUNDLED_PACKS_DIR / pack_name
 
@@ -108,6 +108,8 @@ def _landmark_summary(records: list[dict[str, Any]]) -> dict[str, int]:
                 f"landmarks.json element {i} must be a JSON object, got {type(rec).__name__}"
             )
         t = rec.get("record_type", "unknown")
+        if not isinstance(t, str):
+            t = str(t)
         counts[t] = counts.get(t, 0) + 1
     return counts
 
@@ -308,6 +310,10 @@ def export_pack(
         raise ValueError("landmarks.json is empty — nothing to export")
 
     dest = output_dir or USER_LANDMARK_PACKS_DIR / pack_name
+    if dest.resolve() == LANDMARK_MEMORY_DIR.resolve():
+        raise ValueError("Cannot export into the live landmark_memory directory")
+    if dest.exists() and not dest.is_dir():
+        raise FileExistsError(f"Export destination exists and is not a directory: {dest}")
     dest.mkdir(parents=True, exist_ok=True)
 
     # Write landmarks.json
