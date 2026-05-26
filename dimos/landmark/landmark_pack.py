@@ -315,11 +315,14 @@ def export_pack(
 
     # Clear stale snapshots from previous export, then copy current ones
     dest_snapshots = dest / "snapshots"
-    if dest_snapshots.exists():
-        shutil.rmtree(dest_snapshots)
     src_snapshots = LANDMARK_MEMORY_DIR / "snapshots"
-    if src_snapshots.is_dir():
-        shutil.copytree(src_snapshots, dest_snapshots, symlinks=False)
+    if dest_snapshots.resolve() == src_snapshots.resolve():
+        logger.warning("Export destination is the live landmark_memory; skipping snapshot cleanup")
+    else:
+        if dest_snapshots.exists():
+            shutil.rmtree(dest_snapshots)
+        if src_snapshots.is_dir():
+            shutil.copytree(src_snapshots, dest_snapshots, symlinks=False)
 
     # Generate manifest template if missing
     manifest_path = dest / "manifest.yaml"
