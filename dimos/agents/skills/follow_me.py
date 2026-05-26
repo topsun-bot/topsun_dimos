@@ -1247,7 +1247,7 @@ class FollowMeSkillContainer(Module):
                     img_h = max(self._camera_info.height, 1)
                     bbox_ratio = bbox_h / img_h
                     if sim > best_sim:
-                        best_sim, _best_bbox = sim, bbox
+                        best_sim = sim
                         best_seen_at = "路上"
                         logger.info(
                             f"路上 scan「{name}」 sim={sim:.2f} bbox_h_ratio={bbox_ratio:.2f}"
@@ -1320,9 +1320,9 @@ class FollowMeSkillContainer(Module):
             while time.time() < identify_deadline:
                 result = self._scan_frame_for_target(templates)
                 if result is not None:
-                    sim, bbox = result
+                    sim, _bbox = result
                     if sim > best_sim:
-                        best_sim, _best_bbox = sim, bbox
+                        best_sim = sim
                         best_seen_at = "到达后"
                 # 早退：已经很有信心就别再扫了
                 if best_sim >= self._person_match_threshold + DEFAULT_GOTO_EARLY_STOP_SIM_BONUS:
