@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+import numpy as np
 import pytest
 
 from dimos.agents.skills.navigation import NavigationSkillContainer
@@ -25,6 +27,7 @@ from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
+from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.base import NavigationState
 from dimos.types.robot_location import RobotLocation
@@ -37,6 +40,10 @@ class FakeCamera(Module):
 
 class FakeOdom(Module):
     odom: Out[PoseStamped]
+
+
+class FakeCostmap(Module):
+    global_costmap: Out[OccupancyGrid]
 
 
 class StubSpatialMemory(Module):
@@ -62,6 +69,10 @@ class StubSpatialMemory(Module):
 
     @rpc
     def query_by_text_with_images(self, text: str, limit: int = 3) -> list[dict[str, Any]]:
+        return []
+
+    @rpc
+    def get_memory_locations(self) -> list[dict[str, float | str]]:
         return []
 
     @rpc
@@ -278,6 +289,14 @@ def _pose(x: float, y: float, yaw: float = 0.0) -> PoseStamped:
     )
 
 
+def _free_costmap(size: int = 21, resolution: float = 0.5) -> OccupancyGrid:
+    return OccupancyGrid(
+        grid=np.zeros((size, size), dtype=np.int8),
+        resolution=resolution,
+        frame_id="map",
+    )
+
+
 def test_navigate_with_text_stops_after_known_object_landmark() -> None:
     nav = _nav_container()
     target = SpatialRecord(
@@ -302,6 +321,76 @@ def test_navigate_with_text_stops_after_known_object_landmark() -> None:
 
     assert nav.navigate_with_text("fire extinguisher") == "Arrived near landmark."
     assert object_attempts == []
+
+
+def test_explore_memory_blindspot_sends_goal_from_costmap() -> None:
+    nav = _nav_container()
+    nav._latest_odom = _pose(5.0, 5.0)
+    nav._latest_global_costmap = _free_costmap()
+    nav._navigation = _FakeNavigation()
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+
+    result = nav.explore_memory_blindspot(search_radius_m=2.0, coverage_radius_m=0.75)
+
+    assert "Started navigating" in result
+    assert len(nav._navigation.goals) == 1
+    goal = nav._navigation.goals[0]
+    assert goal.frame_id == "map"
+    assert ((goal.position.x - 5.0) ** 2 + (goal.position.y - 5.0) ** 2) ** 0.5 >= 0.5
+
+
+def test_explore_memory_blindspot_skips_currently_covered_area() -> None:
+    nav = _nav_container()
+    nav._latest_odom = _pose(5.0, 5.0)
+    nav._latest_global_costmap = _free_costmap()
+    nav._navigation = _FakeNavigation()
+    nav._spatial_memory = SimpleNamespace(
+        get_memory_locations=lambda: [
+            {"frame_id": "near", "pos_x": 5.5, "pos_y": 5.0, "pos_z": 0.0, "timestamp": time.time()}
+        ]
+    )
+
+    result = nav.explore_memory_blindspot(search_radius_m=1.0, coverage_radius_m=2.0)
+
+    assert "coverage looks healthy" in result
+    assert nav._navigation.goals == []
+
+
+def test_patrol_memory_blindspots_stops_after_max_goals(monkeypatch: pytest.MonkeyPatch) -> None:
+    nav = _nav_container()
+    nav._latest_odom = _pose(5.0, 5.0)
+    nav._latest_global_costmap = _free_costmap()
+    nav._navigation = _FakeNavigation()
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._memory_blindspot_patrol_stop = False
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
+
+    result = nav.patrol_memory_blindspots(
+        search_radius_m=2.0,
+        coverage_radius_m=0.75,
+        max_goals=1,
+        max_duration_sec=5.0,
+        recognize_on_arrival=False,
+    )
+
+    assert "visited 1 goal(s)" in result
+    assert "max_goals=1 reached" in result
+    assert len(nav._navigation.goals) == 1
+
+
+def test_blindspot_goal_rejects_occupied_cells() -> None:
+    nav = _nav_container()
+    grid = np.zeros((21, 21), dtype=np.int8)
+    grid[9:12, 9:12] = CostValues.OCCUPIED
+    nav._latest_odom = _pose(5.0, 5.0)
+    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+
+    target = nav._find_nearest_memory_blindspot(search_radius_m=2.0, coverage_radius_m=0.5)
+
+    assert target is not None
+    gx, gy = target["grid"]
+    assert int(grid[gy, gx]) != CostValues.OCCUPIED
 
 
 def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
@@ -495,6 +584,7 @@ def test_stop_movement(agent_setup) -> None:
         blueprints=[
             FakeCamera.blueprint(),
             FakeOdom.blueprint(),
+            FakeCostmap.blueprint(),
             MockedStopNavSkill.blueprint(),
             *_STUB_BLUEPRINTS,
         ],
@@ -509,6 +599,7 @@ def test_start_exploration(agent_setup) -> None:
         blueprints=[
             FakeCamera.blueprint(),
             FakeOdom.blueprint(),
+            FakeCostmap.blueprint(),
             MockedExploreNavSkill.blueprint(),
             *_STUB_BLUEPRINTS,
         ],
@@ -525,6 +616,7 @@ def test_go_to_semantic_location(agent_setup) -> None:
         blueprints=[
             FakeCamera.blueprint(),
             FakeOdom.blueprint(),
+            FakeCostmap.blueprint(),
             MockedSemanticNavSkill.blueprint(),
             *_STUB_BLUEPRINTS,
         ],

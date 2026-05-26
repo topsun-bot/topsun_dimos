@@ -27,6 +27,7 @@ from dimos.models.qwen.bbox import BBox
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
+from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.base import NavigationState
 from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector import (
@@ -219,6 +220,7 @@ def _log_vlm_runtime_config(vl_model: Any) -> None:
 class NavigationSkillContainer(Module):
     _latest_image: Image | None = None
     _latest_odom: PoseStamped | None = None
+    _latest_global_costmap: OccupancyGrid | None = None
     _skill_started: bool = False
     _similarity_threshold: float = 0.23
     # Visual relocalization vs odom (room reference images)
@@ -234,9 +236,11 @@ class NavigationSkillContainer(Module):
     _unitree_skill_container: UnitreeSkillContainer | None = None
     _frontier_explorer: WavefrontFrontierExplorer | None = None
     _memory_session_id: str = ""
+    _memory_blindspot_patrol_stop: bool = False
 
     color_image: In[Image]
     odom: In[PoseStamped]
+    global_costmap: In[OccupancyGrid]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -251,6 +255,7 @@ class NavigationSkillContainer(Module):
         super().start()
         self.register_disposable(Disposable(self.color_image.subscribe(self._on_color_image)))
         self.register_disposable(Disposable(self.odom.subscribe(self._on_odom)))
+        self.register_disposable(Disposable(self.global_costmap.subscribe(self._on_global_costmap)))
         self._skill_started = True
 
     @rpc
@@ -268,6 +273,166 @@ class NavigationSkillContainer(Module):
 
     def _on_odom(self, odom: PoseStamped) -> None:
         self._latest_odom = odom
+
+    def _on_global_costmap(self, costmap: OccupancyGrid) -> None:
+        self._latest_global_costmap = costmap
+
+    def _memory_locations(self) -> list[dict[str, float | str]]:
+        try:
+            return self._spatial_memory.get_memory_locations()
+        except Exception:
+            logger.exception("Failed to read spatial memory locations")
+            return []
+
+    def _is_costmap_goal_cell_safe(
+        self,
+        costmap: OccupancyGrid,
+        gx: int,
+        gy: int,
+        clearance_m: float,
+    ) -> bool:
+        if not (0 <= gx < costmap.width and 0 <= gy < costmap.height):
+            return False
+        if int(costmap.grid[gy, gx]) == CostValues.UNKNOWN:
+            return False
+        if int(costmap.grid[gy, gx]) >= CostValues.OCCUPIED:
+            return False
+
+        clearance_cells = max(1, math.ceil(clearance_m / max(costmap.resolution, 1e-6)))
+        for ny in range(
+            max(0, gy - clearance_cells), min(costmap.height, gy + clearance_cells + 1)
+        ):
+            for nx in range(
+                max(0, gx - clearance_cells), min(costmap.width, gx + clearance_cells + 1)
+            ):
+                if (nx - gx) ** 2 + (ny - gy) ** 2 > clearance_cells**2:
+                    continue
+                if int(costmap.grid[ny, nx]) >= CostValues.OCCUPIED:
+                    return False
+        return True
+
+    def _costmap_cell_has_unknown_neighbor(
+        self,
+        costmap: OccupancyGrid,
+        gx: int,
+        gy: int,
+        radius_cells: int = 2,
+    ) -> bool:
+        for ny in range(max(0, gy - radius_cells), min(costmap.height, gy + radius_cells + 1)):
+            for nx in range(max(0, gx - radius_cells), min(costmap.width, gx + radius_cells + 1)):
+                if int(costmap.grid[ny, nx]) == CostValues.UNKNOWN:
+                    return True
+        return False
+
+    def _memory_coverage_reason(
+        self,
+        x: float,
+        y: float,
+        memory_locations: list[dict[str, float | str]],
+        coverage_radius_m: float,
+        stale_after_sec: float,
+        now: float,
+    ) -> tuple[str | None, float | None]:
+        nearest_distance: float | None = None
+        for loc in memory_locations:
+            try:
+                lx = float(loc.get("pos_x", loc.get("x", 0.0)))
+                ly = float(loc.get("pos_y", loc.get("y", 0.0)))
+                ts = float(loc.get("timestamp", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            distance = math.hypot(x - lx, y - ly)
+            if nearest_distance is None or distance < nearest_distance:
+                nearest_distance = distance
+            if distance <= coverage_radius_m:
+                if stale_after_sec <= 0 or ts <= 0 or now - ts <= stale_after_sec:
+                    return None, distance
+
+        if nearest_distance is not None and nearest_distance <= coverage_radius_m:
+            return "stale", nearest_distance
+        return "missing", nearest_distance
+
+    def _find_nearest_memory_blindspot(
+        self,
+        search_radius_m: float = 5.0,
+        coverage_radius_m: float = 1.0,
+        stale_after_sec: float = 600.0,
+        clearance_m: float = 0.35,
+        exclude_recent_goals: list[tuple[float, float]] | None = None,
+    ) -> dict[str, Any] | None:
+        if self._latest_odom is None or self._latest_global_costmap is None:
+            return None
+
+        costmap = self._latest_global_costmap
+        robot = self._latest_odom.position
+        robot_grid = costmap.world_to_grid((robot.x, robot.y, robot.z))
+        center_gx = round(robot_grid.x)
+        center_gy = round(robot_grid.y)
+        radius_cells = max(1, math.ceil(search_radius_m / max(costmap.resolution, 1e-6)))
+        stride = max(1, round(0.25 / max(costmap.resolution, 1e-6)))
+        now = time.time()
+        memory_locations = self._memory_locations()
+        recent = exclude_recent_goals or []
+
+        best: dict[str, Any] | None = None
+        for gy in range(
+            max(0, center_gy - radius_cells),
+            min(costmap.height, center_gy + radius_cells + 1),
+            stride,
+        ):
+            for gx in range(
+                max(0, center_gx - radius_cells),
+                min(costmap.width, center_gx + radius_cells + 1),
+                stride,
+            ):
+                world = costmap.grid_to_world((gx, gy, 0.0))
+                distance_to_robot = math.hypot(world.x - float(robot.x), world.y - float(robot.y))
+                if distance_to_robot > search_radius_m:
+                    continue
+                if distance_to_robot < max(0.5, coverage_radius_m * 0.5):
+                    continue
+                if any(
+                    math.hypot(world.x - rx, world.y - ry) < coverage_radius_m for rx, ry in recent
+                ):
+                    continue
+                if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
+                    continue
+
+                reason, nearest_memory_distance = self._memory_coverage_reason(
+                    float(world.x),
+                    float(world.y),
+                    memory_locations,
+                    coverage_radius_m,
+                    stale_after_sec,
+                    now,
+                )
+                if reason is None:
+                    continue
+
+                is_frontier = self._costmap_cell_has_unknown_neighbor(costmap, gx, gy)
+                target_type = "memory_frontier" if is_frontier else "memory_gap"
+                score = distance_to_robot
+                if is_frontier:
+                    score -= 0.75
+                if reason == "missing":
+                    score -= 0.25
+
+                candidate = {
+                    "pose": PoseStamped(
+                        position=make_vector3(float(world.x), float(world.y), float(robot.z)),
+                        orientation=self._latest_odom.orientation,
+                        frame_id=costmap.frame_id or self._latest_odom.frame_id,
+                    ),
+                    "distance_m": distance_to_robot,
+                    "grid": (gx, gy),
+                    "reason": reason,
+                    "target_type": target_type,
+                    "nearest_memory_distance_m": nearest_memory_distance,
+                    "score": score,
+                }
+                if best is None or score < float(best["score"]):
+                    best = candidate
+        return best
 
     @skill
     def tag_location(self, location_name: str, num_photos: int = 0) -> str:
@@ -1221,6 +1386,7 @@ class NavigationSkillContainer(Module):
         frame_poses: list[tuple[tuple[float, float, float], tuple[float, float, float]]]
         | None = None,
         frames: list[Any] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> int:
         stored = 0
         hfov_rad = math.radians(_CAMERA_HFOV_DEG)
@@ -1283,6 +1449,8 @@ class NavigationSkillContainer(Module):
                 "observed_position": list(obj_pos),
                 "observed_rotation": list(obj_rot),
             }
+            if extra_metadata:
+                meta.update(extra_metadata)
             if room_name:
                 meta["room_name"] = room_name
             if view_idx is not None:
@@ -1421,6 +1589,51 @@ class NavigationSkillContainer(Module):
             n,
         )
 
+    def _detect_objects_in_current_view(
+        self, extra_metadata: dict[str, Any] | None = None
+    ) -> tuple[int, list[str], str]:
+        if self._latest_image is None:
+            return 0, [], "No camera image available."
+        if not hasattr(self._latest_image, "data"):
+            return 0, [], "Camera image has no pixel data."
+
+        logger.info(
+            "[detect_objects_in_view] START image_shape=%s",
+            getattr(self._latest_image.data, "shape", None),
+        )
+        try:
+            response = self._vlm_query_all_images(
+                [self._latest_image.data], _VLM_OBJECT_LIST_PROMPT
+            )
+        except Exception as exc:
+            logger.exception("[detect_objects_in_view] VLM call failed")
+            return 0, [], f"VLM call failed: {exc}"
+
+        objects = self._parse_vlm_object_list_response(response)
+        if not objects:
+            return 0, [], f"No objects parsed from VLM response: {(response or '')[:200]}"
+
+        pos = self._latest_odom.position if self._latest_odom else None
+        euler_tuple = self._odom_euler_tuple()
+        position = (float(pos.x), float(pos.y), float(pos.z)) if pos else (0.0, 0.0, 0.0)
+        rotation = euler_tuple if euler_tuple else (0.0, 0.0, 0.0)
+        stored = self._store_detected_objects(
+            objects,
+            position,
+            rotation,
+            frames=[self._latest_image.data],
+            frame_poses=[(position, rotation)],
+            extra_metadata=extra_metadata,
+        )
+        names = [
+            _normalize_vlm_object_name((o.get("name") or "").strip())
+            for o in objects
+            if (o.get("name") or "").strip()
+        ]
+        if stored:
+            return stored, names, f"Detected {stored} object(s): {', '.join(names)}."
+        return 0, names, "No nameable objects detected."
+
     @skill
     def detect_objects_in_view(self) -> str:
         """Detect nameable objects in the current camera frame using VLM.
@@ -1434,43 +1647,10 @@ class NavigationSkillContainer(Module):
         """
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
-        if self._latest_image is None:
-            return "No camera image available."
-        if not hasattr(self._latest_image, "data"):
-            return "Camera image has no pixel data."
-
-        logger.info(
-            "[detect_objects_in_view] START image_shape=%s",
-            getattr(self._latest_image.data, "shape", None),
-        )
-        try:
-            response = self._vlm_query_all_images(
-                [self._latest_image.data], _VLM_OBJECT_LIST_PROMPT
-            )
-        except Exception as exc:
-            logger.exception("[detect_objects_in_view] VLM call failed")
-            return f"VLM call failed: {exc}"
-
-        objects = self._parse_vlm_object_list_response(response)
-        if not objects:
-            return f"No objects parsed from VLM response: {(response or '')[:200]}"
-
-        pos = self._latest_odom.position if self._latest_odom else None
-        euler_tuple = self._odom_euler_tuple()
-        position = (float(pos.x), float(pos.y), float(pos.z)) if pos else (0.0, 0.0, 0.0)
-        rotation = euler_tuple if euler_tuple else (0.0, 0.0, 0.0)
-        stored = self._store_detected_objects(
-            objects,
-            position,
-            rotation,
-            frames=[self._latest_image.data],
-            frame_poses=[(position, rotation)],
-        )
-        names = [(o.get("name") or "").strip() for o in objects if (o.get("name") or "").strip()]
-
+        stored, names, message = self._detect_objects_in_current_view()
         if stored:
             return f"Detected {stored} object(s): {', '.join(names)}. Stored in landmark memory."
-        return "No nameable objects detected."
+        return message
 
     def _bbox_reasonable_for_tracking(self, bbox: BBox) -> bool:
         if self._latest_image is None or not hasattr(self._latest_image, "data"):
@@ -1704,6 +1884,192 @@ class NavigationSkillContainer(Module):
         message = f"Found a location in the semantic map matching '{query}'."
         return self._navigate_to(goal_pose, message)
 
+    def _wait_for_memory_blindspot_goal(self, timeout_sec: float) -> str:
+        deadline = time.time() + max(0.0, timeout_sec)
+        while time.time() < deadline:
+            if self._memory_blindspot_patrol_stop:
+                self._navigation.cancel_goal()
+                return "stopped"
+            if self._navigation.is_goal_reached():
+                return "reached"
+            time.sleep(0.2)
+        self._navigation.cancel_goal()
+        return "timeout"
+
+    @skill
+    def explore_memory_blindspot(
+        self,
+        search_radius_m: float = 5.0,
+        coverage_radius_m: float = 1.0,
+        stale_after_sec: float = 600.0,
+    ) -> str:
+        """Find a nearby reachable area with missing or stale spatial memory and navigate there.
+
+        Args:
+            search_radius_m: Radius around the robot to search in meters.
+            coverage_radius_m: Memory coverage radius in meters.
+            stale_after_sec: Treat memory older than this as stale. Use 0 to disable staleness.
+        """
+        if not self._skill_started:
+            raise ValueError(f"{self} has not been started.")
+        if self._latest_odom is None:
+            return "No odometry data received yet, cannot explore memory blind spots."
+        if self._latest_global_costmap is None:
+            return "No global costmap received yet, cannot explore memory blind spots."
+
+        target = self._find_nearest_memory_blindspot(
+            search_radius_m=search_radius_m,
+            coverage_radius_m=coverage_radius_m,
+            stale_after_sec=stale_after_sec,
+        )
+        if target is None:
+            return (
+                f"No reachable memory blind spot found within {search_radius_m:.1f}m. "
+                "Nearby spatial memory coverage looks healthy."
+            )
+
+        pose = cast("PoseStamped", target["pose"])
+        ok = self._navigation.set_goal(pose)
+        if not ok:
+            return "Found a memory blind spot, but navigation rejected the goal."
+
+        return (
+            f"Found a {target['target_type']} ({target['reason']}) "
+            f"{float(target['distance_m']):.1f}m away at "
+            f"({pose.position.x:.2f}, {pose.position.y:.2f}). "
+            "Started navigating there to collect spatial memory."
+        )
+
+    @skill
+    def patrol_memory_blindspots(
+        self,
+        search_radius_m: float = 8.0,
+        coverage_radius_m: float = 1.0,
+        stale_after_sec: float = 600.0,
+        max_goals: int = 0,
+        max_duration_sec: float = 1800.0,
+        goal_timeout_sec: float = 90.0,
+        cooldown_sec: float = 2.0,
+        recognize_on_arrival: bool = True,
+        include_object_summary: bool = True,
+    ) -> str:
+        """Explore areas that are not yet covered by spatial memory.
+
+        Use this when the user asks the robot to explore unexplored areas,
+        inspect unvisited places, fill spatial-memory gaps, refresh memory coverage,
+        or build spatial memory over time. The robot navigates to safe observation
+        points near spatial-memory-uncovered areas, records new spatial memory, and
+        can recognize objects on arrival.
+
+        Args:
+            search_radius_m: Radius around the robot to search in meters.
+            coverage_radius_m: Memory coverage radius in meters.
+            stale_after_sec: Treat memory older than this as stale. Use 0 to disable staleness.
+            max_goals: Optional target count limit. 0 means only use max_duration_sec.
+            max_duration_sec: Maximum patrol duration.
+            goal_timeout_sec: Per-goal timeout.
+            cooldown_sec: Delay between goals.
+            recognize_on_arrival: Run VLM object recognition after reaching a target.
+            include_object_summary: Include objects found during this patrol in the return text.
+        """
+        if not self._skill_started:
+            raise ValueError(f"{self} has not been started.")
+        if self._latest_odom is None:
+            return "No odometry data received yet, cannot patrol memory blind spots."
+        if self._latest_global_costmap is None:
+            return "No global costmap received yet, cannot patrol memory blind spots."
+
+        started_at = time.time()
+        deadline = started_at + max(0.0, max_duration_sec)
+        visited = 0
+        timed_out = 0
+        failed = 0
+        max_failures = 3
+        stop_reason = "max_duration_sec reached"
+        recent_goals: list[tuple[float, float]] = []
+        run_id = f"memory_blindspot_{int(started_at)}"
+        objects_by_target: list[tuple[str, list[str]]] = []
+        self._memory_blindspot_patrol_stop = False
+
+        while time.time() < deadline:
+            if self._memory_blindspot_patrol_stop:
+                stop_reason = "stop command received"
+                break
+            if max_goals > 0 and visited >= max_goals:
+                stop_reason = f"max_goals={max_goals} reached"
+                break
+
+            target = self._find_nearest_memory_blindspot(
+                search_radius_m=search_radius_m,
+                coverage_radius_m=coverage_radius_m,
+                stale_after_sec=stale_after_sec,
+                exclude_recent_goals=recent_goals,
+            )
+            if target is None:
+                stop_reason = (
+                    f"no reachable memory-uncovered target remained within {search_radius_m:.1f}m"
+                )
+                break
+
+            pose = cast("PoseStamped", target["pose"])
+            target_label = f"{target['target_type']}@({pose.position.x:.2f},{pose.position.y:.2f})"
+            if not self._navigation.set_goal(pose):
+                failed += 1
+                if failed >= max_failures:
+                    stop_reason = "navigation rejected too many memory blindspot goals"
+                    break
+                continue
+
+            status = self._wait_for_memory_blindspot_goal(goal_timeout_sec)
+            if status == "stopped":
+                stop_reason = "stop command received"
+                break
+            if status == "timeout":
+                timed_out += 1
+                failed += 1
+            else:
+                visited += 1
+                failed = 0
+                recent_goals.append((float(pose.position.x), float(pose.position.y)))
+                if len(recent_goals) > 20:
+                    recent_goals.pop(0)
+                if recognize_on_arrival:
+                    stored, names, _ = self._detect_objects_in_current_view(
+                        {
+                            "source": "memory_blindspot_explorer",
+                            "exploration_run_id": run_id,
+                            "target_type": str(target["target_type"]),
+                            "target_reason": str(target["reason"]),
+                            "target_pose": [
+                                float(pose.position.x),
+                                float(pose.position.y),
+                                float(pose.position.z),
+                            ],
+                        }
+                    )
+                    if stored and names:
+                        objects_by_target.append((target_label, names))
+
+            if failed >= max_failures:
+                stop_reason = "too many consecutive navigation failures"
+                break
+            time.sleep(max(0.0, cooldown_sec))
+
+        elapsed = time.time() - started_at
+        lines = [
+            "Memory-driven exploration finished: "
+            f"visited {visited} goal(s), timed out {timed_out}, elapsed {elapsed:.0f}s.",
+            f"Stopped because {stop_reason}.",
+        ]
+        if include_object_summary:
+            if objects_by_target:
+                lines.append("New objects found in explored areas:")
+                for target_label, names in objects_by_target:
+                    lines.append(f"- {target_label}: {', '.join(names)}")
+            else:
+                lines.append("No new objects were recognized in explored areas.")
+        return "\n".join(lines)
+
     @skill
     def stop_navigation(self) -> str:
         """Immediatly stop moving."""
@@ -1711,6 +2077,7 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._memory_blindspot_patrol_stop = True
         self._cancel_goal_and_stop()
 
         return "Stopped"
@@ -1722,6 +2089,7 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._memory_blindspot_patrol_stop = True
         self._cancel_goal_and_stop()
         exploration_msg = ""
         if self._frontier_explorer is not None:
