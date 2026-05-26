@@ -448,8 +448,10 @@ class FollowMeSkillContainer(Module):
     def _ensure_rerun(self) -> bool:
         """惰性初始化：连到 RerunBridgeModule 启动的 grpc proxy server，把 bbox 推过去。
 
-        关键点：用 recording_id="dimos-main"——必须跟 bridge.py:start() 里的一致，
-        这样 follow_me 进程 log 的 bbox 才会合并到同一个 recording，叠在 color_image 上。
+        通过 dimos 共享的 ``rerun_init`` 初始化，保证跟主 RerunBridgeModule 走同一套
+        默认（app_id="dimos"、相同 colormap 注册等）；recording_id 跟随 rerun 默认行为，
+        避免人为指定一个跟 bridge 不一致的值导致两个 recording 互相不显示对方的实体。
+
         viewer mode 不是 native/web 时（比如 viewer="none"），grpc 端口可能不通，
         直接吞掉异常，主控制循环不受影响。
         """
@@ -459,8 +461,9 @@ class FollowMeSkillContainer(Module):
             import rerun as rr
 
             from dimos.visualization.rerun.constants import RERUN_GRPC_PORT
+            from dimos.visualization.rerun.init import rerun_init
 
-            rr.init("dimos", recording_id="dimos-main", spawn=False)
+            rerun_init("dimos", spawn=False)
             rr.connect_grpc(f"rerun+http://127.0.0.1:{RERUN_GRPC_PORT}/proxy")
             self._rerun_ready = True
             logger.info("follow_me rerun bbox stream connected")
@@ -1361,17 +1364,39 @@ class FollowMeSkillContainer(Module):
     # 花名册 持久化
 
     def _load_people_registry(self) -> None:
-        """启动时从 ~/.dimos/people_registry.json 加载花名册，文件不存在/损坏静默忽略。"""
+        """启动时从 ~/.dimos/people_registry.json 加载花名册，文件不存在/损坏静默忽略。
+
+        逐项校验 schema——值必须是 dict 且包含必填字段 ``embeddings_b64`` / ``description``，
+        老格式 / 手编辑出来的坏数据直接跳过那一项而不是整个 registry 加载失败，避免一份
+        历史 JSON 把整个跟随能力废掉。
+        """
         try:
             if not self._people_registry_path.exists():
                 return
             with self._people_registry_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                self._people = data
-                logger.info(
-                    f"loaded {len(self._people)} person(s) from {self._people_registry_path}"
+            if not isinstance(data, dict):
+                logger.warning(
+                    f"people_registry 顶层不是 JSON object，已忽略：{self._people_registry_path}"
                 )
+                self._people = {}
+                return
+            validated: dict[str, dict[str, Any]] = {}
+            for name, entry in data.items():
+                if not isinstance(entry, dict):
+                    logger.warning(f"people_registry 跳过 '{name}'：value 不是 dict")
+                    continue
+                if not isinstance(entry.get("embeddings_b64"), list):
+                    logger.warning(f"people_registry 跳过 '{name}'：缺 embeddings_b64 列表")
+                    continue
+                validated[name] = entry
+            self._people = validated
+            logger.info(
+                f"loaded {len(self._people)} person(s) from {self._people_registry_path}"
+                f"（原始 {len(data)} 项，{len(data) - len(self._people)} 项 schema 不匹配被跳过）"
+                if len(data) != len(self._people)
+                else f"loaded {len(self._people)} person(s) from {self._people_registry_path}"
+            )
         except Exception as e:
             logger.warning(f"load people_registry failed: {e}")
             self._people = {}

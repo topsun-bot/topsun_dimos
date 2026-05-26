@@ -58,7 +58,12 @@ class YoloPersonDetector(Detector):
             image: Input image
 
         Returns:
-            ImageDetections2D containing Detection2DPerson objects with pose keypoints
+            ImageDetections2D. The concrete element type is selected by
+            ``ImageDetections2D.from_ultralytics_result`` based on the underlying
+            model: ``Detection2DPerson`` (with pose keypoints) for ``*-pose.pt``
+            weights, ``Detection2DSeg`` when masks are present, and plain
+            ``Detection2DBBox`` for regular detection models such as ``yolo11n.pt``.
+            Callers must not assume keypoints are always available.
         """
         results = self.model.track(
             source=image.to_opencv(),
