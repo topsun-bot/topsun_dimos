@@ -224,6 +224,10 @@ def run(
         CONFIG_DIR / "dimos", "--config", "-c", help="Path to config file"
     ),
     show_help: bool = typer.Option(False, "--help"),
+    landmark_pack: str | None = typer.Option(
+        None, "--landmark-pack",
+        help="Import a landmark pack before starting the blueprint",
+    ),
 ) -> None:
     """Start a robot blueprint"""
     logger.info("Starting DimOS")
@@ -292,11 +296,11 @@ def run(
         return
 
     # Auto-import landmark pack if --landmark-pack is set
-    if global_config.landmark_pack:
+    if landmark_pack:
         from dimos.landmark.landmark_pack import import_pack as landmark_import
 
         try:
-            result = landmark_import(global_config.landmark_pack, force=True, no_backup=True)
+            result = landmark_import(landmark_pack, force=True, no_backup=True)
             logger.info(
                 "Auto-imported landmark pack '%s': %d records",
                 result.pack_name,

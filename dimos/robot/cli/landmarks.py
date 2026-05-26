@@ -154,7 +154,7 @@ def export_cmd(
         None,
         "--output",
         "-o",
-        help="Custom output directory (default: fixtures/landmark_packs/<name>)",
+        help="Custom output directory (default: ~/.local/state/dimos/landmark_packs/<name>)",
     ),
 ) -> None:
     """Export current landmark_memory/ into a pack."""

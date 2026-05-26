@@ -24,7 +24,7 @@ import pytest
 import yaml
 
 from dimos.landmark.landmark_pack import (
-    LANDMARK_PACKS_DIR,
+    _BUNDLED_PACKS_DIR,
     ImportResult,
     _default_pack_dir,
     _landmark_summary,
@@ -116,8 +116,13 @@ def mock_dimos_not_running():
 # ── list_packs ────────────────────────────────────────────────────
 
 
+def _patch_both_dirs(monkeypatch, bundled, user):
+    monkeypatch.setattr("dimos.landmark.landmark_pack._BUNDLED_PACKS_DIR", bundled)
+    monkeypatch.setattr("dimos.landmark.landmark_pack.USER_LANDMARK_PACKS_DIR", user)
+
+
 def test_list_packs_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setattr("dimos.landmark.landmark_pack.LANDMARK_PACKS_DIR", tmp_path)
+    _patch_both_dirs(monkeypatch, tmp_path / "bundled", tmp_path / "user")
     assert list_packs() == []
 
 
@@ -125,13 +130,13 @@ def test_list_packs_with_pack(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     pack = tmp_path / "demo_office"
     pack.mkdir()
     (pack / "manifest.yaml").write_text("name: demo_office")
-    monkeypatch.setattr("dimos.landmark.landmark_pack.LANDMARK_PACKS_DIR", tmp_path)
+    _patch_both_dirs(monkeypatch, tmp_path, tmp_path / "user")
     assert list_packs() == ["demo_office"]
 
 
 def test_list_packs_skips_non_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     (tmp_path / "not_a_pack").write_text("just a file")
-    monkeypatch.setattr("dimos.landmark.landmark_pack.LANDMARK_PACKS_DIR", tmp_path)
+    _patch_both_dirs(monkeypatch, tmp_path, tmp_path / "user")
     assert list_packs() == []
 
 
@@ -329,7 +334,7 @@ def test_status_with_data(tmp_state_dir: Path):
 
 def test_default_pack_dir():
     d = _default_pack_dir("demo_office")
-    assert d == LANDMARK_PACKS_DIR / "demo_office"
+    assert d == _BUNDLED_PACKS_DIR / "demo_office"
 
 
 # ── ImportResult ──────────────────────────────────────────────────

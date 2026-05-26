@@ -31,12 +31,12 @@ import time
 from typing import Any
 import uuid
 
-from dimos.constants import DIMOS_PROJECT_ROOT, STATE_DIR
+from dimos.constants import STATE_DIR
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-LANDMARK_PACKS_DIR = DIMOS_PROJECT_ROOT / "fixtures" / "landmark_packs"
+_BUNDLED_PACKS_DIR = Path(__file__).parent / "_packs"
 USER_LANDMARK_PACKS_DIR = STATE_DIR / "landmark_packs"
 LANDMARK_MEMORY_DIR = STATE_DIR / "landmark_memory"
 
@@ -48,17 +48,17 @@ def _dimos_is_running() -> bool:
 
 
 def _default_pack_dir(pack_name: str) -> Path:
-    """Return the project fixtures dir for *pack_name*, falling back to user dir."""
-    p = LANDMARK_PACKS_DIR / pack_name
+    """Return the bundled packs dir for *pack_name*, falling back to user dir."""
+    p = _BUNDLED_PACKS_DIR / pack_name
     if p.is_dir():
         return p
     return USER_LANDMARK_PACKS_DIR / pack_name
 
 
 def list_packs() -> list[str]:
-    """List available pack names from project fixtures and user state dir."""
+    """List available pack names from bundled packs and user state dir."""
     seen: set[str] = set()
-    for base in (LANDMARK_PACKS_DIR, USER_LANDMARK_PACKS_DIR):
+    for base in (_BUNDLED_PACKS_DIR, USER_LANDMARK_PACKS_DIR):
         if base.exists():
             for d in sorted(base.iterdir()):
                 if d.is_dir() and (d / "manifest.yaml").exists() and d.name not in seen:
@@ -288,7 +288,7 @@ def export_pack(
     Parameters
     ----------
     pack_name: Name for the new pack.
-    output_dir: Custom output directory (default: fixtures/landmark_packs/<pack_name>).
+    output_dir: Custom output directory (default: ~/.local/state/dimos/landmark_packs/<name>).
 
     Returns the path to the created pack directory.
     """
