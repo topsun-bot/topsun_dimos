@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import platform
 import re
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from dimos.constants import DEFAULT_BUILD_NATIVE
@@ -75,6 +77,13 @@ class GlobalConfig(BaseSettings):
     dimsim_scene: str = "apt"
     dimsim_port: int = 8090
     default_transport: TransportBackend = _DEFAULT_TRANSPORT
+    unitree_webrtc_aes_key: str | None = Field(
+        default_factory=lambda: os.getenv("UNITREE_AES_128_KEY")
+        or os.getenv("UNITREE_AES_KEY")
+        or os.getenv("DIMOS_UNITREE_WEBRTC_AES_KEY")
+    )
+    unitree_cloud_region: Literal["cn", "global"] = "global"
+    unitree_webrtc_connect_timeout_sec: float = 30.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

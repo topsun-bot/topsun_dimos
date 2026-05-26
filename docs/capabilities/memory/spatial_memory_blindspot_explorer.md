@@ -1100,3 +1100,77 @@ uv run pytest dimos/agents/skills/test_navigation.py -q -k 'not go_to_semantic_l
 ```
 
 说明：曾额外运行包含 `test_go_to_semantic_location` 的旧 agent fixture 测试。日志显示 `navigate_with_text` 已成功调用并返回 “successfully navigated”，但测试等待 `finished_event` 超时，因此未作为本次新增功能的通过项记录。
+
+## 15. 第一次代码评审结果
+
+评审对象：
+
+```text
+74d78404 feat: add spatial memory blindspot exploration
+```
+
+评审结论：
+
+不建议直接合入。功能方向合理，已经补充空间记忆盲区探索 skill、`get_memory_locations()` RPC、测试和设计文档，但有两个运行时问题需要先修复。
+
+### 15.1 长时间巡逻 skill 会超过默认 RPC 超时
+
+`patrol_memory_blindspots` 默认最长运行 `1800s`，但普通 RPC 默认超时是 `120s`。MCP/agent 调用大约 120 秒后会超时报错，而模块里的巡逻逻辑可能仍在继续导航。这会导致用户看到调用失败，但机器人仍在执行长时间探索。
+
+相关位置：
+
+- `dimos/agents/skills/navigation.py`：`patrol_memory_blindspots(max_duration_sec=1800.0)`
+- `dimos/protocol/rpc/spec.py`：`DEFAULT_RPC_TIMEOUT = 120.0`
+
+建议修复：
+
+- 把长时间巡逻改成后台任务，并通过 tool progress 持续汇报状态。
+- 或者为该 RPC 显式配置更长 timeout。
+- 无论采用哪种方式，都要确保超时、停止命令、异常退出时能取消正在执行的巡逻任务和导航 goal。
+
+### 15.2 导航拒绝或超时后会重复选择同一个失败目标
+
+当前 `patrol_memory_blindspots` 只在成功到达后才把目标加入 `recent_goals`。如果最近的盲区点在 costmap 上看起来安全，但 planner 拒绝或无法到达，循环会重复选择同一个目标，连续失败 3 次后直接退出，而不是继续尝试下一个候选点。
+
+相关位置：
+
+- `dimos/agents/skills/navigation.py`：`_find_nearest_memory_blindspot(...)`
+- `dimos/agents/skills/navigation.py`：`if not self._navigation.set_goal(pose):`
+- `dimos/agents/skills/navigation.py`：`if status == "timeout":`
+
+建议修复：
+
+- 对 `set_goal` rejected 和 timeout 的目标建立失败黑名单。
+- 黑名单可以记录 grid cell 或 pose 坐标。
+- 后续调用 `_find_nearest_memory_blindspot()` 时排除这些失败目标，让巡逻能尝试下一个候选盲区。
+
+### 15.3 已验证项目
+
+已运行：
+
+```bash
+uv run pytest dimos/agents/skills/test_navigation.py -q
+```
+
+结果：
+
+```text
+17 passed
+```
+
+同时检查：
+
+```bash
+ruff check
+git diff --check
+```
+
+结果均通过。
+
+### 15.4 合入建议
+
+先修复 RPC 生命周期和失败目标排除逻辑，再进入下一轮评审。修复完成后，建议补充以下测试：
+
+- `patrol_memory_blindspots` 在 `set_goal` rejected 后不会重复选择同一个目标。
+- `patrol_memory_blindspots` 在单目标 timeout 后会尝试下一个候选目标。
+- 长时间巡逻被 `stop_navigation` 或 `stop_all_motion` 中断时，会取消导航并正常返回状态。

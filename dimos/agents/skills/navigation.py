@@ -1947,7 +1947,7 @@ class NavigationSkillContainer(Module):
         coverage_radius_m: float = 1.0,
         stale_after_sec: float = 600.0,
         max_goals: int = 0,
-        max_duration_sec: float = 1800.0,
+        max_duration_sec: float = 120.0,
         goal_timeout_sec: float = 90.0,
         cooldown_sec: float = 2.0,
         recognize_on_arrival: bool = True,

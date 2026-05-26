@@ -15,6 +15,9 @@
 import asyncio
 from dataclasses import dataclass
 import functools
+import inspect
+import os
+import re
 import threading
 import time
 from typing import Any, TypeAlias
@@ -54,6 +57,46 @@ from dimos.utils.reactive import backpressure, callback_to_observable
 VideoMessage: TypeAlias = NDArray[np.uint8]  # Shape: (height, width, 3)
 
 
+def _normalize_unitree_aes_key(aes_128_key: str | None) -> str | None:
+    if aes_128_key is None:
+        return None
+    key = aes_128_key.strip()
+    if not key:
+        return None
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", key):
+        raise ValueError(
+            "Unitree WebRTC AES-128 key must be 32 hex characters. "
+            "Fetch it with: uv run scripts/fetch_unitree_aes_key.py <account> <password> <sn>"
+        )
+    return key.lower()
+
+
+def _legion_connection_kwargs(
+    ip: str,
+    aes_128_key: str | None,
+    region: str,
+    device_type: str,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"ip": ip}
+    key = _normalize_unitree_aes_key(
+        aes_128_key
+        or os.environ.get("UNITREE_AES_128_KEY")
+        or os.environ.get("UNITREE_AES_KEY")
+        or os.environ.get("DIMOS_UNITREE_WEBRTC_AES_KEY")
+    )
+    if key is None:
+        return kwargs
+
+    params = inspect.signature(LegionConnection).parameters
+    if "aes_128_key" not in params:
+        raise RuntimeError(
+            "Configured unitree_webrtc_aes_key requires unitree-webrtc-connect>=2.1.2. "
+            "Run `uv sync --extra unitree` or use `uv sync --extra all`."
+        )
+    kwargs.update(aes_128_key=key, region=region, device_type=device_type)
+    return kwargs
+
+
 @dataclass
 class SerializableVideoFrame:
     """Pickleable wrapper for av.VideoFrame with all metadata"""
@@ -85,12 +128,30 @@ class SerializableVideoFrame:
 class UnitreeWebRTCConnection(Resource):
     _SPORT_API_ID_RAGEMODE: int = 2059
 
-    def __init__(self, ip: str, mode: str = "ai") -> None:
+    def __init__(
+        self,
+        ip: str,
+        mode: str = "ai",
+        aes_128_key: str | None = None,
+        region: str = "global",
+        device_type: str = "Go2",
+        connect_timeout_sec: float = 30.0,
+    ) -> None:
         self.ip = ip
         self.mode = mode
+        self.connect_timeout_sec = connect_timeout_sec
         self.stop_timer: threading.Timer | None = None
         self.cmd_vel_timeout = 0.2
-        self.conn = LegionConnection(WebRTCConnectionMethod.LocalSTA, ip=self.ip)
+        self.connection_error: BaseException | None = None
+        self.conn = LegionConnection(
+            WebRTCConnectionMethod.LocalSTA,
+            **_legion_connection_kwargs(
+                self.ip,
+                aes_128_key,
+                region,
+                device_type,
+            ),
+        )
         self.connect()
 
     def connect(self) -> None:
@@ -100,20 +161,25 @@ class UnitreeWebRTCConnection(Resource):
         self.connection_ready = threading.Event()
 
         async def async_connect() -> None:
-            await self.conn.connect()
-            await self.conn.datachannel.disableTrafficSaving(True)
+            try:
+                await self.conn.connect()
+                await self.conn.datachannel.disableTrafficSaving(True)
 
-            self.conn.datachannel.set_decoder(decoder_type="native")
+                self.conn.datachannel.set_decoder(decoder_type="native")
 
-            await self.conn.datachannel.pub_sub.publish_request_new(
-                RTC_TOPIC["MOTION_SWITCHER"], {"api_id": 1002, "parameter": {"name": self.mode}}
-            )
+                await self.conn.datachannel.pub_sub.publish_request_new(
+                    RTC_TOPIC["MOTION_SWITCHER"],
+                    {"api_id": 1002, "parameter": {"name": self.mode}},
+                )
 
-            self.connected_event.set()
-            self.connection_ready.set()
+                self.connected_event.set()
+                self.connection_ready.set()
 
-            while True:
-                await asyncio.sleep(1)
+                while True:
+                    await asyncio.sleep(1)
+            except BaseException as exc:
+                self.connection_error = exc
+                self.connection_ready.set()
 
         def start_background_loop() -> None:
             asyncio.set_event_loop(self.loop)
@@ -123,7 +189,28 @@ class UnitreeWebRTCConnection(Resource):
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=start_background_loop, daemon=True)
         self.thread.start()
-        self.connection_ready.wait()
+        if not self.connection_ready.wait(timeout=self.connect_timeout_sec):
+            self._stop_connect_loop()
+            raise TimeoutError(
+                f"Timed out after {self.connect_timeout_sec:.1f}s connecting to Unitree WebRTC "
+                f"at {self.ip}:9991. Check robot IP/network and pass the AES key with "
+                "`--unitree-webrtc-aes-key` or UNITREE_AES_128_KEY if this firmware requires it."
+            )
+        if self.connection_error is not None:
+            error = self.connection_error
+            self._stop_connect_loop()
+            raise RuntimeError(
+                f"Failed to connect to Unitree WebRTC at {self.ip}:9991. "
+                "Check robot IP/network and AES key configuration."
+            ) from error
+
+    def _stop_connect_loop(self) -> None:
+        if self.task:
+            self.task.cancel()
+        if hasattr(self, "loop") and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        if hasattr(self, "thread") and self.thread.is_alive():
+            self.thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
 
     def start(self) -> None:
         pass
