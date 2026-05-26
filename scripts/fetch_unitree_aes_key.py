@@ -113,9 +113,7 @@ def main() -> None:
     if args.all:
         print("sn\talias\tmodel\tonline\tkey")
         for d in devices:
-            print(
-                f"{d.sn}\t{d.alias or '-'}\t{d.model or d.series or '-'}\t{d.online}\t{d.key}"
-            )
+            print(f"{d.sn}\t{d.alias or '-'}\t{d.model or d.series or '-'}\t{d.online}\t{d.key}")
         return
 
     if not args.sn:
