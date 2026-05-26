@@ -49,17 +49,17 @@ def _dimos_is_running() -> bool:
 
 def _default_pack_dir(pack_name: str) -> Path:
     """Return the bundled packs dir for *pack_name*, falling back to user dir."""
-    p = _BUNDLED_PACKS_DIR / pack_name
+    p = USER_LANDMARK_PACKS_DIR / pack_name
     if p.is_dir():
         return p
-    return USER_LANDMARK_PACKS_DIR / pack_name
+    return _BUNDLED_PACKS_DIR / pack_name
 
 
 def list_packs() -> list[str]:
     """List available pack names from bundled packs and user state dir."""
     seen: set[str] = set()
     for base in (_BUNDLED_PACKS_DIR, USER_LANDMARK_PACKS_DIR):
-        if base.exists():
+        if base.is_dir():
             for d in sorted(base.iterdir()):
                 if d.is_dir() and (d / "manifest.yaml").exists() and d.name not in seen:
                     seen.add(d.name)
@@ -229,25 +229,27 @@ def import_pack(
     if not no_backup:
         backup_dir = _backup_memory_dir()
 
-    # Clear existing
-    if LANDMARK_MEMORY_DIR.exists():
-        shutil.rmtree(LANDMARK_MEMORY_DIR)
-
-    LANDMARK_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Process and write landmarks.json with session_id cleared
+    # Process records in memory
     if clear_session_id:
         for rec in records:
             rec["session_id"] = ""
 
-    dest_json = LANDMARK_MEMORY_DIR / "landmarks.json"
-    dest_json.write_text(json.dumps(records, indent=2, ensure_ascii=False))
+    # Write to a temp dir first so a partial write doesn't destroy existing data
+    tmp_dir = LANDMARK_MEMORY_DIR.with_name("landmark_memory.tmp")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True)
+    tmp_json = tmp_dir / "landmarks.json"
+    tmp_json.write_text(json.dumps(records, indent=2, ensure_ascii=False))
 
-    # Copy snapshots if present
     src_snapshots = pdir / "snapshots"
     if src_snapshots.is_dir():
-        dest_snapshots = LANDMARK_MEMORY_DIR / "snapshots"
-        shutil.copytree(src_snapshots, dest_snapshots, symlinks=False)
+        shutil.copytree(src_snapshots, tmp_dir / "snapshots", symlinks=False)
+
+    # Atomically swap: remove old, rename temp to target
+    if LANDMARK_MEMORY_DIR.exists():
+        shutil.rmtree(LANDMARK_MEMORY_DIR)
+    tmp_dir.rename(LANDMARK_MEMORY_DIR)
 
     summary = _landmark_summary(records)
     logger.info(

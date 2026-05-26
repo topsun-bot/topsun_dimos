@@ -300,7 +300,7 @@ def run(
         from dimos.landmark.landmark_pack import import_pack as landmark_import
 
         try:
-            result = landmark_import(landmark_pack, force=True, no_backup=True)
+            result = landmark_import(landmark_pack, force=True)
             logger.info(
                 "Auto-imported landmark pack '%s': %d records",
                 result.pack_name,
