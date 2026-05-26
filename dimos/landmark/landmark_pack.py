@@ -97,7 +97,11 @@ def _load_landmarks_json(pack_dir: Path) -> list[dict[str, Any]]:
 
 def _landmark_summary(records: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for rec in records:
+    for i, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            raise ValueError(
+                f"landmarks.json element {i} must be a JSON object, got {type(rec).__name__}"
+            )
         t = rec.get("record_type", "unknown")
         counts[t] = counts.get(t, 0) + 1
     return counts
@@ -124,8 +128,11 @@ class ImportResult:
     demo_queries: list[str] = field(default_factory=list)
 
 
+_VALID_RECORD_TYPES = frozenset({"door", "room", "landmark", "unknown"})
+
+
 def _normalize_record_types(records: list[dict[str, Any]]) -> None:
-    """Lowercase record_type values so they match RecordType enum values."""
+    """Lowercase record_type values and validate against known types."""
     for i, rec in enumerate(records):
         if not isinstance(rec, dict):
             raise ValueError(
@@ -133,7 +140,13 @@ def _normalize_record_types(records: list[dict[str, Any]]) -> None:
             )
         rt = rec.get("record_type")
         if isinstance(rt, str):
-            rec["record_type"] = rt.lower()
+            normalized = rt.lower()
+            if normalized not in _VALID_RECORD_TYPES:
+                raise ValueError(
+                    f"Unknown record_type '{rt}' at element {i} (name='{rec.get('name','?')}'); "
+                    f"expected one of {sorted(_VALID_RECORD_TYPES)}"
+                )
+            rec["record_type"] = normalized
 
 
 def import_pack(
@@ -286,12 +299,12 @@ def export_pack(
     # Write landmarks.json
     shutil.copy2(json_path, dest / "landmarks.json")
 
-    # Copy snapshots
+    # Clear stale snapshots from previous export, then copy current ones
+    dest_snapshots = dest / "snapshots"
+    if dest_snapshots.exists():
+        shutil.rmtree(dest_snapshots)
     src_snapshots = LANDMARK_MEMORY_DIR / "snapshots"
     if src_snapshots.is_dir():
-        dest_snapshots = dest / "snapshots"
-        if dest_snapshots.exists():
-            shutil.rmtree(dest_snapshots)
         shutil.copytree(src_snapshots, dest_snapshots, symlinks=False)
 
     # Generate manifest template if missing
