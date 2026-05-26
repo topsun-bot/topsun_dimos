@@ -159,7 +159,7 @@ MVP 可以把过期区域也当成盲区候选，但返回文案中区分：
 
 在 `SpatialMemory` 增加 RPC：
 
-```python
+```python skip
 def get_memory_locations(self) -> list[dict[str, float | str]]:
     """Return stored spatial memory frame locations and timestamps."""
 ```
@@ -182,7 +182,7 @@ def get_memory_locations(self) -> list[dict[str, float | str]]:
 
 在导航 skill 或单独 helper 中实现：
 
-```python
+```python skip
 def find_nearest_memory_blindspot(
     robot_pose: PoseStamped,
     costmap: OccupancyGrid,
@@ -214,7 +214,7 @@ score = robot_distance + obstacle_penalty - blindspot_bonus - frontier_bonus
 
 在 `NavigationSkillContainer` 增加 one-shot skill，作为连续模式的基础能力：
 
-```python
+```python skip
 @skill
 def explore_memory_blindspot(
     self,
@@ -252,7 +252,7 @@ No reachable memory blind spot found within 5.0m. Nearby spatial memory coverage
 
 第一版需要机器人基于空间记忆持续探索未覆盖区域，新增长时间探索 skill：
 
-```python
+```python skip
 @skill
 def patrol_memory_blindspots(
     self,
@@ -270,7 +270,7 @@ def patrol_memory_blindspots(
 
 实现时建议把 docstring 写得更明确，帮助 agent 将自然语言指令映射到该 skill：
 
-```python
+```python skip
 """Explore areas that are not yet covered by spatial memory.
 
 Use this when the user asks the robot to explore unexplored areas,
@@ -343,7 +343,7 @@ MVP 应包含长时间连续模式。默认按 `max_duration_sec` 运行较长�
 
 为了让长时间记忆驱动探索形成完整闭环，本功能建议在探索过程中增加低频内容识别：
 
-```python
+```python skip
 recognize_on_arrival: bool = True
 recognize_interval_sec: float = 30.0
 ```
