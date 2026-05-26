@@ -1,0 +1,50 @@
+[
+  {
+    "name": "厨房",
+    "record_type": "room",
+    "position": [1.5, 2.0, 0.0],
+    "rotation": [0.0, 0.0, 0.0],
+    "description": "厨房区域，有冰箱和水槽",
+    "record_id": "rec_demo_kitchen_01",
+    "confidence": 0.95,
+    "image_snapshot_path": "",
+    "timestamp": 1748217600.0,
+    "last_seen": 1748217600.0,
+    "observation_count": 1,
+    "session_id": "",
+    "state": "",
+    "metadata": {}
+  },
+  {
+    "name": "走廊",
+    "record_type": "room",
+    "position": [3.0, 0.5, 0.0],
+    "rotation": [0.0, 0.0, 1.57],
+    "description": "连接各房间的主走廊",
+    "record_id": "rec_demo_corridor_01",
+    "confidence": 0.9,
+    "image_snapshot_path": "",
+    "timestamp": 1748217610.0,
+    "last_seen": 1748217610.0,
+    "observation_count": 1,
+    "session_id": "",
+    "state": "",
+    "metadata": {}
+  },
+  {
+    "name": "电脑",
+    "record_type": "landmark",
+    "position": [4.5, 1.2, 0.0],
+    "rotation": [0.0, 0.0, 0.0],
+    "description": "办公桌上的台式电脑",
+    "record_id": "rec_demo_computer_01",
+    "confidence": 0.88,
+    "image_snapshot_path": "",
+    "timestamp": 1748217620.0,
+    "last_seen": 1748217620.0,
+    "observation_count": 1,
+    "session_id": "",
+    "state": "",
+    "metadata": {}
+  }
+]
