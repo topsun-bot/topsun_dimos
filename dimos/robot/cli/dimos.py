@@ -121,6 +121,13 @@ def create_dynamic_callback():  # type: ignore[no-untyped-def]
 main.callback()(create_dynamic_callback())  # type: ignore[no-untyped-call]
 main.add_typer(go2tool_app, name="go2tool")
 
+# 数据闭环子命令：`dimos closed-loop ...`（Unit 8 集成单元）
+# 模块本身只 import typer——重型依赖（numpy / dimsim / LLM）都在子命令运行时
+# 才延迟 import，保证 `dimos --help` 启动时间不被拖累。
+from dimos.cli.closed_loop import register as _register_closed_loop
+
+_register_closed_loop(main)
+
 
 def arg_help(
     config: type[BaseModel],
