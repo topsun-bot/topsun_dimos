@@ -87,60 +87,72 @@ logger = setup_logger()
 
 # 默认调参（贴近跟 + 跟头快 + 不那么神经质地后退）
 # 这一组对应室内、单人正脸跟。想要快/远跟可以在 humancli 里再让 agent 改参。
-DEFAULT_MAX_LINEAR_SPEED: float = 1.2       # m/s；正常步行速度，慢动会跟丢就是因为前向给太低
-DEFAULT_MAX_ANGULAR_SPEED: float = 1.5      # rad/s；横向甩头上限，太大变摇头，太小快速横移跟不上
-DEFAULT_ANGULAR_GAIN: float = 1.1           # 比例增益；中心区配合死区不抖、边缘区另有 boost
-DEFAULT_ANGULAR_DEAD_ZONE: float = 0.04     # 横向死区：|x_norm| < 这个不转头（≈中心 ±25 px），消除"原地摇摆"
-DEFAULT_ANGULAR_SMOOTHING: float = 0.5      # EMA 角速度平滑（α），0.5 = 半数惯性，响应足够快
+DEFAULT_MAX_LINEAR_SPEED: float = 1.2  # m/s；正常步行速度，慢动会跟丢就是因为前向给太低
+DEFAULT_MAX_ANGULAR_SPEED: float = 1.5  # rad/s；横向甩头上限，太大变摇头，太小快速横移跟不上
+DEFAULT_ANGULAR_GAIN: float = 1.1  # 比例增益；中心区配合死区不抖、边缘区另有 boost
+DEFAULT_ANGULAR_DEAD_ZONE: float = (
+    0.04  # 横向死区：|x_norm| < 这个不转头（≈中心 ±25 px），消除"原地摇摆"
+)
+DEFAULT_ANGULAR_SMOOTHING: float = 0.5  # EMA 角速度平滑（α），0.5 = 半数惯性，响应足够快
 DEFAULT_ANGULAR_EDGE_THRESHOLD: float = 0.25  # |x_norm| 超这个值就把 gain 临时放大
-DEFAULT_ANGULAR_EDGE_BOOST: float = 1.6     # gain 放大倍数，防止"人走快就出画面"
-DEFAULT_TARGET_DISTANCE: float = 1.0        # m；过去 0.6 太贴，狗几乎贴在你脚边
-DEFAULT_REID_THRESHOLD: float = 0.55        # cosine sim >= 这个才视为同一人。OSNet 工程经验：同人通常 0.55-0.85，异人 0.0-0.5，0.55 是合理分界
-DEFAULT_LOST_GRACE_SECONDS: float = 5.0     # 连续丢几秒才发"看不见你"消息（原 2s 太敏感，进出画面就会刷屏）
+DEFAULT_ANGULAR_EDGE_BOOST: float = 1.6  # gain 放大倍数，防止"人走快就出画面"
+DEFAULT_TARGET_DISTANCE: float = 1.0  # m；过去 0.6 太贴，狗几乎贴在你脚边
+DEFAULT_REID_THRESHOLD: float = 0.55  # cosine sim >= 这个才视为同一人。OSNet 工程经验：同人通常 0.55-0.85，异人 0.0-0.5，0.55 是合理分界
+DEFAULT_LOST_GRACE_SECONDS: float = (
+    5.0  # 连续丢几秒才发"看不见你"消息（原 2s 太敏感，进出画面就会刷屏）
+)
 DEFAULT_NOTIFY_COOLDOWN_SECONDS: float = 10.0  # 两次"看不见"通知最少间隔（防止反复入画 → 反复刷屏）
-DEFAULT_RECOVERY_GRACE_SECONDS: float = 1.5    # 跟丢后必须连续找到 ≥ 这么久才发"又看到你"（防 YOLO 单帧漏检误报恢复）
-DEFAULT_FREQUENCY: float = 20.0             # Hz；YOLO + ReID 每帧推理，GPU 不够就降回 15
+DEFAULT_RECOVERY_GRACE_SECONDS: float = (
+    1.5  # 跟丢后必须连续找到 ≥ 这么久才发"又看到你"（防 YOLO 单帧漏检误报恢复）
+)
+DEFAULT_FREQUENCY: float = 20.0  # Hz；YOLO + ReID 每帧推理，GPU 不够就降回 15
 # VisualServoing2D 自己的默认 _min_distance=0.8m、_assumed_object_width=0.45m、
 # _backup_speed_factor=0.6——三个一组合，狗对"近"特别敏感，一靠近就 0.5*0.6=0.3 m/s
 # 暴退；如果再叠加之前 max_linear=1.8，那就是 1.08 m/s 直接窜后面去。这里全部压低。
-DEFAULT_MIN_DISTANCE: float = 0.5           # m；估距 < 0.5m 才强制倒退（target=1.0 时差不多就该退了）
+DEFAULT_MIN_DISTANCE: float = 0.5  # m；估距 < 0.5m 才强制倒退（target=1.0 时差不多就该退了）
 DEFAULT_ASSUMED_PERSON_WIDTH: float = 0.55  # m；人正面 bbox 宽（含躯干 + 一点 padding）
-DEFAULT_BACKUP_SPEED_FACTOR: float = 0.15   # 后退速度 = max_linear * 这个；0.15 → 慢退
-DEFAULT_DISTANCE_DEAD_ZONE: float = 0.2     # m；|当前距离 - 目标| 在这范围内就只转不前后动
+DEFAULT_BACKUP_SPEED_FACTOR: float = 0.15  # 后退速度 = max_linear * 这个；0.15 → 慢退
+DEFAULT_DISTANCE_DEAD_ZONE: float = 0.2  # m；|当前距离 - 目标| 在这范围内就只转不前后动
 # YOLO + ReID 鲁棒性参数
 # 默认换成 yolo11n.pt 纯 detection（不是 -pose）。pose 模型要求关键点完整，
 # 狗相机机位低看不到头时 conf 直接掉到 0.2 以下整人被滤掉；纯 detection 对
 # "只看到下半身/侧身/转身"鲁棒得多，跟随场景必须用它。
 DEFAULT_YOLO_MODEL: str = "yolo11n.pt"
-DEFAULT_YOLO_CONF: float = 0.18             # conf 再降一档，只看到大腿/背影也能框
-DEFAULT_REID_GALLERY_MAX: int = 8           # 锚点模版库最大数（FIFO，首帧 base 永不替换）
+DEFAULT_YOLO_CONF: float = 0.18  # conf 再降一档，只看到大腿/背影也能框
+DEFAULT_REID_GALLERY_MAX: int = 8  # 锚点模版库最大数（FIFO，首帧 base 永不替换）
 DEFAULT_REID_GALLERY_UPDATE_MARGIN: float = 0.15  # sim >= threshold + margin 才入模版库。0.15 = 0.7 高于 0.55 阈值，确保入库的都是"真很像"的帧
 # 位置连续性 fallback：ReID 不达标但 bbox 和上一帧锁定框 IoU 够高就视为同一人。
 # 这是经典的 multi-object tracking 兜底，能扛"姿态突变 / OSNet 失效"那种情况。
 # 但 IoU 兜底"只看位置不看人"，开太久会跟错人，所以 grace 缩到 8 帧 (≈400ms)。
-DEFAULT_IOU_CONTINUITY: float = 0.5         # IoU >= 50% 才认为是同一人（更严，防止两个人擦肩而过被混淆）
-DEFAULT_CONTINUITY_GRACE_FRAMES: int = 8    # IoU 兜底最多连续用 8 帧 (≈400ms)，超过强制要求 ReID 真匹配
+DEFAULT_IOU_CONTINUITY: float = 0.5  # IoU >= 50% 才认为是同一人（更严，防止两个人擦肩而过被混淆）
+DEFAULT_CONTINUITY_GRACE_FRAMES: int = (
+    8  # IoU 兜底最多连续用 8 帧 (≈400ms)，超过强制要求 ReID 真匹配
+)
 
 # 人物花名册（person registry）相关参数：
 # 这套机制让用户教 agent："这个人叫 XX"，agent 把外观 ReID 特征 + 文字描述存进
 # 本地 JSON。下次说"跟着 XX"，agent 先在画面里按 ReID 找出那个人再启动跟随。
 DEFAULT_PEOPLE_REGISTRY_PATH = Path.home() / ".dimos" / "people_registry.json"
-DEFAULT_PERSON_MATCH_THRESHOLD: float = 0.55  # 反查/按名字找的最低相似度。和 follow 同步到 0.55，保持"是同一人"的判定一致
-DEFAULT_PERSON_TOP1_MARGIN: float = 0.08       # top1 必须比 top2 高出这么多才算"可信地是 XXX"。0.08 防止两人外观相近时归错
-DEFAULT_PERSON_MAX_TEMPLATES: int = 6         # 每个人最多存几个 embedding 模版（多角度更稳）
+DEFAULT_PERSON_MATCH_THRESHOLD: float = (
+    0.55  # 反查/按名字找的最低相似度。和 follow 同步到 0.55，保持"是同一人"的判定一致
+)
+DEFAULT_PERSON_TOP1_MARGIN: float = (
+    0.08  # top1 必须比 top2 高出这么多才算"可信地是 XXX"。0.08 防止两人外观相近时归错
+)
+DEFAULT_PERSON_MAX_TEMPLATES: int = 6  # 每个人最多存几个 embedding 模版（多角度更稳）
 
 # "去找某某" 工作流（goto_and_greet_person）相关参数
-DEFAULT_GOTO_TIMEOUT_SECONDS: float = 120.0   # 导航总超时上限，超过就放弃走，告诉用户走不到
-DEFAULT_GOTO_POLL_INTERVAL: float = 0.3       # 主循环节拍：每隔多久查一次导航 state（顺手扫一帧）
-DEFAULT_GOTO_SCAN_INTERVAL: float = 0.4       # YOLO+ReID 扫描节拍：边走边看的频率（默认 2.5Hz）
-DEFAULT_GOTO_IDENTIFY_TIMEOUT: float = 15.0   # 到达目标点后给视觉确认的最大额外时长
+DEFAULT_GOTO_TIMEOUT_SECONDS: float = 120.0  # 导航总超时上限，超过就放弃走，告诉用户走不到
+DEFAULT_GOTO_POLL_INTERVAL: float = 0.3  # 主循环节拍：每隔多久查一次导航 state（顺手扫一帧）
+DEFAULT_GOTO_SCAN_INTERVAL: float = 0.4  # YOLO+ReID 扫描节拍：边走边看的频率（默认 2.5Hz）
+DEFAULT_GOTO_IDENTIFY_TIMEOUT: float = 15.0  # 到达目标点后给视觉确认的最大额外时长
 # 路上看到目标人物时，达到这俩任一条件就提前停车 + 挥手：
 #   - sim 超高（>= 阈值 + EARLY_STOP_SIM_BONUS），高置信度铁定是 ta；
 #   - bbox 在画面里占比很大（>= EARLY_STOP_BBOX_HEIGHT_RATIO * image_height），
 #     说明人已经在狗附近，挥手对方能看见。
 DEFAULT_GOTO_EARLY_STOP_SIM_BONUS: float = 0.10
 DEFAULT_GOTO_EARLY_STOP_BBOX_HEIGHT_RATIO: float = 0.45
-DEFAULT_GOTO_HELLO_API_ID: int = 1016         # 宇树 sport_mod 挥手动作 api_id（SPORT_CMD["Hello"]）
+DEFAULT_GOTO_HELLO_API_ID: int = 1016  # 宇树 sport_mod 挥手动作 api_id（SPORT_CMD["Hello"]）
 
 Bbox4 = tuple[int, int, int, int]
 
@@ -154,15 +166,17 @@ def _emb_to_b64(emb: torch.Tensor) -> str:
 
 def _emb_from_b64(s: str) -> torch.Tensor:
     """base64 字符串 → ReID 特征张量。"""
-    return torch.load(
+    tensor: torch.Tensor = torch.load(
         io.BytesIO(base64.b64decode(s)),
         map_location="cpu",
         weights_only=True,
     )
+    return tensor
 
 
 def _l2_normalize(vec: torch.Tensor) -> torch.Tensor:
-    return vec / (vec.norm(p=2, dim=-1, keepdim=True) + 1e-8)
+    out: torch.Tensor = vec / (vec.norm(p=2, dim=-1, keepdim=True) + 1e-8)
+    return out
 
 
 def _cosine_sim(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -349,8 +363,10 @@ class FollowMeSkillContainer(Module):
         self._lost_since: float | None = None
         self._lost_message_sent: bool = False
         # 通知防抖状态
-        self._last_lost_notify_time: float = 0.0   # 上次发"看不见"通知的时间
-        self._recovered_since: float | None = None  # 跟丢后重新看到的起点（用来等够 recovery_grace 再发"又看到"）
+        self._last_lost_notify_time: float = 0.0  # 上次发"看不见"通知的时间
+        self._recovered_since: float | None = (
+            None  # 跟丢后重新看到的起点（用来等够 recovery_grace 再发"又看到"）
+        )
         # IoU 位置连续性兜底状态：记住上一帧锁定的 bbox + 连续兜底了多少帧
         self._last_locked_bbox: Bbox4 | None = None
         self._continuity_frames_used: int = 0
@@ -388,7 +404,7 @@ class FollowMeSkillContainer(Module):
     # 把 pickle 不了的运行时字段在 __getstate__ 时剥掉。Module 父类已经处理了
     # 框架字段（_disposables/_loop 之类），这里只追加我们自己的。
     def __getstate__(self) -> dict[str, Any]:  # type: ignore[override]
-        state = super().__getstate__()
+        state: dict[str, Any] = super().__getstate__()  # type: ignore[no-untyped-call]
         for k in (
             "_lock",
             "_should_stop",
@@ -399,8 +415,8 @@ class FollowMeSkillContainer(Module):
             "_anchor_base_emb",
             "_anchor_gallery",
             "_latest_image",
-            "_latest_odom",     # PoseStamped 一般可 pickle，但 worker 进程要重新订阅，所以排除
-            "_last_described",   # 含 Tensor，pickle 时排除
+            "_latest_odom",  # PoseStamped 一般可 pickle，但 worker 进程要重新订阅，所以排除
+            "_last_described",  # 含 Tensor，pickle 时排除
         ):
             state.pop(k, None)
         return state
@@ -448,7 +464,7 @@ class FollowMeSkillContainer(Module):
             self._rerun_ready = True
             logger.info("follow_me rerun bbox stream connected")
             return True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"rerun bbox stream init failed (will retry later): {e}")
             return False
 
@@ -489,14 +505,12 @@ class FollowMeSkillContainer(Module):
                     labels=[label],
                 ),
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # 单帧 log 失败不要让主循环挂掉
             logger.debug(f"rerun bbox log failed: {e}")
             self._rerun_ready = False  # 下次重新尝试 connect
 
-    # ------------------------------------------------------------------
     # Module 生命周期
-    # ------------------------------------------------------------------
 
     @rpc
     def start(self) -> None:
@@ -520,7 +534,7 @@ class FollowMeSkillContainer(Module):
                 continue
             try:
                 resource.stop()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(f"follow_me: failed to stop {type(resource).__name__}: {e}")
 
         super().stop()
@@ -540,9 +554,7 @@ class FollowMeSkillContainer(Module):
         with self._lock:  # type: ignore[union-attr]
             self._latest_odom = odom
 
-    # ------------------------------------------------------------------
     # 暴露给 LLM agent 的 skills
-    # ------------------------------------------------------------------
 
     @skill
     def follow_me(self, description: str = "") -> str:
@@ -578,13 +590,13 @@ class FollowMeSkillContainer(Module):
 
         try:
             self._ensure_models_loaded()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"加载视觉模型失败：{e}"
 
         # 1) YOLO 找所有人
         try:
             detections = self._detect_persons(latest_image)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"YOLO 检测失败：{e}"
         if len(detections) == 0:
             return "画面里没看到人，请走到镜头前面，再让用户重发指令。"
@@ -597,7 +609,7 @@ class FollowMeSkillContainer(Module):
         # 3) 提 ReID embedding 作为 anchor base + 清空滚动模版库
         try:
             self._anchor_base_emb = self._reid_embed(latest_image, anchor_bbox)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"提取 ReID 特征失败：{e}"
         self._anchor_gallery = []
 
@@ -634,18 +646,14 @@ class FollowMeSkillContainer(Module):
             self._thread = None
         return "已停止跟随，原地待机。"
 
-    # ------------------------------------------------------------------
     # 人物花名册（person registry）相关 skills
     # 用法：
     #   1) 用户："描述一下面前的人"            → describe_person()
     #   2) 用户："这是张三" / "他叫李四"        → register_person(name="张三")
     #   3) 用户："你记得谁"                     → list_known_people()
     #   4) 用户："跟着张三" / "去找李四"        → follow_person(name="张三")
-    # ------------------------------------------------------------------
 
-    def _select_center_person(
-        self, image: Image, detections: list[Bbox4]
-    ) -> Bbox4 | None:
+    def _select_center_person(self, image: Image, detections: list[Bbox4]) -> Bbox4 | None:
         """画面里有多人时选"最居中且最大"的那个，作为 describe/register 默认目标。"""
         if not detections:
             return None
@@ -659,7 +667,7 @@ class FollowMeSkillContainer(Module):
             area = max(0, (x2 - x1)) * max(0, (y2 - y1))
             dist = ((cx - cx_img) ** 2 + (cy - cy_img) ** 2) ** 0.5
             # 大且居中得分高
-            return area / (1.0 + dist)
+            return float(area / (1.0 + dist))
 
         return max(detections, key=_score)
 
@@ -683,12 +691,12 @@ class FollowMeSkillContainer(Module):
             return "现在还没收到相机画面，等几秒再试。"
         try:
             self._ensure_models_loaded()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"加载视觉模型失败：{e}"
 
         try:
             detections = self._detect_persons(latest_image)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"YOLO 检测失败：{e}"
         if not detections:
             return "画面里没看到人，让 ta 走到镜头前再试。"
@@ -697,7 +705,7 @@ class FollowMeSkillContainer(Module):
         assert target is not None
         try:
             emb = self._reid_embed(latest_image, target)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"ReID 特征提取失败：{e}"
 
         assert self._vl is not None
@@ -707,7 +715,7 @@ class FollowMeSkillContainer(Module):
                 "请用一句简短的中文描述画面里这个人的外观（衣服颜色、上衣下衣、有没有帽子或眼镜），"
                 "不要描述背景，直接给描述。比如：'蓝色裤子，白色短袖，戴黑色帽子'。",
             ).strip()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"VL 描述失败：{e}"
 
         # 把"现在我在哪儿"也快照下来，这样紧接着 register_person 能把位姿绑给人物。
@@ -727,9 +735,7 @@ class FollowMeSkillContainer(Module):
         }
 
         multi_hint = (
-            f"画面里有 {len(detections)} 个人，我描述最居中的这个："
-            if len(detections) > 1
-            else ""
+            f"画面里有 {len(detections)} 个人，我描述最居中的这个：" if len(detections) > 1 else ""
         )
         pose_hint = ""
         if pose_snapshot is None:
@@ -763,7 +769,7 @@ class FollowMeSkillContainer(Module):
         self._ensure_runtime_state()
         try:
             self._ensure_models_loaded()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"加载视觉模型失败：{e}"
 
         emb: torch.Tensor | None = None
@@ -789,7 +795,7 @@ class FollowMeSkillContainer(Module):
                 return "现在还没收到相机画面。"
             try:
                 detections = self._detect_persons(latest_image)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return f"YOLO 检测失败：{e}"
             if not detections:
                 return "画面里没看到人，先让 ta 站到镜头前。"
@@ -797,7 +803,7 @@ class FollowMeSkillContainer(Module):
             assert target is not None
             try:
                 emb = self._reid_embed(latest_image, target)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return f"ReID 特征提取失败：{e}"
             if not desc:
                 assert self._vl is not None
@@ -806,7 +812,7 @@ class FollowMeSkillContainer(Module):
                         latest_image,
                         "用一句简短中文描述画面里那个人的外观（衣服颜色、上下衣），直接给描述。",
                     ).strip()
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     desc = f"（VL 描述失败：{e}）"
 
         # 没拿到位姿就用当前 odom 兜底
@@ -825,7 +831,7 @@ class FollowMeSkillContainer(Module):
         entry["embeddings_b64"].append(_emb_to_b64(emb))
         # FIFO 截断
         if len(entry["embeddings_b64"]) > self._person_max_templates:
-            entry["embeddings_b64"] = entry["embeddings_b64"][-self._person_max_templates:]
+            entry["embeddings_b64"] = entry["embeddings_b64"][-self._person_max_templates :]
         # 用户显式传了 description 就覆盖，否则保留首次描述
         if description.strip() or not entry.get("description"):
             entry["description"] = desc
@@ -838,7 +844,7 @@ class FollowMeSkillContainer(Module):
 
         try:
             self._save_people_registry()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"save people_registry failed: {e}")
 
         self._last_described = None
@@ -884,13 +890,11 @@ class FollowMeSkillContainer(Module):
         del self._people[name]
         try:
             self._save_people_registry()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"save people_registry failed: {e}")
         return f"已忘掉「{name}」。剩下 {len(self._people)} 人。"
 
-    def _match_bbox_to_registry(
-        self, image: Image, bbox: Bbox4
-    ) -> list[tuple[str, float]]:
+    def _match_bbox_to_registry(self, image: Image, bbox: Bbox4) -> list[tuple[str, float]]:
         """把一个 bbox 跟花名册里**每个人**算 max sim，返回按 sim 降序的 (name, sim) 列表。
 
         每个人有多个模版，取该人所有模版的 max。这样姚成彦录入时是正脸全身，
@@ -938,12 +942,12 @@ class FollowMeSkillContainer(Module):
 
         try:
             self._ensure_models_loaded()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"加载视觉模型失败：{e}"
 
         try:
             detections = self._detect_persons(latest_image)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"YOLO 检测失败：{e}"
         if not detections:
             return "画面里没看到人。"
@@ -952,7 +956,7 @@ class FollowMeSkillContainer(Module):
         assert target is not None
         try:
             scores = self._match_bbox_to_registry(latest_image, target)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"ReID 匹配失败：{e}"
 
         if not scores:
@@ -1034,12 +1038,12 @@ class FollowMeSkillContainer(Module):
             return "现在还没收到相机画面。"
         try:
             self._ensure_models_loaded()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"加载视觉模型失败：{e}"
 
         try:
             detections = self._detect_persons(latest_image)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"YOLO 检测失败：{e}"
         if not detections:
             return f"画面里没看到人，先把「{name}」叫到镜头前。"
@@ -1051,7 +1055,7 @@ class FollowMeSkillContainer(Module):
         for bbox in detections:
             try:
                 emb = self._reid_embed(latest_image, bbox)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             sim = max(_cosine_sim(t, emb) for t in templates)
             if sim > best_sim:
@@ -1072,7 +1076,7 @@ class FollowMeSkillContainer(Module):
         if best_emb is not None:
             self._anchor_gallery.append(best_emb)
         if len(self._anchor_gallery) > self._reid_gallery_max:
-            self._anchor_gallery = self._anchor_gallery[-self._reid_gallery_max:]
+            self._anchor_gallery = self._anchor_gallery[-self._reid_gallery_max :]
         self._anchor_description = name
         self._lost_since = None
         self._lost_message_sent = False
@@ -1088,13 +1092,9 @@ class FollowMeSkillContainer(Module):
             f"花名册里 ta 的描述：{entry.get('description', '')}。"
         )
 
-    # ------------------------------------------------------------------
     # 复合 skill：去找某人 + 打招呼（导航 -> 视觉确认 -> 挥手）
-    # ------------------------------------------------------------------
 
-    def _scan_frame_for_target(
-        self, templates: list[torch.Tensor]
-    ) -> tuple[float, Bbox4] | None:
+    def _scan_frame_for_target(self, templates: list[torch.Tensor]) -> tuple[float, Bbox4] | None:
         """扫当前画面，跟一组人物模版比对，返回 (最高匹配 sim, 对应 bbox)。
 
         没拿到画面 / YOLO 没找到人 / ReID 算不出来 都返回 None。
@@ -1107,7 +1107,7 @@ class FollowMeSkillContainer(Module):
             return None
         try:
             detections = self._detect_persons(latest_image)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"_scan_frame: YOLO 失败 {e}")
             return None
         if not detections:
@@ -1118,7 +1118,7 @@ class FollowMeSkillContainer(Module):
         for bbox in detections:
             try:
                 emb = self._reid_embed(latest_image, bbox)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             sim = max(_cosine_sim(t, emb) for t in templates)
             if sim > best_sim:
@@ -1170,7 +1170,7 @@ class FollowMeSkillContainer(Module):
         if "last_seen_pose" not in entry:
             return (
                 f"「{name}」我记得长相但没记位置（可能录入时 odom 还没上线）。"
-                f"先带狗到 ta 经常出现的地方，再调一次 register_person(\"{name}\")。"
+                f'先带狗到 ta 经常出现的地方，再调一次 register_person("{name}")。'
             )
 
         templates = [_emb_from_b64(s) for s in entry.get("embeddings_b64", [])]
@@ -1180,7 +1180,7 @@ class FollowMeSkillContainer(Module):
         # 视觉模型必须现在就 ready，否则边走边扫没意义
         try:
             self._ensure_models_loaded()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"加载视觉模型失败：{e}"
 
         # 1) RPC 句柄。早 fail，不然导航半截路才报"模块没连上"很丑
@@ -1208,7 +1208,7 @@ class FollowMeSkillContainer(Module):
 
         try:
             ok = nav.set_goal(goal_pose)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return f"set_goal 调用炸了：{e}"
         if not ok:
             return f"导航模块拒绝了目标（set_goal 返回 False）。检查地图是否覆盖到 {name} 那块。"
@@ -1225,8 +1225,7 @@ class FollowMeSkillContainer(Module):
         # - 如果走到了 last_seen_pose 还没 early stop，到达后会用这个值作为继续比较的起点，
         #   不必从 -1.0 重新开始
         best_sim: float = -1.0
-        best_bbox: Bbox4 | None = None
-        best_seen_at: str = "未见"   # 用于结果文案："路上"/"到达后" 给用户感觉
+        best_seen_at: str = "未见"  # 用于结果文案："路上"/"到达后" 给用户感觉
 
         start = time.time()
         last_scan = 0.0
@@ -1248,14 +1247,16 @@ class FollowMeSkillContainer(Module):
                     img_h = max(self._camera_info.height, 1)
                     bbox_ratio = bbox_h / img_h
                     if sim > best_sim:
-                        best_sim, best_bbox = sim, bbox
+                        best_sim, _best_bbox = sim, bbox
                         best_seen_at = "路上"
                         logger.info(
                             f"路上 scan「{name}」 sim={sim:.2f} bbox_h_ratio={bbox_ratio:.2f}"
                         )
                     # 满足任意 early stop 条件 -> 撤导航直接挥手
                     high_confidence = sim >= early_stop_sim
-                    close_enough = sim >= self._person_match_threshold and bbox_ratio >= early_stop_ratio
+                    close_enough = (
+                        sim >= self._person_match_threshold and bbox_ratio >= early_stop_ratio
+                    )
                     if high_confidence or close_enough:
                         logger.info(
                             f"路上找到「{name}」(sim={sim:.2f}, bbox_h_ratio={bbox_ratio:.2f})，"
@@ -1263,7 +1264,7 @@ class FollowMeSkillContainer(Module):
                         )
                         try:
                             nav.cancel_goal()
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             pass
                         # 让狗的速度滚动停下来（A* 那边发了最后一帧 cmd_vel 也得吃完）
                         time.sleep(0.5)
@@ -1273,7 +1274,7 @@ class FollowMeSkillContainer(Module):
             # 3b) 导航 state 检查
             try:
                 state = nav.get_state()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(f"get_state 异常：{e}")
                 state = None
 
@@ -1288,7 +1289,7 @@ class FollowMeSkillContainer(Module):
                 time.sleep(0.5)
                 try:
                     arrived = bool(nav.is_goal_reached())
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning(f"is_goal_reached 异常：{e}")
                     arrived = False
                 break
@@ -1297,7 +1298,7 @@ class FollowMeSkillContainer(Module):
             # while 没 break = 超时
             try:
                 nav.cancel_goal()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             return (
                 f"走向「{name}」超时（{timeout}s 没到），已撤回目标。"
@@ -1321,7 +1322,7 @@ class FollowMeSkillContainer(Module):
                 if result is not None:
                     sim, bbox = result
                     if sim > best_sim:
-                        best_sim, best_bbox = sim, bbox
+                        best_sim, _best_bbox = sim, bbox
                         best_seen_at = "到达后"
                 # 早退：已经很有信心就别再扫了
                 if best_sim >= self._person_match_threshold + DEFAULT_GOTO_EARLY_STOP_SIM_BONUS:
@@ -1346,7 +1347,7 @@ class FollowMeSkillContainer(Module):
                 f"找到「{name}」({best_seen_at}识别，匹配度 {best_sim:.2f})，"
                 f"但 GO2Connection 没连上挥不了手。"
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return (
                 f"找到「{name}」({best_seen_at}识别，匹配度 {best_sim:.2f})，"
                 f"但挥手指令发送失败：{e}"
@@ -1354,13 +1355,9 @@ class FollowMeSkillContainer(Module):
 
         logger.info(f"goto_and_greet_person({name}) 完成（{best_seen_at}），匹配度 {best_sim:.2f}")
         suffix = "（路上就提前看见 ta 了）" if best_seen_at == "路上" else ""
-        return (
-            f"找到「{name}」啦，匹配度 {best_sim:.2f}，已向 ta 挥手打招呼{suffix}。"
-        )
+        return f"找到「{name}」啦，匹配度 {best_sim:.2f}，已向 ta 挥手打招呼{suffix}。"
 
-    # ------------------------------------------------------------------
     # 花名册 持久化
-    # ------------------------------------------------------------------
 
     def _load_people_registry(self) -> None:
         """启动时从 ~/.dimos/people_registry.json 加载花名册，文件不存在/损坏静默忽略。"""
@@ -1374,7 +1371,7 @@ class FollowMeSkillContainer(Module):
                 logger.info(
                     f"loaded {len(self._people)} person(s) from {self._people_registry_path}"
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"load people_registry failed: {e}")
             self._people = {}
 
@@ -1386,9 +1383,7 @@ class FollowMeSkillContainer(Module):
             json.dump(self._people, f, ensure_ascii=False, indent=2)
         tmp.replace(self._people_registry_path)
 
-    # ------------------------------------------------------------------
     # 跟随主循环
-    # ------------------------------------------------------------------
 
     def _smooth_angular(self, x_norm: float, raw_angular_z: float) -> float:
         """对原始 angular_z 做"死区 + 边缘 boost + EMA 平滑"三连后处理。
@@ -1409,7 +1404,10 @@ class FollowMeSkillContainer(Module):
 
         # 把 raw 整体往中心拉 dead_zone（沿原符号），让死区边界 ≈ 0 平滑过渡
         sign = 1.0 if raw_angular_z >= 0 else -1.0
-        adjusted_magnitude = max(0.0, abs(raw_angular_z) - self._angular_dead_zone * abs(self._visual_servo._angular_gain))
+        adjusted_magnitude = max(
+            0.0,
+            abs(raw_angular_z) - self._angular_dead_zone * abs(self._visual_servo._angular_gain),
+        )
         boosted = sign * adjusted_magnitude
 
         # 边缘 boost
@@ -1455,7 +1453,7 @@ class FollowMeSkillContainer(Module):
                 # YOLO 找所有人
                 try:
                     detections = self._detect_persons(latest_image)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning(f"YOLO detect failed: {e}")
                     detections = []
 
@@ -1474,10 +1472,10 @@ class FollowMeSkillContainer(Module):
                     try:
                         emb = self._reid_embed(latest_image, bbox)
                         # 对每个模版算 sim，取最大值作为这个 bbox 的得分
-                        bbox_sim = max(
-                            _cosine_sim(t, emb) for t in templates
-                        ) if templates else -1.0
-                    except Exception as e:  # noqa: BLE001
+                        bbox_sim = (
+                            max(_cosine_sim(t, emb) for t in templates) if templates else -1.0
+                        )
+                    except Exception as e:
                         logger.debug(f"reid embed failed on bbox {bbox}: {e}")
                         continue
                     if bbox_sim > best_sim:
@@ -1493,9 +1491,7 @@ class FollowMeSkillContainer(Module):
                 # 陌生人 vs anchor 的 sim 一般 0.2-0.4，0.35 仍能过滤掉无关人闯入单人画面的情况
                 n_persons = len(detections)
                 effective_threshold = (
-                    min(self._reid_threshold, 0.35)
-                    if n_persons == 1
-                    else self._reid_threshold
+                    min(self._reid_threshold, 0.35) if n_persons == 1 else self._reid_threshold
                 )
 
                 # 三态判定：
@@ -1515,6 +1511,9 @@ class FollowMeSkillContainer(Module):
                     tracked = "iou"
 
                 if tracked != "lost":
+                    # tracked 设成 reid/iou 的两条路径都已经 check 过 best_bbox is not None，
+                    # 这里 assert 一下让 mypy narrow 类型
+                    assert best_bbox is not None
                     # 找到 user（ReID 命中或 IoU 兜底）
                     self._lost_since = None
                     # 恢复防抖：刚发了"看不见"之后，必须**连续找到**至少 recovery_grace
@@ -1544,9 +1543,7 @@ class FollowMeSkillContainer(Module):
                         self._anchor_gallery.append(best_emb)
                         # FIFO 截断；base 在 templates 列表里单独保存，不会被挤掉
                         if len(self._anchor_gallery) > self._reid_gallery_max:
-                            self._anchor_gallery = self._anchor_gallery[
-                                -self._reid_gallery_max :
-                            ]
+                            self._anchor_gallery = self._anchor_gallery[-self._reid_gallery_max :]
 
                     # 更新位置连续性状态：ReID 命中→重置计数；IoU 兜底→+1（防漂移用）
                     self._last_locked_bbox = best_bbox
@@ -1556,18 +1553,23 @@ class FollowMeSkillContainer(Module):
                         self._continuity_frames_used += 1
 
                     try:
-                        twist = self._visual_servo.compute_twist(
-                            best_bbox, latest_image.width
+                        # Bbox4 是 tuple[int, ...]，VisualServoing2D 要求 tuple[float, ...]，
+                        # mypy 在 tuple 上不变（不像 Sequence），所以这里显式做一次 promote
+                        bbox_f: tuple[float, float, float, float] = (
+                            float(best_bbox[0]),
+                            float(best_bbox[1]),
+                            float(best_bbox[2]),
+                            float(best_bbox[3]),
                         )
+                        twist = self._visual_servo.compute_twist(bbox_f, latest_image.width)
                         # 距离死区：估出来的距离在 target ± dead_zone 范围内，
                         # 就只让狗调头对准你，不再前后蹭——这样合适距离时不会前后摇摆，
                         # 也避免 bbox 估距抖动一下就触发倒车。
-                        est_dist = self._visual_servo._estimate_distance(best_bbox)
+                        est_dist = self._visual_servo._estimate_distance(bbox_f)
                         in_dead_zone = (
                             est_dist is not None
                             and self._distance_dead_zone > 0.0
-                            and abs(est_dist - self._target_distance)
-                            < self._distance_dead_zone
+                            and abs(est_dist - self._target_distance) < self._distance_dead_zone
                         )
                         # 角速度后处理（死区 + EMA + 边缘 boost）
                         bbox_center_x = (best_bbox[0] + best_bbox[2]) / 2.0
@@ -1605,7 +1607,7 @@ class FollowMeSkillContainer(Module):
                                 f"v={twist.linear.x:+.2f} w={twist.angular.z:+.2f}"
                                 f"{dz_tag}{mode_tag}{crowd_tag}"
                             )
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         logger.warning(f"visual_servo compute_twist failed: {e}")
                         self.cmd_vel.publish(Twist.zero())
                 else:
@@ -1619,7 +1621,7 @@ class FollowMeSkillContainer(Module):
                             import rerun as rr
 
                             rr.log("world/color_image/follow_lock", rr.Clear(recursive=False))
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             self._rerun_ready = False
                     # 一旦看不到就把"恢复倒计时"清零，下次重新看到要重新等够 recovery_grace
                     self._recovered_since = None
@@ -1649,15 +1651,13 @@ class FollowMeSkillContainer(Module):
             self.cmd_vel.publish(Twist.zero())
             logger.info("follow_me loop exited")
 
-    # ------------------------------------------------------------------
     # 与 agent 的对话注入
-    # ------------------------------------------------------------------
 
     def _send_message_as_user(self, msg: str) -> None:
         """把一条 HumanMessage 注入到正在跑的 agent，agent 会用 LLM 处理后发给用户。"""
         try:
             self._agent_spec.add_message(HumanMessage(msg))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"add_message failed: {e}")
 
     def _report_lost(self, image: Image) -> None:
@@ -1669,7 +1669,7 @@ class FollowMeSkillContainer(Module):
                 image,
                 "请用一句简短的话描述你看到的环境，比如：'前面是走廊，左边有桌子'。直接给描述，不要寒暄。",
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"VL describe failed: {e}")
             description = "（看不清楚周围）"
 
@@ -1683,9 +1683,7 @@ class FollowMeSkillContainer(Module):
         self._send_message_as_user(injected)
         logger.info("Sent lost-report to agent", description=description)
 
-    # ------------------------------------------------------------------
     # 视觉 helpers
-    # ------------------------------------------------------------------
 
     def _ensure_models_loaded(self) -> None:
         if self._detector is None:
@@ -1732,7 +1730,7 @@ class FollowMeSkillContainer(Module):
                 if bbox is not None:
                     x1, y1, x2, y2 = bbox
                     return (int(x1), int(y1), int(x2), int(y2))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(f"VL pick failed, falling back to center+largest: {e}")
 
         # fallback：综合考虑"大小"和"距离画面中心"两个因子，越大越好、越居中越好
