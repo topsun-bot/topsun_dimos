@@ -60,7 +60,7 @@ def show_cmd(
 
     try:
         manifest = load_manifest(pack_name, pack_dir=pdir)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 

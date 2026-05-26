@@ -126,7 +126,11 @@ class ImportResult:
 
 def _normalize_record_types(records: list[dict[str, Any]]) -> None:
     """Lowercase record_type values so they match RecordType enum values."""
-    for rec in records:
+    for i, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            raise ValueError(
+                f"landmarks.json element {i} must be a JSON object, got {type(rec).__name__}"
+            )
         rt = rec.get("record_type")
         if isinstance(rt, str):
             rec["record_type"] = rt.lower()
@@ -333,7 +337,27 @@ def status() -> LandmarkStatus:
     if not json_path.exists():
         return LandmarkStatus(path=LANDMARK_MEMORY_DIR, exists=False, record_count=0, summary={})
 
-    records = json.loads(json_path.read_text())
+    try:
+        records = json.loads(json_path.read_text())
+    except (json.JSONDecodeError, ValueError) as e:
+        return LandmarkStatus(
+            path=LANDMARK_MEMORY_DIR, exists=True, record_count=0, summary={"error": str(e)}
+        )
+    if not isinstance(records, list):
+        return LandmarkStatus(
+            path=LANDMARK_MEMORY_DIR,
+            exists=True,
+            record_count=0,
+            summary={"error": f"landmarks.json must be a JSON array, got {type(records).__name__}"},
+        )
+    for i, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            return LandmarkStatus(
+                path=LANDMARK_MEMORY_DIR,
+                exists=True,
+                record_count=len(records),
+                summary={"error": f"Element {i} is not a JSON object"},
+            )
     return LandmarkStatus(
         path=LANDMARK_MEMORY_DIR,
         exists=True,

@@ -14,7 +14,7 @@ origin_note: "Replay 起始位姿需与录包时一致"
 
 counts:
   rooms: 2
-  landmarks: 3
+  landmarks: 1
 
 demo_queries:
   - "去厨房"
