@@ -177,7 +177,7 @@ def _decompress_archive(filename: str | Path) -> Path:
     target_dir = get_data_dir()
     filename_path = Path(filename)
     with tarfile.open(filename_path, "r:gz") as tar:
-        tar.extractall(target_dir)
+        tar.extractall(target_dir, filter="data")
     return target_dir / filename_path.name.replace(".tar.gz", "")
 
 

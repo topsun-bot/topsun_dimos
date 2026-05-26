@@ -27,7 +27,7 @@ def _label_matches_query(label: str, query: str) -> bool:
     if not query:
         return True
     if not label:
-        return True
+        return False
     l, q = label.lower().strip(), query.lower().strip()
     if l == q or q in l or l in q:
         return True
@@ -103,7 +103,11 @@ def parse_object_bbox_from_vlm_response(
         bbox = _bbox_from_detection_item(result)
         if bbox is not None:
             name = str(result.get("name") or result.get("label") or "")
-            score = 1.0 if _label_matches_query(name, object_description) else 0.0
+            if name:
+                score = 1.0 if _label_matches_query(name, object_description) else 0.0
+            else:
+                # Bare {"bbox": [...]} without label — still a valid single detection.
+                score = 1.0
             area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             candidates.append((score, area, bbox))
     elif isinstance(result, list):

@@ -35,7 +35,7 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
 )
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
-from dimos.robot.unitree.g1.sim import G1SimConnection
+from dimos.robot.unitree.g1.mujoco_sim import G1SimConnection
 from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
 
 
@@ -92,7 +92,7 @@ if global_config.viewer == "foxglove":
 
     _with_vis = autoconnect(FoxgloveBridge.blueprint())
 elif global_config.viewer.startswith("rerun"):
-    from dimos.visualization.rerun.bridge import RerunBridgeModule, _resolve_viewer_mode
+    from dimos.visualization.rerun.bridge import RerunBridgeModule
 
     rerun_config = {
         "blueprint": _g1_rerun_blueprint,
@@ -106,9 +106,7 @@ elif global_config.viewer.startswith("rerun"):
         },
     }
 
-    _with_vis = autoconnect(
-        RerunBridgeModule.blueprint(viewer_mode=_resolve_viewer_mode(), **rerun_config)
-    )
+    _with_vis = autoconnect(RerunBridgeModule.blueprint(**rerun_config))
 else:
     _with_vis = autoconnect()
 

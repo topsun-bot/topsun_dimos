@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+import pytest
 
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.core.core import rpc
@@ -75,6 +76,10 @@ class StubSpatialMemory(Module):
     def get_image_by_id(self, frame_id: str) -> Any:
         return None
 
+    @rpc
+    def clear_all(self) -> dict[str, int]:
+        return {}
+
 
 class StubLandmarkMemory(Module):
     @rpc
@@ -132,6 +137,10 @@ class StubLandmarkMemory(Module):
     @rpc
     def load(self) -> bool:
         return True
+
+    @rpc
+    def clear_all(self) -> int:
+        return 0
 
 
 class StubNavigation(Module):
@@ -301,7 +310,10 @@ def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
         SpatialRecord(name="office", record_type=RecordType.ROOM, position=(0.0, 0.0, 0.0)),
         SpatialRecord(name="lab", record_type=RecordType.ROOM, position=(4.0, 0.0, 0.0)),
     ]
-    nav._landmark_memory = SimpleNamespace(query_by_type=lambda record_type: rooms)
+    nav._landmark_memory = SimpleNamespace(
+        query_by_type=lambda record_type: rooms,
+        resolve_by_query=lambda q: None,
+    )
     nav._unitree_skill_container = _FakeUnitree()
     visited: list[str] = []
 

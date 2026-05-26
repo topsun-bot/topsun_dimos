@@ -14,7 +14,7 @@
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 import pytest
 
 from dimos.agents.annotation import skill
@@ -181,6 +181,21 @@ class Visualizer(Module):
         return Image.from_file(get_data("cafe-smol.jpg")).to_rgb()
 
 
+def _message_text(content: object) -> str:
+    """Extract plain text from LangChain message content (str or multimodal blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(parts)
+    return ""
+
+
 @pytest.mark.self_hosted
 def test_image(agent_setup):
     history = agent_setup(
@@ -195,7 +210,18 @@ def test_image(agent_setup):
         system_prompt="You are a helpful assistant that can use a camera to take pictures.",
     )
 
-    response = history[-1].content.lower()
+    # History may end with a multimodal HumanMessage (image artefact); use the latest
+    # substantive AI reply, not history[-1].
+    response = ""
+    for msg in reversed(history):
+        if not isinstance(msg, AIMessage):
+            continue
+        text = _message_text(msg.content).strip()
+        if not text or text.startswith("Tool call started"):
+            continue
+        response = text.lower()
+        break
+    assert response, "expected at least one AI text reply in agent history"
     assert "cafe" in response
     assert "stadium" not in response
     assert "battleship" not in response

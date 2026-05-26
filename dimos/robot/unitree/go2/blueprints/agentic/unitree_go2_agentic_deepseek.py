@@ -37,7 +37,7 @@ unitree_go2_agentic_deepseek = autoconnect(
     McpClient.blueprint(
         model="deepseek-v4-pro",
         model_provider="openai",
-        model_kwargs={"model_kwargs": {"extra_body": {"thinking": {"type": "disabled"}}}},
+        model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
         supports_vision=False,
     ),
     _common_agentic,

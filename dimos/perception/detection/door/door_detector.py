@@ -81,16 +81,14 @@ class DoorDetector:
 
         self._state_embs = self._encode_texts(_OPEN_CLOSE_PROMPTS)
 
-    # ------------------------------------------------------------------
     # Internal: CLIP encoding helpers
-    # ------------------------------------------------------------------
 
     def _encode_texts(self, texts: list[str]) -> torch.Tensor:
         inputs = self._clip._processor(
             text=texts, return_tensors="pt", padding=True, truncation=True
         ).to(self._clip.config.device)
         with torch.inference_mode():
-            features = self._clip._model.get_text_features(**inputs)
+            features: torch.Tensor = self._clip._model.get_text_features(**inputs)
             if self._clip.config.normalize:
                 features = torch.nn.functional.normalize(features, dim=-1)
         return features
@@ -100,14 +98,12 @@ class DoorDetector:
             self._clip.config.device
         )
         with torch.inference_mode():
-            features = self._clip._model.get_image_features(**inputs)
+            features: torch.Tensor = self._clip._model.get_image_features(**inputs)
             if self._clip.config.normalize:
                 features = torch.nn.functional.normalize(features, dim=-1)
         return features
 
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     def detect(self, frame: np.ndarray, frame_id: str = "") -> list[dict[str, Any]]:
         """Run detection pipeline on a single RGB frame.

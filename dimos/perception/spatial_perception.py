@@ -79,7 +79,7 @@ def _create_persistent_chroma_client(db_path: str) -> Any:
 
     def _open() -> Any:
         client = chromadb.PersistentClient(path=db_path, settings=settings)
-        client.heartbeat()
+        client.heartbeat()  # type: ignore[attr-defined]
         return client
 
     try:
@@ -177,20 +177,10 @@ class SpatialMemory(Module):
 
         self._chroma_lock = RLock()
         self._chroma_recover_cooldown_until: float = 0.0
-        self._setup_chromadb()
-
         self.max_stored_frames: int = self.config.max_stored_frames
         self.max_room_images: int = self.config.max_room_images
         self._room_image_ids: list[str] = []  # FIFO order for room image eviction
-        self.max_stored_frames = self.config.max_stored_frames
-
-        self.vector_db: SpatialVectorDB = SpatialVectorDB(
-            collection_name=self.collection_name,
-            chroma_client=self._chroma_client,
-            visual_memory=self._visual_memory,
-            embedding_provider=self.embedding_provider,
-            max_stored_frames=self.max_stored_frames,
-        )
+        self._setup_chromadb()
 
         self.last_position: Vector3 | None = None
         self.last_record_time: float | None = None
@@ -221,6 +211,7 @@ class SpatialMemory(Module):
             chroma_client=self._chroma_client,
             visual_memory=self._visual_memory,
             embedding_provider=self.embedding_provider,
+            max_stored_frames=self.max_stored_frames,
         )
 
         room_collection_name = f"{self.collection_name}_room_images"
@@ -375,14 +366,16 @@ class SpatialMemory(Module):
                 self.stored_frame_count += 1
                 self._stored_frame_ids.append(frame_id)
 
-                # Evict oldest frames when exceeding the max cap
-                while len(self._stored_frame_ids) > self.max_stored_frames:
-                    evict_id = self._stored_frame_ids.pop(0)
-                    try:
-                        self.vector_db.image_collection.delete(ids=[evict_id])
-                    except Exception:
-                        pass
-                    self._visual_memory.images.pop(evict_id, None)
+                # Evict oldest frames when exceeding the max cap (0 = unlimited)
+                if self.max_stored_frames > 0:
+                    while len(self._stored_frame_ids) > self.max_stored_frames:
+                        evict_id = self._stored_frame_ids.pop(0)
+                        try:
+                            self.vector_db.image_collection.delete(ids=[evict_id])
+                        except Exception:
+                            pass
+                        if self._visual_memory is not None:
+                            self._visual_memory.images.pop(evict_id, None)
 
             logger.info(
                 f"Stored frame at position ({current_pose.position.x:.2f}, {current_pose.position.y:.2f}, {current_pose.position.z:.2f}), "
@@ -512,14 +505,16 @@ class SpatialMemory(Module):
             self.stored_frame_count += 1
             self._stored_frame_ids.append(frame_id)
 
-            # Evict oldest frames when exceeding the max cap
-            while len(self._stored_frame_ids) > self.max_stored_frames:
-                evict_id = self._stored_frame_ids.pop(0)
-                try:
-                    self.vector_db.image_collection.delete(ids=[evict_id])
-                except Exception:
-                    pass
-                self._visual_memory.images.pop(evict_id, None)
+            # Evict oldest frames when exceeding the max cap (0 = unlimited)
+            if self.max_stored_frames > 0:
+                while len(self._stored_frame_ids) > self.max_stored_frames:
+                    evict_id = self._stored_frame_ids.pop(0)
+                    try:
+                        self.vector_db.image_collection.delete(ids=[evict_id])
+                    except Exception:
+                        pass
+                    if self._visual_memory is not None:
+                        self._visual_memory.images.pop(evict_id, None)
 
             logger.info(
                 f"Stored frame at position ({position_v3.x:.2f}, {position_v3.y:.2f}, {position_v3.z:.2f}), "
@@ -912,6 +907,8 @@ class SpatialMemory(Module):
         Returns:
             Numpy array (BGR) of the stored image, or None if not found.
         """
+        if self._visual_memory is None:
+            return None
         return self._visual_memory.get(location_id)
 
     @rpc
@@ -924,10 +921,12 @@ class SpatialMemory(Module):
         Returns:
             Numpy array (BGR) of the stored frame, or None if not found.
         """
+        if self._visual_memory is None:
+            return None
         return self._visual_memory.get(frame_id)
 
     @rpc
-    def query_by_text_with_images(self, text: str, limit: int = 3) -> list[dict]:  # type: ignore[type-arg]
+    def query_by_text_with_images(self, text: str, limit: int = 3) -> list[dict[str, Any]]:
         """Query spatial memory by text, returning results WITH decoded images.
 
         Like query_by_text but also retrieves the actual pixel data from
@@ -951,12 +950,12 @@ class SpatialMemory(Module):
             if not results or not results["ids"] or not results["ids"][0]:
                 return []
 
-            out: list[dict] = []
+            out: list[dict[str, Any]] = []
             for i in range(len(results["ids"][0])):
                 vid = results["ids"][0][i]
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
                 dist = float(results["distances"][0][i]) if results.get("distances") else 1.0
-                img = self._visual_memory.get(vid)
+                img = self._visual_memory.get(vid) if self._visual_memory is not None else None
                 out.append(
                     {
                         "id": vid,
