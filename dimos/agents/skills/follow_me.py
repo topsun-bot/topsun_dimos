@@ -50,6 +50,7 @@ import base64
 from datetime import datetime
 import io
 import json
+import os
 from pathlib import Path
 from threading import Event, RLock, Thread
 import time
@@ -1702,14 +1703,27 @@ class FollowMeSkillContainer(Module):
         if self._vl is None:
             from dimos.models.vl.create import create as create_vl
 
+            # QwenVlModel 读 ALIBABA_API_KEY；但 qwen-follow 蓝图（以及 DashScope
+            # 官方教程）配的是 DASHSCOPE_API_KEY。两者本质同一个 key，所以这里
+            # 兜底镜像一次，避免用户只设了一个 env 时 VL 启动失败。
+            if "ALIBABA_API_KEY" not in os.environ and "DASHSCOPE_API_KEY" in os.environ:
+                os.environ["ALIBABA_API_KEY"] = os.environ["DASHSCOPE_API_KEY"]
             self._vl = create_vl("qwen")
 
     def _detect_persons(self, image: Image) -> list[Bbox4]:
-        """YOLO 找所有人，返回 (x1, y1, x2, y2) 列表。"""
+        """YOLO 找所有人，返回 (x1, y1, x2, y2) 列表。
+
+        默认配置 yolo11n.pt 是 COCO 80 类，必须过滤 class_id != 0 的（椅子、
+        显示器、瓶子之类）；否则稀疏画面里一个大椅子 bbox 就会被当成人锁住，
+        视觉伺服会朝椅子开过去。yolo11n-pose.pt 仅输出 person，这里过滤
+        也是安全无副作用的（class_id 始终 0）。
+        """
         assert self._detector is not None
         result = self._detector.process_image(image)
         bboxes: list[Bbox4] = []
         for det in result.detections:
+            if getattr(det, "class_id", 0) != 0:
+                continue
             x1, y1, x2, y2 = det.bbox
             bboxes.append((int(x1), int(y1), int(x2), int(y2)))
         return bboxes
@@ -1728,8 +1742,22 @@ class FollowMeSkillContainer(Module):
                 assert self._vl is not None
                 bbox = get_object_bbox_from_image(self._vl, image, description)
                 if bbox is not None:
-                    x1, y1, x2, y2 = bbox
-                    return (int(x1), int(y1), int(x2), int(y2))
+                    vl_box: Bbox4 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
+                    # 一致性 check：VL 偶尔会把背景/物体框出来当成人，必须和当前
+                    # YOLO person detections 做 IoU 比对——重叠太低就视为 VL 误判，
+                    # fallback 到 center+largest，避免一上来就锁错目标乱跑。
+                    if detections:
+                        best_iou = max(_bbox_iou(vl_box, d) for d in detections)
+                        if best_iou >= 0.3:
+                            return vl_box
+                        logger.warning(
+                            f"VL bbox 与 YOLO person 检测无明显重叠（best IoU={best_iou:.2f}），"
+                            f"忽略 VL 选择，回退到画面中心最大的人"
+                        )
+                    else:
+                        # 完全没检到人，但 VL 给了 bbox——这种情况通常 VL 误判，
+                        # 不如直接 fallback；调用方拿到 None 会自己处理"没看到人"
+                        logger.warning("VL 给了 bbox 但 YOLO 没检到任何人，忽略 VL 结果")
             except Exception as e:
                 logger.warning(f"VL pick failed, falling back to center+largest: {e}")
 

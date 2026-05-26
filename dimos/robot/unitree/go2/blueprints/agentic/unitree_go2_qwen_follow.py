@@ -55,7 +55,7 @@ from dimos.agents.skills.orbit_object import OrbitObjectSkillContainer
 from dimos.agents.skills.speak_skill import SpeakSkill
 from dimos.agents.web_human_input import WebInput
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial import unitree_go2_spatial
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 
@@ -161,10 +161,12 @@ _QWEN_MODEL = os.environ.get("DIMOS_QWEN_MODEL", "qwen-vl-max-latest")
 
 
 unitree_go2_qwen_follow = autoconnect(
-    # 基础用 unitree_go2（带 voxel/costmap/planner/frontier），而不是 unitree_go2_spatial。
-    # spatial 版本带 spatial_memory + PerceiveLoopSkill，都依赖 CLIP（要从 huggingface
-    # 下几百 MB 权重）；这套只要 follow_me + 导航 + 千问对话，spatial 不需要。
-    unitree_go2,
+    # 基础必须用 unitree_go2_spatial（不是 unitree_go2）——因为下面挂的
+    # NavigationSkillContainer 强依赖 SpatialMemorySpec + SpatialLandmarkMemorySpec
+    # 这俩 spec，只有 spatial 蓝图提供（unitree_go2 没有）。
+    # 代价是会加载 CLIP 权重 + 跑 PerceiveLoopSkill，但 navigate_with_text /
+    # tag_location 这些能力对 follow_me 工作流也是有用的。
+    unitree_go2_spatial,
     # MCP server 把所有 @skill 暴露成 HTTP / LCM 工具
     McpServer.blueprint(),
     # MCP client 拉 tools/list、跑 langchain agent；走 OpenAI provider + DashScope
