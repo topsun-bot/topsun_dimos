@@ -266,21 +266,6 @@ def run(
         )
         raise typer.Exit(1)
 
-    # Auto-import landmark pack if --landmark-pack is set
-    if global_config.landmark_pack:
-        from dimos.landmark.landmark_pack import import_pack as landmark_import
-
-        try:
-            result = landmark_import(global_config.landmark_pack, force=True)
-            logger.info(
-                "Auto-imported landmark pack '%s': %d records",
-                result.pack_name,
-                result.record_count,
-            )
-        except (FileNotFoundError, RuntimeError) as e:
-            typer.echo(f"Error importing landmark pack: {e}", err=True)
-            raise typer.Exit(1)
-
     blueprint_name = "-".join(robot_types)
     run_id = generate_run_id(blueprint_name)
     log_dir = LOG_DIR / run_id
@@ -305,6 +290,21 @@ def run(
         print("Blueprint arguments:")
         print(arg_help(blueprint.config(), blueprint))
         return
+
+    # Auto-import landmark pack if --landmark-pack is set
+    if global_config.landmark_pack:
+        from dimos.landmark.landmark_pack import import_pack as landmark_import
+
+        try:
+            result = landmark_import(global_config.landmark_pack, force=True)
+            logger.info(
+                "Auto-imported landmark pack '%s': %d records",
+                result.pack_name,
+                result.record_count,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as e:
+            typer.echo(f"Error importing landmark pack: {e}", err=True)
+            raise typer.Exit(1)
 
     blueprint_config = blueprint.config()
     kwargs = load_config_args(blueprint_config, blueprint_args, config_path)

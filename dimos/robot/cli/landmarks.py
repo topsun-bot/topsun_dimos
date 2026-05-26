@@ -81,7 +81,7 @@ def show_cmd(
         records = _load_landmarks_json(pdir)
     except (FileNotFoundError, ValueError) as e:
         typer.echo(f"\n─── Landmarks ───\n  Error: {e}", err=True)
-        return
+        raise typer.Exit(1)
 
     typer.echo(f"\n─── Landmarks ({len(records)} total) ───")
     summary = _landmark_summary(records)

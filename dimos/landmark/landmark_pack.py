@@ -72,7 +72,17 @@ def load_manifest(pack_name: str, *, pack_dir: Path | None = None) -> dict[str, 
     manifest_path = pdir / "manifest.yaml"
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
-    return yaml.safe_load(manifest_path.read_text()) or {}
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text())
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in manifest: {manifest_path}") from e
+    if manifest is None:
+        return {}
+    if not isinstance(manifest, dict):
+        raise ValueError(
+            f"Manifest must be a YAML mapping, got {type(manifest).__name__}: {manifest_path}"
+        )
+    return manifest
 
 
 def _load_landmarks_json(pack_dir: Path) -> list[dict[str, Any]]:
@@ -259,6 +269,10 @@ def export_pack(
         raise FileNotFoundError(f"No landmarks.json found in {LANDMARK_MEMORY_DIR}")
 
     records = json.loads(json_path.read_text())
+    if not isinstance(records, list):
+        raise ValueError(
+            f"landmarks.json must be a JSON array, got {type(records).__name__}"
+        )
     if not records:
         raise ValueError("landmarks.json is empty — nothing to export")
 
