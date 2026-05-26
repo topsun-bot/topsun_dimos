@@ -75,7 +75,7 @@ def _create_persistent_chroma_client(db_path: str) -> Any:
     from chromadb.config import Settings
 
     os.makedirs(db_path, exist_ok=True)
-    settings = Settings(anonymized_telemetry=False)
+    settings = Settings(anonymized_telemetry=False, allow_reset=True)
 
     def _open() -> Any:
         client = chromadb.PersistentClient(path=db_path, settings=settings)
@@ -246,12 +246,14 @@ class SpatialMemory(Module):
             return False
         self._chroma_recover_cooldown_until = now + 30.0
         logger.warning(
-            "ChromaDB appears corrupt; wiping %s and re-binding collections", self.db_path
+            "ChromaDB appears corrupt; resetting and re-binding collections at %s", self.db_path
         )
         try:
             with self._chroma_lock:
-                self._chroma_client = None
-                self._setup_chromadb(wipe=True)
+                if self._chroma_client is not None:
+                    self._chroma_client.reset()
+                    self._chroma_client = None
+                self._setup_chromadb(wipe=False)
             return True
         except Exception:
             logger.exception("ChromaDB recovery failed")
@@ -692,22 +694,35 @@ class SpatialMemory(Module):
         """Clear ChromaDB collections, visual memory, and tagged locations."""
         room_n = 0
         frame_n = 0
+        loc_n = 0
         try:
             room_ids = self.room_collection.get(include=[])["ids"] or []
             room_n = len(room_ids)
+            if room_ids:
+                self.room_collection.delete(ids=room_ids)
         except Exception:
             logger.debug("room_collection unreadable during clear_all", exc_info=True)
 
         try:
             img_ids = self.vector_db.image_collection.get(include=[])["ids"] or []
             frame_n = len(img_ids)
+            if img_ids:
+                self.vector_db.image_collection.delete(ids=img_ids)
         except Exception:
             logger.debug("image_collection unreadable during clear_all", exc_info=True)
 
-        loc_n = len(self.robot_locations)
+        try:
+            loc_ids = self.vector_db.location_collection.get(include=[])["ids"] or []
+            loc_n = len(loc_ids)
+            if loc_ids:
+                self.vector_db.location_collection.delete(ids=loc_ids)
+        except Exception:
+            logger.debug("location_collection unreadable during clear_all", exc_info=True)
+
         self.robot_locations.clear()
         self._room_image_ids.clear()
         self._stored_frame_ids.clear()
+        self.vector_db._frame_ids.clear()
         self.frame_count = 0
         self.stored_frame_count = 0
 
@@ -719,13 +734,6 @@ class SpatialMemory(Module):
                 os.unlink(self.visual_memory_path)
             except OSError:
                 pass
-
-        # Wipe on-disk DB and re-open client (old client kept stale handles after delete).
-        self._chroma_client = None
-        self._chroma_recover_cooldown_until = 0.0
-        if self.db_path:
-            self._setup_chromadb(wipe=True)
-            logger.info("Recreated ChromaDB at %s", self.db_path)
 
         logger.info(
             "Spatial memory cleared: room_images=%d frames=%d tagged_locations=%d",

@@ -16,7 +16,7 @@
 """
 Go2 agentic blueprint using a local Qwen MLX OpenAI-compatible server.
 
-Defaults to ``http://10.10.197.175:8080`` and
+Defaults to ``http://10.10.197.242:8080`` and
 ``/Users/dijia/models/Qwen3.6-27B-mlx-bf16``.
 Override with ``DIMOS_QWEN_MLX_BASE_URL`` and ``DIMOS_QWEN_MLX_MODEL`` if needed.
 """

@@ -341,20 +341,39 @@ class McpClient(Module):
             with self._lock:
                 if not self._state_graph:
                     raise ValueError("No state graph initialized")
-                self._process_message(self._state_graph, message)
+                try:
+                    self._process_message(self._state_graph, message)
+                except Exception:
+                    logger.exception("McpClient-thread error processing message; skipping")
+                    # Roll back the message appended in _process_message before stream failed
+                    if self._history and self._history[-1] is message:
+                        self._history.pop()
+                    self.agent.publish(
+                        HumanMessage(
+                            content="An error occurred while processing. Please try again."
+                        )
+                    )
+
+    @staticmethod
+    def _sanitize_message(msg: BaseMessage) -> BaseMessage:
+        """Ensure ``content`` is never ``None`` (DeepSeek rejects null content)."""
+        if hasattr(msg, "content") and msg.content is None:
+            msg.content = ""
+        return msg
 
     def _process_message(
         self, state_graph: CompiledStateGraph[Any, Any, Any, Any], message: BaseMessage
     ) -> None:
         self.agent_idle.publish(False)
-        self._history.append(message)
+        self._history.append(self._sanitize_message(message))
         pretty_print_langchain_message(message)
         self.agent.publish(message)
 
+        self._history = [self._sanitize_message(m) for m in self._history]
         for update in state_graph.stream({"messages": self._history}, stream_mode="updates"):
             for node_output in update.values():
                 for msg in node_output.get("messages", []):
-                    self._history.append(msg)
+                    self._history.append(self._sanitize_message(msg))
                     pretty_print_langchain_message(msg)
                     self.agent.publish(msg)
 

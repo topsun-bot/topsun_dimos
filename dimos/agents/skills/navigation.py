@@ -432,18 +432,34 @@ class NavigationSkillContainer(Module):
         us = self._unitree_skill_container
         if us is None:
             return False
-        # GO2: UnitreeSkillContainer.relative_move(forward, left, degrees)
+
+        # Prefer cmd_vel closed-loop spin (avoids nav stuck→false-arrive on panoramas).
+        if hasattr(us, "rotate_in_place_degrees"):
+            try:
+                result = us.rotate_in_place_degrees(degrees)
+                if isinstance(result, bool):
+                    return result
+                return bool(result)
+            except Exception:
+                logger.exception("rotate_in_place_degrees failed")
+                return False
+
+        # GO2 fallback: path-planned relative_move
         if hasattr(us, "relative_move"):
             try:
-                us.relative_move(forward=0.0, left=0.0, degrees=degrees)
-                return True
+                msg = us.relative_move(forward=0.0, left=0.0, degrees=degrees)
+                if isinstance(msg, str):
+                    return "goal reached" in msg.lower()
+                return bool(msg)
             except Exception:
                 logger.exception("relative_move rotation failed")
                 return False
-        # G1: UnitreeG1SkillContainer.move(x, y, yaw, duration)
+        # G1 fallback: timed velocity move (yaw arg is rad/s, not degrees)
         if hasattr(us, "move"):
             try:
-                us.move(x=0.0, y=0.0, yaw=degrees)
+                duration = max(1.0, abs(degrees) / 45.0)
+                yaw_rate = math.copysign(math.radians(min(90.0, abs(degrees))), degrees)
+                us.move(x=0.0, y=0.0, yaw=yaw_rate, duration=duration)
                 return True
             except Exception:
                 logger.exception("move rotation failed")
@@ -817,10 +833,12 @@ class NavigationSkillContainer(Module):
             time.sleep(1.0)
             return
         try:
-            if hasattr(us, "relative_move"):
+            if hasattr(us, "rotate_in_place_degrees"):
+                us.rotate_in_place_degrees(360.0)
+            elif hasattr(us, "relative_move"):
                 us.relative_move(forward=0.0, left=0.0, degrees=360.0)
             elif hasattr(us, "move"):
-                us.move(x=0.0, y=0.0, yaw=360.0)
+                us.move(x=0.0, y=0.0, yaw=math.radians(90.0), duration=4.0)
         except Exception:
             logger.exception("360 scan rotation failed")
 

@@ -244,6 +244,10 @@ class _FakeUnitree:
         self.rotations: list[float] = []
         self.commands: list[str] = []
 
+    def rotate_in_place_degrees(self, degrees: float) -> bool:
+        self.rotations.append(degrees)
+        return True
+
     def relative_move(self, forward: float, left: float, degrees: float) -> bool:
         self.rotations.append(degrees)
         return True
@@ -251,6 +255,15 @@ class _FakeUnitree:
     def execute_sport_command(self, command: str) -> str:
         self.commands.append(command)
         return "ok"
+
+
+def test_rotate_in_place_prefers_closed_loop_spin() -> None:
+    nav = _nav_container()
+    fake = _FakeUnitree()
+    nav._unitree_skill_container = fake
+
+    assert nav._rotate_in_place_degrees(120.0) is True
+    assert fake.rotations == [120.0]
 
 
 class _FakeTracker:
