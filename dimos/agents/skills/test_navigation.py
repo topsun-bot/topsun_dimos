@@ -378,6 +378,130 @@ def test_patrol_memory_blindspots_stops_after_max_goals(monkeypatch: pytest.Monk
     assert len(nav._navigation.goals) == 1
 
 
+def test_memory_blindspot_wait_reports_stuck_without_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._latest_odom = _pose(5.0, 5.0)
+    nav._navigation = _FakeNavigation()
+    nav._navigation.is_goal_reached = lambda: False  # type: ignore[method-assign]
+    nav._memory_blindspot_patrol_stop = False
+    now = 100.0
+
+    def fake_time() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.time", fake_time)
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", fake_sleep)
+
+    status = nav._wait_for_memory_blindspot_goal(
+        timeout_sec=30.0,
+        stuck_timeout_sec=1.0,
+        progress_epsilon_m=0.25,
+    )
+
+    assert status == "stuck"
+    assert nav._navigation.cancel_count == 1
+
+
+def test_patrol_memory_blindspots_blacklists_rejected_goal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    first = {
+        "pose": _pose(1.0, 0.0),
+        "target_type": "memory_gap",
+        "reason": "missing",
+        "distance_m": 1.0,
+    }
+    second = {
+        "pose": _pose(2.0, 0.0),
+        "target_type": "memory_gap",
+        "reason": "missing",
+        "distance_m": 2.0,
+    }
+    nav._latest_odom = _pose(0.0, 0.0)
+    nav._latest_global_costmap = _free_costmap()
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._memory_blindspot_patrol_stop = False
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
+
+    class RejectFirstNavigation(_FakeNavigation):
+        def set_goal(self, goal: PoseStamped) -> bool:
+            self.goals.append(goal)
+            return len(self.goals) > 1
+
+    nav._navigation = RejectFirstNavigation()
+
+    def fake_find(**kwargs: Any) -> dict[str, Any]:
+        excluded = kwargs.get("exclude_recent_goals") or []
+        if any(abs(x - 1.0) < 0.01 and abs(y) < 0.01 for x, y in excluded):
+            return second
+        return first
+
+    nav._find_nearest_memory_blindspot = fake_find  # type: ignore[method-assign]
+
+    result = nav.patrol_memory_blindspots(
+        max_goals=1,
+        max_duration_sec=5.0,
+        recognize_on_arrival=False,
+    )
+
+    assert "visited 1 goal(s)" in result
+    assert [goal.position.x for goal in nav._navigation.goals] == [1.0, 2.0]
+
+
+def test_patrol_memory_blindspots_blacklists_stuck_goal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    first = {
+        "pose": _pose(1.0, 0.0),
+        "target_type": "memory_gap",
+        "reason": "missing",
+        "distance_m": 1.0,
+    }
+    second = {
+        "pose": _pose(2.0, 0.0),
+        "target_type": "memory_gap",
+        "reason": "missing",
+        "distance_m": 2.0,
+    }
+    nav._latest_odom = _pose(0.0, 0.0)
+    nav._latest_global_costmap = _free_costmap()
+    nav._navigation = _FakeNavigation()
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._memory_blindspot_patrol_stop = False
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
+    wait_statuses = ["stuck", "reached"]
+
+    def fake_wait(*args: Any, **kwargs: Any) -> str:
+        return wait_statuses.pop(0)
+
+    def fake_find(**kwargs: Any) -> dict[str, Any]:
+        excluded = kwargs.get("exclude_recent_goals") or []
+        if any(abs(x - 1.0) < 0.01 and abs(y) < 0.01 for x, y in excluded):
+            return second
+        return first
+
+    nav._wait_for_memory_blindspot_goal = fake_wait  # type: ignore[method-assign]
+    nav._find_nearest_memory_blindspot = fake_find  # type: ignore[method-assign]
+
+    result = nav.patrol_memory_blindspots(
+        max_goals=1,
+        max_duration_sec=5.0,
+        recognize_on_arrival=False,
+    )
+
+    assert "visited 1 goal(s)" in result
+    assert "stuck 1" in result
+    assert [goal.position.x for goal in nav._navigation.goals] == [1.0, 2.0]
+
+
 def test_blindspot_goal_rejects_occupied_cells() -> None:
     nav = _nav_container()
     grid = np.zeros((21, 21), dtype=np.int8)

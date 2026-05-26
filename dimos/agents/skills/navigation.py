@@ -1884,14 +1884,50 @@ class NavigationSkillContainer(Module):
         message = f"Found a location in the semantic map matching '{query}'."
         return self._navigate_to(goal_pose, message)
 
-    def _wait_for_memory_blindspot_goal(self, timeout_sec: float) -> str:
+    @staticmethod
+    def _remember_memory_blindspot_goal(
+        recent_goals: list[tuple[float, float]], pose: PoseStamped
+    ) -> None:
+        recent_goals.append((float(pose.position.x), float(pose.position.y)))
+        if len(recent_goals) > 20:
+            recent_goals.pop(0)
+
+    def _wait_for_memory_blindspot_goal(
+        self,
+        timeout_sec: float,
+        stuck_timeout_sec: float,
+        progress_epsilon_m: float,
+    ) -> str:
         deadline = time.time() + max(0.0, timeout_sec)
+        last_progress_time = time.time()
+        last_progress_position = (
+            (
+                float(self._latest_odom.position.x),
+                float(self._latest_odom.position.y),
+                float(self._latest_odom.position.z),
+            )
+            if self._latest_odom is not None
+            else None
+        )
         while time.time() < deadline:
             if self._memory_blindspot_patrol_stop:
                 self._navigation.cancel_goal()
                 return "stopped"
             if self._navigation.is_goal_reached():
                 return "reached"
+            if self._latest_odom is not None and last_progress_position is not None:
+                current_position = (
+                    float(self._latest_odom.position.x),
+                    float(self._latest_odom.position.y),
+                    float(self._latest_odom.position.z),
+                )
+                moved = math.dist(current_position, last_progress_position)
+                if moved >= progress_epsilon_m:
+                    last_progress_time = time.time()
+                    last_progress_position = current_position
+                elif time.time() - last_progress_time >= stuck_timeout_sec:
+                    self._navigation.cancel_goal()
+                    return "stuck"
             time.sleep(0.2)
         self._navigation.cancel_goal()
         return "timeout"
@@ -1949,6 +1985,8 @@ class NavigationSkillContainer(Module):
         max_goals: int = 0,
         max_duration_sec: float = 120.0,
         goal_timeout_sec: float = 90.0,
+        stuck_timeout_sec: float = 15.0,
+        progress_epsilon_m: float = 0.25,
         cooldown_sec: float = 2.0,
         recognize_on_arrival: bool = True,
         include_object_summary: bool = True,
@@ -1968,6 +2006,8 @@ class NavigationSkillContainer(Module):
             max_goals: Optional target count limit. 0 means only use max_duration_sec.
             max_duration_sec: Maximum patrol duration.
             goal_timeout_sec: Per-goal timeout.
+            stuck_timeout_sec: Cancel and try another target if odometry makes no progress this long.
+            progress_epsilon_m: Minimum movement counted as progress toward the current target.
             cooldown_sec: Delay between goals.
             recognize_on_arrival: Run VLM object recognition after reaching a target.
             include_object_summary: Include objects found during this patrol in the return text.
@@ -1983,6 +2023,7 @@ class NavigationSkillContainer(Module):
         deadline = started_at + max(0.0, max_duration_sec)
         visited = 0
         timed_out = 0
+        stuck = 0
         failed = 0
         max_failures = 3
         stop_reason = "max_duration_sec reached"
@@ -2014,25 +2055,31 @@ class NavigationSkillContainer(Module):
             pose = cast("PoseStamped", target["pose"])
             target_label = f"{target['target_type']}@({pose.position.x:.2f},{pose.position.y:.2f})"
             if not self._navigation.set_goal(pose):
+                self._remember_memory_blindspot_goal(recent_goals, pose)
                 failed += 1
                 if failed >= max_failures:
                     stop_reason = "navigation rejected too many memory blindspot goals"
                     break
                 continue
 
-            status = self._wait_for_memory_blindspot_goal(goal_timeout_sec)
+            status = self._wait_for_memory_blindspot_goal(
+                goal_timeout_sec,
+                stuck_timeout_sec,
+                progress_epsilon_m,
+            )
             if status == "stopped":
                 stop_reason = "stop command received"
                 break
-            if status == "timeout":
+            if status in {"timeout", "stuck"}:
+                self._remember_memory_blindspot_goal(recent_goals, pose)
                 timed_out += 1
                 failed += 1
+                if status == "stuck":
+                    stuck += 1
             else:
                 visited += 1
                 failed = 0
-                recent_goals.append((float(pose.position.x), float(pose.position.y)))
-                if len(recent_goals) > 20:
-                    recent_goals.pop(0)
+                self._remember_memory_blindspot_goal(recent_goals, pose)
                 if recognize_on_arrival:
                     stored, names, _ = self._detect_objects_in_current_view(
                         {
@@ -2058,7 +2105,8 @@ class NavigationSkillContainer(Module):
         elapsed = time.time() - started_at
         lines = [
             "Memory-driven exploration finished: "
-            f"visited {visited} goal(s), timed out {timed_out}, elapsed {elapsed:.0f}s.",
+            f"visited {visited} goal(s), timed out {timed_out}, "
+            f"stuck {stuck}, elapsed {elapsed:.0f}s.",
             f"Stopped because {stop_reason}.",
         ]
         if include_object_summary:
