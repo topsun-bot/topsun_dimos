@@ -75,6 +75,7 @@ class GlobalConfig(BaseSettings):
     dimsim_scene: str = "apt"
     dimsim_port: int = 8090
     default_transport: TransportBackend = _DEFAULT_TRANSPORT
+    landmark_pack: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

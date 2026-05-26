@@ -38,6 +38,7 @@ from dimos.constants import CONFIG_DIR, LOG_DIR
 from dimos.core.daemon import daemonize, install_signal_handlers
 from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.run_registry import get_most_recent, is_pid_alive, stop_entry
+from dimos.robot.cli.landmarks import app as landmarks_app
 from dimos.robot.unitree.go2.cli.go2tool import app as go2tool_app
 from dimos.utils.logging_config import setup_logger
 from dimos.visualization.rerun.constants import RerunOpenOption
@@ -140,6 +141,7 @@ def create_dynamic_callback():  # type: ignore[no-untyped-def]
 
 main.callback()(create_dynamic_callback())  # type: ignore[no-untyped-call]
 main.add_typer(go2tool_app, name="go2tool")
+main.add_typer(landmarks_app, name="landmarks")
 
 
 def arg_help(
@@ -263,6 +265,21 @@ def run(
             err=True,
         )
         raise typer.Exit(1)
+
+    # Auto-import landmark pack if --landmark-pack is set
+    if global_config.landmark_pack:
+        from dimos.landmark.landmark_pack import import_pack as landmark_import
+
+        try:
+            result = landmark_import(global_config.landmark_pack, force=True)
+            logger.info(
+                "Auto-imported landmark pack '%s': %d records",
+                result.pack_name,
+                result.record_count,
+            )
+        except (FileNotFoundError, RuntimeError) as e:
+            typer.echo(f"Error importing landmark pack: {e}", err=True)
+            raise typer.Exit(1)
 
     blueprint_name = "-".join(robot_types)
     run_id = generate_run_id(blueprint_name)
