@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import field
+from pathlib import Path
 import signal
 import socket
 import subprocess
@@ -317,6 +318,17 @@ class RerunBridgeModule(Module):
             },
         )
         assert server_uri is not None  # start_grpc=True guarantees a URI
+
+        # RunSession active → also stream .rrd to <session>/rerun.rrd. Must precede any rr.log().
+        # Failures here (disk full, permission, SDK error) must not kill the viewer path.
+        if session_dir := self.config.g.run_session_dir:
+            try:
+                rrd_path = Path(session_dir).expanduser() / "rerun.rrd"
+                rrd_path.parent.mkdir(parents=True, exist_ok=True)
+                rr.save(str(rrd_path))
+                logger.info(f"Rerun .rrd sink → {rrd_path}")
+            except Exception:
+                logger.warning("Failed to enable Rerun .rrd disk sink", exc_info=True)
 
         parsed = urlparse(connect_url.replace("rerun+", "", 1))
         grpc_port = parsed.port or RERUN_GRPC_PORT

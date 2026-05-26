@@ -73,6 +73,11 @@ class GlobalConfig(BaseSettings):
     listen_host: str = "127.0.0.1"
     dimsim_scene: str = "apt"
     dimsim_port: int = 8090
+    # 数据闭环 RunSession 目录的绝对路径。None 表示"按需自动分配"——
+    # 由 dimos.core.run_session.RunSession.create() 在创建时回填。
+    # 各 sink（Rerun bridge .rrd、SQLite sensors.db、cmd_vel pkl 等）读取
+    # 该字段决定落盘位置；为空则保持各自原有的默认行为（向后兼容）。
+    run_session_dir: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
