@@ -160,7 +160,7 @@ def export_cmd(
     """Export current landmark_memory/ into a pack."""
     try:
         dest = export_pack(pack_name, output_dir=output_dir)
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, FileExistsError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 

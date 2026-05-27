@@ -58,6 +58,22 @@ load_dotenv()
 SIMULATORS = ("mujoco", "dimsim")
 
 
+def _strip_landmark_pack_argv(argv: list[str]) -> list[str]:
+    """Remove --landmark-pack and its value from argv so restart doesn't re-import."""
+    out: list[str] = []
+    skip_next = False
+    for a in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--landmark-pack" or a.startswith("--landmark-pack="):
+            if a == "--landmark-pack":
+                skip_next = True
+            continue
+        out.append(a)
+    return out
+
+
 def _normalize_simulation_argv(argv: list[str]) -> list[str]:
     """Keep `--simulation` backwards compatible.
 
@@ -303,27 +319,19 @@ def run(
 
     # Auto-import landmark pack if --landmark-pack is set.
     # Run AFTER config validation so bad args don't destroy existing memory.
-    # Skip if landmarks already exist (e.g. restart).
     if landmark_pack:
-        from dimos.landmark.landmark_pack import LANDMARK_MEMORY_DIR, import_pack as landmark_import
+        from dimos.landmark.landmark_pack import import_pack as landmark_import
 
-        dest_json = LANDMARK_MEMORY_DIR / "landmarks.json"
-        if dest_json.exists():
+        try:
+            result = landmark_import(landmark_pack, force=True)
             logger.info(
-                "Landmark memory already exists; skipping auto-import of '%s'",
-                landmark_pack,
+                "Auto-imported landmark pack '%s': %d records",
+                result.pack_name,
+                result.record_count,
             )
-        else:
-            try:
-                result = landmark_import(landmark_pack, force=True)
-                logger.info(
-                    "Auto-imported landmark pack '%s': %d records",
-                    result.pack_name,
-                    result.record_count,
-                )
-            except (FileNotFoundError, RuntimeError, ValueError) as e:
-                typer.echo(f"Error importing landmark pack: {e}", err=True)
-                raise typer.Exit(1)
+        except (FileNotFoundError, RuntimeError, ValueError) as e:
+            typer.echo(f"Error importing landmark pack: {e}", err=True)
+            raise typer.Exit(1)
 
     coordinator = ModuleCoordinator.build(blueprint, kwargs)
 
@@ -357,7 +365,7 @@ def run(
             cli_args=list(robot_types),
             config_overrides=cli_config_overrides,
             rpyc_port=rpyc_port,
-            original_argv=sys.argv,
+            original_argv=_strip_landmark_pack_argv(sys.argv),
         )
         entry.save()
         spawn_watchdog(run_id, log_dir=log_dir)
@@ -374,7 +382,7 @@ def run(
             cli_args=list(robot_types),
             config_overrides=cli_config_overrides,
             rpyc_port=rpyc_port,
-            original_argv=sys.argv,
+            original_argv=_strip_landmark_pack_argv(sys.argv),
         )
         entry.save()
         spawn_watchdog(run_id, log_dir=log_dir)
