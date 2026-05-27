@@ -42,6 +42,8 @@ from dimos.utils.sequential_ids import SequentialIds
 
 logger = setup_logger()
 
+_MCP_REQUEST_TIMEOUT_S = 300.0
+
 
 class McpClientConfig(ModuleConfig):
     system_prompt: str | None = SYSTEM_PROMPT
@@ -104,7 +106,7 @@ class McpClient(Module):
         for key in unsupported:
             del os.environ[key]
         try:
-            return httpx.Client(timeout=120.0)
+            return httpx.Client(timeout=_MCP_REQUEST_TIMEOUT_S)
         finally:
             for key, val in unsupported.items():
                 os.environ[key] = val

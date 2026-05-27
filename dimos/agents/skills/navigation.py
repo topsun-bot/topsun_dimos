@@ -78,6 +78,21 @@ _NAV_TERMINAL_FAILURE_PREFIX = "NAVIGATION_FAILED:"
 _OBJECT_VISUAL_NAV_TIMEOUT_S = 120.0
 _OBJECT_LOCAL_SCAN_TIMEOUT_S = 120.0
 _OBJECT_ROOM_SWEEP_TIMEOUT_S = 120.0
+_VISUAL_SERVO_FORWARD_NO_PROGRESS_LIMIT = 20
+_VISUAL_SERVO_ODOM_STALL_LIMIT = 3
+_VISUAL_SERVO_ODOM_PROGRESS_EPS_M = 0.03
+_VISUAL_SERVO_CENTERED_ERR = 0.18
+_VISUAL_SERVO_CLOSE_ENOUGH_CENTERED_ERR = 0.20
+_VISUAL_SERVO_RECENTER_ERR = 0.24
+_VISUAL_SERVO_REDETECT_ERR = 0.55
+_VISUAL_SERVO_ARRIVAL_AREA_RATIO = 0.16
+_VISUAL_SERVO_ARRIVAL_HEIGHT_RATIO = 0.45
+_VISUAL_SERVO_ARRIVAL_WIDTH_RATIO = 0.40
+_VISUAL_SERVO_STALL_ARRIVAL_HEIGHT_RATIO = 0.35
+_VISUAL_SERVO_SLOW_FORWARD_MPS = 0.25
+_VISUAL_SERVO_MID_FORWARD_MPS = 0.45
+_VISUAL_SERVO_NEAR_FORWARD_MPS = 0.45
+_VISUAL_SERVO_FAST_FORWARD_MPS = 0.55
 _LOCAL_SEARCH_SCAN_OFFSETS_DEG = (
     0.0,
     30.0,
@@ -92,6 +107,7 @@ _LOCAL_SEARCH_SCAN_OFFSETS_DEG = (
     300.0,
     330.0,
 )
+_LOCAL_SEARCH_RESCAN_OFFSETS_DEG = _LOCAL_SEARCH_SCAN_OFFSETS_DEG[1:]
 
 
 @dataclass(frozen=True)
@@ -101,6 +117,7 @@ class _ObjectNavigationResult:
     message: str | None = None
     failure_reason: str | None = None
     made_progress: bool = False
+    requires_final_confirmation: bool = True
 
 
 def _terminal_navigation_failure(message: str) -> str:
@@ -703,7 +720,12 @@ class NavigationSkillContainer(Module):
             logger.info("[in_frame] skip — %r is a room name, not an in-frame object", query)
             return None
         logger.info("[in_frame] VLM bbox + tracking for %r (timeout=%.0fs) ...", query, timeout)
-        msg = self._navigate_to_object(query, timeout=timeout)
+        msg = self._navigate_to_object(
+            query,
+            timeout=timeout,
+            arrival_action="point",
+            run_arrival_action=True,
+        )
         if msg:
             logger.info("[in_frame] ✓ HIT: %s", msg)
         else:
@@ -898,7 +920,7 @@ class NavigationSkillContainer(Module):
         query: str,
         *,
         timeout: float = 30.0,
-        max_attempts: int = 6,
+        max_attempts: int = 10,
         max_motion_updates: int = 10,
         vlm_query: str | None = None,
     ) -> _ObjectNavigationResult:
@@ -1036,7 +1058,10 @@ class NavigationSkillContainer(Module):
 
             servo_result = self._visual_servo_to_tracked_object(query, timeout=timeout)
             if servo_result.arrived:
-                if self._confirm_object_in_current_frame(query_for_vlm):
+                if (
+                    not servo_result.requires_final_confirmation
+                    or self._confirm_object_in_current_frame(query_for_vlm)
+                ):
                     return servo_result
                 last_failure = "final VLM confirmation failed after visual servo"
                 logger.warning(
@@ -1090,12 +1115,21 @@ class NavigationSkillContainer(Module):
         timeout: float = 30.0,
         vlm_query: str | None = None,
         announce: bool = True,
+        arrival_action: str = "stop",
+        run_arrival_action: bool = False,
     ) -> str | None:
         result = self._navigate_to_object_result(query, timeout=timeout, vlm_query=vlm_query)
         if not result.arrived:
             return None
+        action_msg = (
+            self._run_arrival_action(arrival_action, query) if run_arrival_action else None
+        )
         if announce:
             self._announce_object_found(query)
+        if action_msg is not None:
+            if result.message:
+                return f"{action_msg} ({result.message})"
+            return action_msg
         return result.message
 
     def _stop_visual_servo_motion(self) -> None:
@@ -1148,7 +1182,12 @@ class NavigationSkillContainer(Module):
         waiting_bbox_logged = False
         recovery_moves = 0
         forward_no_progress_count = 0
+        forward_odom_stall_count = 0
         last_forward_metrics: tuple[float, float, float] | None = None
+        centered_visible_since: float | None = None
+        centered_timeout_bbox: BBox | None = None
+        centered_timeout_error = 0.0
+        centered_timeout_height = 0.0
         last_failure = "visual servoing did not converge"
 
         while time.time() - start_time < timeout:
@@ -1210,6 +1249,7 @@ class NavigationSkillContainer(Module):
                     found=True,
                     arrived=True,
                     message=f"Successfully arrived at '{query}'",
+                    requires_final_confirmation=False,
                 )
 
             x1, _y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
@@ -1217,18 +1257,36 @@ class NavigationSkillContainer(Module):
             horizontal_error = (center_x - image_w / 2.0) / max(1.0, image_w / 2.0)
             last_horizontal_error = horizontal_error
             height_ratio = max(0.0, min(1.0, (y2 - float(bbox[1])) / float(image_h)))
+            if abs(horizontal_error) <= _VISUAL_SERVO_CENTERED_ERR and height_ratio >= 0.25:
+                if centered_visible_since is None:
+                    centered_visible_since = time.time()
+                centered_timeout_bbox = cast("BBox", bbox)
+                centered_timeout_error = horizontal_error
+                centered_timeout_height = height_ratio
+            else:
+                centered_visible_since = None
+                centered_timeout_bbox = None
 
-            if abs(horizontal_error) > 0.35:
+            abs_horizontal_error = abs(horizontal_error)
+            if abs_horizontal_error > _VISUAL_SERVO_REDETECT_ERR:
                 forward = 0.0
-                yaw = max(-0.35, min(0.35, -horizontal_error * 0.45))
+                yaw = max(-0.40, min(0.40, -horizontal_error * 0.50))
                 recenter_after_turn = True
-            elif abs(horizontal_error) > 0.18:
-                forward = 0.14 if height_ratio > 0.42 else 0.20
-                yaw = max(-0.25, min(0.25, -horizontal_error * 0.55))
+            elif abs_horizontal_error > _VISUAL_SERVO_RECENTER_ERR:
+                forward = 0.0
+                yaw = max(-0.35, min(0.35, -horizontal_error * 0.65))
+                recenter_after_turn = False
+            elif abs_horizontal_error > _VISUAL_SERVO_CENTERED_ERR:
+                forward = _VISUAL_SERVO_SLOW_FORWARD_MPS
+                yaw = max(-0.28, min(0.28, -horizontal_error * 0.65))
                 recenter_after_turn = False
             else:
-                forward = 0.22 if height_ratio > 0.42 else 0.28
-                yaw = max(-0.15, min(0.15, -horizontal_error * 0.30))
+                forward = (
+                    _VISUAL_SERVO_NEAR_FORWARD_MPS
+                    if height_ratio > 0.42
+                    else _VISUAL_SERVO_FAST_FORWARD_MPS
+                )
+                yaw = max(-0.18, min(0.18, -horizontal_error * 0.40))
                 recenter_after_turn = False
 
             if forward > 0.0:
@@ -1245,9 +1303,10 @@ class NavigationSkillContainer(Module):
                         forward_no_progress_count += 1
                         logger.info(
                             "[L2]   Forward visual servo made no visible progress for '%s' "
-                            "(%d/7): area %.3f→%.3f, height %.2f→%.2f",
+                            "(%d/%d): area %.3f→%.3f, height %.2f→%.2f",
                             query,
                             forward_no_progress_count,
+                            _VISUAL_SERVO_FORWARD_NO_PROGRESS_LIMIT,
                             prev_area,
                             curr_area,
                             prev_height,
@@ -1257,6 +1316,7 @@ class NavigationSkillContainer(Module):
                     last_forward_metrics = metrics
             else:
                 forward_no_progress_count = 0
+                forward_odom_stall_count = 0
                 last_forward_metrics = None
 
             logger.info(
@@ -1269,17 +1329,76 @@ class NavigationSkillContainer(Module):
                 forward,
                 yaw,
             )
+            odom_before = self._latest_odom
             try:
                 self._publish_visual_servo_motion(
                     forward_mps=forward,
                     yaw_radps=yaw,
-                    duration_s=0.8 if forward > 0.0 else 0.6,
+                    duration_s=1.0 if forward > 0.0 else 0.6,
                 )
             except Exception as exc:
                 logger.exception("[L2]   Visual servo movement failed for %r", query)
                 last_failure = f"visual servo movement failed: {exc}"
                 break
-            if forward > 0.0 and forward_no_progress_count >= 7:
+            if forward > 0.0 and odom_before is not None and self._latest_odom is not None:
+                odom_delta = self._pose_delta_xy(odom_before, self._latest_odom)
+                if (
+                    odom_delta < _VISUAL_SERVO_ODOM_PROGRESS_EPS_M
+                    and abs(horizontal_error) <= _VISUAL_SERVO_CENTERED_ERR
+                    and height_ratio >= _VISUAL_SERVO_STALL_ARRIVAL_HEIGHT_RATIO
+                ):
+                    forward_odom_stall_count += 1
+                    logger.info(
+                        "[L2]   Forward command did not move odom for '%s' "
+                        "(%d/%d): delta=%.3fm, err=%.2f, height=%.2f",
+                        query,
+                        forward_odom_stall_count,
+                        _VISUAL_SERVO_ODOM_STALL_LIMIT,
+                        odom_delta,
+                        horizontal_error,
+                        height_ratio,
+                    )
+                else:
+                    forward_odom_stall_count = 0
+                if forward_odom_stall_count >= _VISUAL_SERVO_ODOM_STALL_LIMIT:
+                    logger.info(
+                        "[L2]   ✓ Treating '%s' as reached: forward commands were issued "
+                        "but odom did not advance while target stayed centered",
+                        query,
+                    )
+                    self._object_tracking.stop_track()
+                    self._stop_visual_servo_motion()
+                    return _ObjectNavigationResult(
+                        found=True,
+                        arrived=True,
+                        message=(
+                            f"Reached '{query}' as close as possible; forward commands did "
+                            "not move the robot"
+                        ),
+                        requires_final_confirmation=False,
+                    )
+            if (
+                forward > 0.0
+                and forward_no_progress_count >= _VISUAL_SERVO_FORWARD_NO_PROGRESS_LIMIT
+            ):
+                if abs(last_horizontal_error) > _VISUAL_SERVO_CENTERED_ERR:
+                    last_failure = (
+                        "forward motion made no visible progress while target was still off-center"
+                    )
+                    logger.info(
+                        "[L2]   Forward visual servo stalled for '%s' while off-center "
+                        "(err=%.2f); retrying VLM detection",
+                        query,
+                        last_horizontal_error,
+                    )
+                    self._object_tracking.stop_track()
+                    self._stop_visual_servo_motion()
+                    return _ObjectNavigationResult(
+                        found=True,
+                        arrived=False,
+                        failure_reason=last_failure,
+                        made_progress=True,
+                    )
                 logger.info(
                     "[L2]   ✓ Treating '%s' as reached: target is centered but repeated "
                     "forward commands made no visible progress",
@@ -1294,6 +1413,7 @@ class NavigationSkillContainer(Module):
                         f"Reached '{query}' as close as possible; forward motion made no "
                         "visible progress"
                     ),
+                    requires_final_confirmation=False,
                 )
             if recenter_after_turn:
                 last_failure = "target was off-center; rotated once and will retry VLM detection"
@@ -1315,6 +1435,29 @@ class NavigationSkillContainer(Module):
         self._object_tracking.stop_track()
         self._stop_visual_servo_motion()
         if time.time() - start_time >= timeout:
+            stable_centered_s = (
+                time.time() - centered_visible_since if centered_visible_since is not None else 0.0
+            )
+            if centered_timeout_bbox is not None and stable_centered_s >= 5.0:
+                logger.warning(
+                    "[L2]   Visual servo for '%s' reached timeout after %.0fs, but target "
+                    "stayed centered and visible for %.1fs (bbox=%s err=%.2f height=%.2f); "
+                    "accepting pending final VLM confirmation",
+                    query,
+                    timeout,
+                    stable_centered_s,
+                    centered_timeout_bbox,
+                    centered_timeout_error,
+                    centered_timeout_height,
+                )
+                return _ObjectNavigationResult(
+                    found=True,
+                    arrived=True,
+                    message=(
+                        f"Visually kept '{query}' centered near timeout; "
+                        "accepting after final VLM confirmation"
+                    ),
+                )
             last_failure = f"visual servoing timed out after {timeout:.0f}s"
             logger.warning("[L2]   ✗ Visual servo to '%s' timed out after %.0fs", query, timeout)
         return _ObjectNavigationResult(found=True, arrived=False, failure_reason=last_failure)
@@ -1385,7 +1528,12 @@ class NavigationSkillContainer(Module):
                 if vis_msg:
                     return vis_msg
             self._rotate_scan_in_place()
-            found = self._navigate_to_object(query, timeout=_OBJECT_ROOM_SWEEP_TIMEOUT_S)
+            found = self._navigate_to_object(
+                query,
+                timeout=_OBJECT_ROOM_SWEEP_TIMEOUT_S,
+                arrival_action="point",
+                run_arrival_action=True,
+            )
             if found:
                 return found
         return None
@@ -1422,6 +1570,11 @@ class NavigationSkillContainer(Module):
             return float("inf")
         dx = float(self._latest_odom.position.x) - float(pose.position.x)
         dy = float(self._latest_odom.position.y) - float(pose.position.y)
+        return math.hypot(dx, dy)
+
+    def _pose_delta_xy(self, before: PoseStamped, after: PoseStamped) -> float:
+        dx = float(after.position.x) - float(before.position.x)
+        dy = float(after.position.y) - float(before.position.y)
         return math.hypot(dx, dy)
 
     def _yaw_toward_point(self, gx: float, gy: float) -> float:
@@ -1552,10 +1705,15 @@ class NavigationSkillContainer(Module):
         vlm_query = self._vlm_query_for_object_record(target_name, target)
         stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
         center_yaw = stored_yaw if stored_yaw is not None else self._yaw_toward_point(tx, ty)
+        initial_offsets = (
+            _LOCAL_SEARCH_RESCAN_OFFSETS_DEG
+            if stored_yaw is not None
+            else _LOCAL_SEARCH_SCAN_OFFSETS_DEG
+        )
         found = self._scan_yaws_for_object(
             target_name,
             center_yaw=center_yaw,
-            offsets_deg=_LOCAL_SEARCH_SCAN_OFFSETS_DEG,
+            offsets_deg=initial_offsets,
             timeout_per_view=_OBJECT_LOCAL_SCAN_TIMEOUT_S,
             stop_on_found_failure=False,
             vlm_query=vlm_query,
@@ -2483,7 +2641,14 @@ class NavigationSkillContainer(Module):
         bbox_area_ratio = (bw * bh) / float(w * h)
         bbox_height_ratio = bh / float(h)
         bbox_width_ratio = bw / float(w)
-        return bbox_area_ratio >= 0.22 or bbox_height_ratio >= 0.55 or bbox_width_ratio >= 0.50
+        center_x = (x1 + x2) / 2.0
+        abs_center_error = abs((center_x - w / 2.0) / max(1.0, w / 2.0))
+        large_enough = (
+            bbox_area_ratio >= _VISUAL_SERVO_ARRIVAL_AREA_RATIO
+            or bbox_height_ratio >= _VISUAL_SERVO_ARRIVAL_HEIGHT_RATIO
+            or bbox_width_ratio >= _VISUAL_SERVO_ARRIVAL_WIDTH_RATIO
+        )
+        return large_enough and abs_center_error <= _VISUAL_SERVO_CLOSE_ENOUGH_CENTERED_ERR
 
     def _bbox_visual_progress_metrics(self, bbox: BBox) -> tuple[float, float, float] | None:
         if self._latest_image is None or not hasattr(self._latest_image, "data"):
@@ -2673,7 +2838,12 @@ class NavigationSkillContainer(Module):
                         )
                         if vis_msg:
                             return vis_msg
-                    found = self._navigate_to_object(query, timeout=_OBJECT_VISUAL_NAV_TIMEOUT_S)
+                    found = self._navigate_to_object(
+                        query,
+                        timeout=_OBJECT_VISUAL_NAV_TIMEOUT_S,
+                        arrival_action="point",
+                        run_arrival_action=True,
+                    )
                     if found:
                         return found
                     return (

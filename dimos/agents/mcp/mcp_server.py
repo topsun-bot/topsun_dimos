@@ -42,6 +42,11 @@ logger = setup_logger()
 
 
 _SSE_KEEPALIVE_INTERVAL = 20.0  # seconds
+_LONG_RUNNING_TOOL_TIMEOUT_S = 300.0
+_LONG_RUNNING_TOOL_RPC_TIMEOUTS = {
+    "navigate_to_landmark": _LONG_RUNNING_TOOL_TIMEOUT_S,
+    "navigate_with_text": _LONG_RUNNING_TOOL_TIMEOUT_S,
+}
 
 app = FastAPI()
 app.add_middleware(
@@ -279,6 +284,7 @@ class McpServer(Module):
     def on_system_modules(self, modules: list[RPCClient]) -> None:
         # TODO: this is a bit hacky, also not thread-safe
         assert self.rpc is not None
+        self.rpc.rpc_timeouts.update(_LONG_RUNNING_TOOL_RPC_TIMEOUTS)
         app.state.skills = [
             skill_info for module in modules for skill_info in (module.get_skills() or [])
         ]
