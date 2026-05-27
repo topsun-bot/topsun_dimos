@@ -320,18 +320,29 @@ def run(
     # Auto-import landmark pack if --landmark-pack is set.
     # Run AFTER config validation so bad args don't destroy existing memory.
     if landmark_pack:
-        from dimos.landmark.landmark_pack import import_pack as landmark_import
-
-        try:
-            result = landmark_import(landmark_pack, force=True)
-            logger.info(
-                "Auto-imported landmark pack '%s': %d records",
-                result.pack_name,
-                result.record_count,
+        mem_cfg = kwargs.get("spatial-landmark-memory-module", {})
+        custom_db = mem_cfg.get("db_path")
+        custom_snap = mem_cfg.get("snapshots_dir")
+        if custom_db or custom_snap:
+            logger.warning(
+                "Skipping --landmark-pack: custom memory path configured "
+                "(db_path=%s, snapshots_dir=%s). Auto-import only supports default paths.",
+                custom_db or "(default)",
+                custom_snap or "(default)",
             )
-        except (FileNotFoundError, RuntimeError, ValueError) as e:
-            typer.echo(f"Error importing landmark pack: {e}", err=True)
-            raise typer.Exit(1)
+        else:
+            from dimos.landmark.landmark_pack import import_pack as landmark_import
+
+            try:
+                result = landmark_import(landmark_pack, force=True)
+                logger.info(
+                    "Auto-imported landmark pack '%s': %d records",
+                    result.pack_name,
+                    result.record_count,
+                )
+            except (FileNotFoundError, RuntimeError, ValueError) as e:
+                typer.echo(f"Error importing landmark pack: {e}", err=True)
+                raise typer.Exit(1)
 
     coordinator = ModuleCoordinator.build(blueprint, kwargs)
 

@@ -36,7 +36,7 @@ app = typer.Typer(help="Manage landmark packs", no_args_is_help=True)
 
 @app.command("list")
 def list_cmd() -> None:
-    """List available landmark packs in fixtures/."""
+    """List available landmark packs from bundled and user directories."""
     packs = list_packs()
     if not packs:
         typer.echo("No landmark packs found.")

@@ -15,7 +15,7 @@
 """Landmark pack import/export for pre-built navigation data.
 
 Pack format:
-    fixtures/landmark_packs/<name>/
+    dimos/landmark/_packs/<name>/   (bundled)  or  STATE_DIR/landmark_packs/<name>/   (user)
         manifest.yaml       # metadata
         landmarks.json      # SpatialRecord list
         snapshots/          # optional JPEGs keyed by record_id
@@ -56,9 +56,9 @@ def _default_pack_dir(pack_name: str) -> Path:
 
 
 def list_packs() -> list[str]:
-    """List available pack names from bundled packs and user state dir."""
+    """List available pack names from user state dir and bundled packs."""
     seen: set[str] = set()
-    for base in (_BUNDLED_PACKS_DIR, USER_LANDMARK_PACKS_DIR):
+    for base in (USER_LANDMARK_PACKS_DIR, _BUNDLED_PACKS_DIR):
         if base.is_dir():
             for d in sorted(base.iterdir()):
                 if d.is_dir() and (d / "manifest.yaml").exists() and d.name not in seen:
@@ -71,7 +71,13 @@ def load_manifest(pack_name: str, *, pack_dir: Path | None = None) -> dict[str, 
 
     Raises FileNotFoundError if the pack or manifest is missing.
     """
-    import yaml
+    try:
+        import yaml
+    except ImportError:
+        raise ImportError(
+            "pyyaml is required for landmark pack operations. "
+            "Install it with: pip install pyyaml"
+        )
 
     pdir = pack_dir or _default_pack_dir(pack_name)
     manifest_path = pdir / "manifest.yaml"
@@ -173,8 +179,8 @@ def import_pack(
 
     Parameters
     ----------
-    pack_name: Name of the pack subdirectory under fixtures/landmark_packs/.
-    force: If True, skip the overwrite confirmation prompt.
+    pack_name: Name of the pack (looked up in user state dir then bundled _packs/).
+    force: If True, overwrite existing landmark_memory instead of raising FileExistsError.
     dry_run: Only print what would be copied, don't actually write.
     clear_session_id: Set every record's session_id to "" on import.
     no_backup: Skip backing up the existing landmark_memory directory.
