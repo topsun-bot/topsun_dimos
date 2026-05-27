@@ -36,6 +36,9 @@ logger = setup_logger()
 class G1Config(ModuleConfig):
     ip: str = Field(default_factory=lambda m: m["g"].robot_ip)
     connection_type: str = Field(default_factory=lambda m: m["g"].unitree_connection_type)
+    # Per-device AES-128 key for firmware using the data2=3 WebRTC handshake.
+    # If unset here, UnitreeWebRTCConnection falls back to UNITREE_AES_128_KEY.
+    aes_128_key: str | None = Field(default_factory=lambda m: m["g"].unitree_webrtc_aes_key)
 
 
 class G1ConnectionBase(Module, ABC):
@@ -78,7 +81,13 @@ class G1Connection(G1ConnectionBase):
 
         match self.config.connection_type:
             case "webrtc":
-                self.connection = UnitreeWebRTCConnection(self.config.ip)
+                self.connection = UnitreeWebRTCConnection(
+                    self.config.ip,
+                    aes_128_key=self.config.aes_128_key,
+                    region=self.config.g.unitree_cloud_region,
+                    device_type="G1",
+                    connect_timeout_sec=self.config.g.unitree_webrtc_connect_timeout_sec,
+                )
             case "replay":
                 raise ValueError("Replay connection not implemented for G1 robot")
             case "mujoco":

@@ -262,11 +262,11 @@ class SpatialVectorDB:
         filtered_results = {"ids": [], "metadatas": [], "distances": []}  # type: ignore[var-annotated]
 
         for i, metadata in enumerate(results["metadatas"]):  # type: ignore[arg-type]
-            item_x = metadata.get("x")
-            item_y = metadata.get("y")
+            item_x = metadata.get("pos_x", metadata.get("x"))
+            item_y = metadata.get("pos_y", metadata.get("y"))
 
             if item_x is not None and item_y is not None:
-                distance = np.sqrt((x - item_x) ** 2 + (y - item_y) ** 2)
+                distance = np.sqrt((x - float(item_x)) ** 2 + (y - float(item_y)) ** 2)
 
                 if distance <= radius:
                     filtered_results["ids"].append(results["ids"][i])
@@ -365,11 +365,44 @@ class SpatialVectorDB:
             if isinstance(metadata, list) and metadata and isinstance(metadata[0], dict):
                 metadata = metadata[0]  # Handle nested metadata
 
-            if isinstance(metadata, dict) and "x" in metadata and "y" in metadata:
-                x = metadata.get("x", 0)
-                y = metadata.get("y", 0)
-                z = metadata.get("z", 0) if "z" in metadata else 0
-                locations.append((x, y, z))
+            if isinstance(metadata, dict):
+                x = metadata.get("pos_x", metadata.get("x"))
+                y = metadata.get("pos_y", metadata.get("y"))
+                z = metadata.get("pos_z", metadata.get("z", 0.0))
+                if x is not None and y is not None:
+                    locations.append((float(x), float(y), float(z or 0.0)))
+
+        return locations
+
+    def get_memory_locations(self) -> list[dict[str, float | str]]:
+        """Return stored spatial frame locations and timestamps."""
+        results = self.image_collection.get(include=["metadatas"])
+
+        if not results or not results.get("ids") or not results.get("metadatas"):
+            return []
+
+        locations: list[dict[str, float | str]] = []
+        for frame_id, metadata in zip(results["ids"], results["metadatas"], strict=False):
+            if isinstance(metadata, list) and metadata and isinstance(metadata[0], dict):
+                metadata = metadata[0]
+            if not isinstance(metadata, dict):
+                continue
+
+            x = metadata.get("pos_x", metadata.get("x"))
+            y = metadata.get("pos_y", metadata.get("y"))
+            z = metadata.get("pos_z", metadata.get("z", 0.0))
+            if x is None or y is None:
+                continue
+
+            locations.append(
+                {
+                    "frame_id": str(metadata.get("frame_id", frame_id)),
+                    "pos_x": float(x),
+                    "pos_y": float(y),
+                    "pos_z": float(z or 0.0),
+                    "timestamp": float(metadata.get("timestamp", 0.0) or 0.0),
+                }
+            )
 
         return locations
 

@@ -20,6 +20,7 @@ from typing import Any, cast
 from reactivex.disposable import Disposable
 
 from dimos.agents.annotation import skill
+from dimos.agents.skills.speak_skill_spec import SpeakSkillSpec
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In
@@ -27,6 +28,7 @@ from dimos.models.qwen.bbox import BBox
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
+from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.base import NavigationState
 from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector import (
@@ -34,7 +36,10 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
 )
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.navigation.topology import TopologyGraph
-from dimos.navigation.visual.query import get_object_bbox_from_image
+from dimos.navigation.visual.query import (
+    get_object_bbox_from_image,
+    vlm_object_present_in_view,
+)
 from dimos.perception.object_tracking_spec import ObjectTrackingSpec
 from dimos.perception.spatial_memory_spec import SpatialMemorySpec
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
@@ -219,6 +224,7 @@ def _log_vlm_runtime_config(vl_model: Any) -> None:
 class NavigationSkillContainer(Module):
     _latest_image: Image | None = None
     _latest_odom: PoseStamped | None = None
+    _latest_global_costmap: OccupancyGrid | None = None
     _skill_started: bool = False
     _similarity_threshold: float = 0.23
     # Visual relocalization vs odom (room reference images)
@@ -231,12 +237,15 @@ class NavigationSkillContainer(Module):
     _landmark_memory: SpatialLandmarkMemorySpec
     _navigation: NavigationInterfaceSpec
     _object_tracking: ObjectTrackingSpec | None = None
+    _speak_skill: SpeakSkillSpec | None = None
     _unitree_skill_container: UnitreeSkillContainer | None = None
     _frontier_explorer: WavefrontFrontierExplorer | None = None
     _memory_session_id: str = ""
+    _memory_blindspot_patrol_stop: bool = False
 
     color_image: In[Image]
     odom: In[PoseStamped]
+    global_costmap: In[OccupancyGrid]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -251,6 +260,7 @@ class NavigationSkillContainer(Module):
         super().start()
         self.register_disposable(Disposable(self.color_image.subscribe(self._on_color_image)))
         self.register_disposable(Disposable(self.odom.subscribe(self._on_odom)))
+        self.register_disposable(Disposable(self.global_costmap.subscribe(self._on_global_costmap)))
         self._skill_started = True
 
     @rpc
@@ -268,6 +278,178 @@ class NavigationSkillContainer(Module):
 
     def _on_odom(self, odom: PoseStamped) -> None:
         self._latest_odom = odom
+
+    def _on_global_costmap(self, costmap: OccupancyGrid) -> None:
+        self._latest_global_costmap = costmap
+
+    def _memory_locations(self) -> list[dict[str, float | str]]:
+        try:
+            return self._spatial_memory.get_memory_locations()
+        except Exception:
+            logger.exception("Failed to read spatial memory locations")
+            return []
+
+    def _is_costmap_goal_cell_safe(
+        self,
+        costmap: OccupancyGrid,
+        gx: int,
+        gy: int,
+        clearance_m: float,
+    ) -> bool:
+        if not (0 <= gx < costmap.width and 0 <= gy < costmap.height):
+            return False
+        if int(costmap.grid[gy, gx]) == CostValues.UNKNOWN:
+            return False
+        if int(costmap.grid[gy, gx]) >= CostValues.OCCUPIED:
+            return False
+
+        clearance_cells = max(1, math.ceil(clearance_m / max(costmap.resolution, 1e-6)))
+        for ny in range(
+            max(0, gy - clearance_cells), min(costmap.height, gy + clearance_cells + 1)
+        ):
+            for nx in range(
+                max(0, gx - clearance_cells), min(costmap.width, gx + clearance_cells + 1)
+            ):
+                if (nx - gx) ** 2 + (ny - gy) ** 2 > clearance_cells**2:
+                    continue
+                if int(costmap.grid[ny, nx]) >= CostValues.OCCUPIED:
+                    return False
+        return True
+
+    def _costmap_cell_has_unknown_neighbor(
+        self,
+        costmap: OccupancyGrid,
+        gx: int,
+        gy: int,
+        radius_cells: int = 2,
+    ) -> bool:
+        for ny in range(max(0, gy - radius_cells), min(costmap.height, gy + radius_cells + 1)):
+            for nx in range(max(0, gx - radius_cells), min(costmap.width, gx + radius_cells + 1)):
+                if int(costmap.grid[ny, nx]) == CostValues.UNKNOWN:
+                    return True
+        return False
+
+    def _memory_coverage_reason(
+        self,
+        x: float,
+        y: float,
+        memory_locations: list[dict[str, float | str]],
+        coverage_radius_m: float,
+        stale_after_sec: float,
+        now: float,
+    ) -> tuple[str | None, float | None]:
+        nearest_distance: float | None = None
+        for loc in memory_locations:
+            try:
+                lx = float(loc.get("pos_x", loc.get("x", 0.0)))
+                ly = float(loc.get("pos_y", loc.get("y", 0.0)))
+                ts = float(loc.get("timestamp", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            distance = math.hypot(x - lx, y - ly)
+            if nearest_distance is None or distance < nearest_distance:
+                nearest_distance = distance
+            if distance <= coverage_radius_m:
+                if stale_after_sec <= 0 or ts <= 0 or now - ts <= stale_after_sec:
+                    return None, distance
+
+        if nearest_distance is not None and nearest_distance <= coverage_radius_m:
+            return "stale", nearest_distance
+        return "missing", nearest_distance
+
+    def _find_nearest_memory_blindspot(
+        self,
+        search_radius_m: float = 5.0,
+        coverage_radius_m: float = 1.0,
+        stale_after_sec: float = 600.0,
+        clearance_m: float = 0.35,
+        exclude_recent_goals: list[tuple[float, float]] | None = None,
+    ) -> dict[str, Any] | None:
+        if self._latest_odom is None or self._latest_global_costmap is None:
+            return None
+
+        costmap = self._latest_global_costmap
+        robot = self._latest_odom.position
+        robot_grid = costmap.world_to_grid((robot.x, robot.y, robot.z))
+        center_gx = round(robot_grid.x)
+        center_gy = round(robot_grid.y)
+        radius_cells = max(1, math.ceil(search_radius_m / max(costmap.resolution, 1e-6)))
+        stride = max(1, round(0.25 / max(costmap.resolution, 1e-6)))
+        now = time.time()
+        memory_locations = self._memory_locations()
+        recent = exclude_recent_goals or []
+
+        best: dict[str, Any] | None = None
+        for gy in range(
+            max(0, center_gy - radius_cells),
+            min(costmap.height, center_gy + radius_cells + 1),
+            stride,
+        ):
+            for gx in range(
+                max(0, center_gx - radius_cells),
+                min(costmap.width, center_gx + radius_cells + 1),
+                stride,
+            ):
+                world = costmap.grid_to_world((gx, gy, 0.0))
+                distance_to_robot = math.hypot(world.x - float(robot.x), world.y - float(robot.y))
+                if distance_to_robot > search_radius_m:
+                    continue
+                if distance_to_robot < max(0.5, coverage_radius_m * 0.5):
+                    continue
+                if any(
+                    math.hypot(world.x - rx, world.y - ry) < coverage_radius_m for rx, ry in recent
+                ):
+                    continue
+                if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
+                    continue
+
+                reason, nearest_memory_distance = self._memory_coverage_reason(
+                    float(world.x),
+                    float(world.y),
+                    memory_locations,
+                    coverage_radius_m,
+                    stale_after_sec,
+                    now,
+                )
+                if reason is None:
+                    continue
+
+                is_frontier = self._costmap_cell_has_unknown_neighbor(costmap, gx, gy)
+                target_type = "memory_frontier" if is_frontier else "memory_gap"
+                score = distance_to_robot
+                if is_frontier:
+                    score -= 0.75
+                if reason == "missing":
+                    score -= 0.25
+
+                candidate = {
+                    "pose": PoseStamped(
+                        position=make_vector3(float(world.x), float(world.y), float(robot.z)),
+                        orientation=self._latest_odom.orientation,
+                        frame_id=costmap.frame_id or self._latest_odom.frame_id,
+                    ),
+                    "distance_m": distance_to_robot,
+                    "grid": (gx, gy),
+                    "reason": reason,
+                    "target_type": target_type,
+                    "nearest_memory_distance_m": nearest_memory_distance,
+                    "score": score,
+                }
+                if best is None or score < float(best["score"]):
+                    best = candidate
+        return best
+
+    def _announce_object_found(self, target_name: str) -> None:
+        speaker = self._speak_skill
+        if speaker is None:
+            logger.info(
+                "Object found announcement skipped for '%s': no SpeakSkill wired", target_name
+            )
+            return
+        try:
+            speaker.speak("找到了", blocking=False)
+        except Exception:
+            logger.exception("Failed to announce object found for '%s'", target_name)
 
     @skill
     def tag_location(self, location_name: str, num_photos: int = 0) -> str:
@@ -652,7 +834,9 @@ class NavigationSkillContainer(Module):
             f"To cancel movement call the 'stop_navigation' tool."
         )
 
-    def _navigate_to_object(self, query: str, *, timeout: float = 30.0) -> str | None:
+    def _navigate_to_object(
+        self, query: str, *, timeout: float = 30.0, announce: bool = True
+    ) -> str | None:
         if self._object_tracking is None:
             return None
 
@@ -701,6 +885,8 @@ class NavigationSkillContainer(Module):
                 else:
                     logger.info("[L2]   ✓ Reached '%s'", query)
                     self._object_tracking.stop_track()
+                    if announce:
+                        self._announce_object_found(query)
                     return f"Successfully arrived at '{query}'"
 
             # Fast fallback: if tracking is consecutively lost for >5s, bail early
@@ -760,11 +946,13 @@ class NavigationSkillContainer(Module):
         if not rooms:
             logger.info("[L4]   No room-type landmarks — sweep skipped")
             return None
-        # Look up stored object bearing if available
+        # Look up stored object bearing + description if available
         obj_rec = self._resolve_landmark_from_query(query)
         stored_yaw: float | None = None
+        description: str | None = None
         if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
             stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
+            description = obj_rec.state or None
         logger.info("[L4]   Sweeping %d room(s) ...", len(rooms))
         for ri, room in enumerate(rooms):
             rname = room.name or room.record_id
@@ -788,7 +976,7 @@ class NavigationSkillContainer(Module):
                 continue
             # Use stored bearing if available, then VLM acquire + track
             if stored_yaw is not None:
-                vis_msg = self._visual_acquire_object(query, stored_yaw)
+                vis_msg = self._visual_acquire_object(query, stored_yaw, description=description)
                 if vis_msg:
                     return vis_msg
             self._rotate_scan_in_place()
@@ -797,19 +985,32 @@ class NavigationSkillContainer(Module):
                 return found
         return None
 
-    def _rotate_scan_in_place(self) -> None:
+    def _rotate_scan_in_place(self, steps: int = 6, settle_s: float = 0.2) -> None:
+        """Spin in place by stepping through ``steps`` rotations of 360/steps degrees.
+
+        A single ``relative_move(degrees=360)`` call is a no-op: the planner
+        normalises yaw modulo 2π, so the goal yaw equals the start yaw and the
+        robot does not actually rotate. Stepping by 60° (default) avoids the
+        wrap-around so the robot really sweeps a full circle.
+        """
         us = self._unitree_skill_container
         if us is None:
             logger.warning("360 scan: no UnitreeSkillContainer wired; pausing briefly instead")
             time.sleep(1.0)
             return
-        try:
-            if hasattr(us, "relative_move"):
-                us.relative_move(forward=0.0, left=0.0, degrees=360.0)
-            elif hasattr(us, "move"):
-                us.move(x=0.0, y=0.0, yaw=360.0)
-        except Exception:
-            logger.exception("360 scan rotation failed")
+        step_deg = 360.0 / float(max(1, steps))
+        for _ in range(steps):
+            try:
+                if hasattr(us, "relative_move"):
+                    us.relative_move(forward=0.0, left=0.0, degrees=step_deg)
+                elif hasattr(us, "move"):
+                    us.move(x=0.0, y=0.0, yaw=step_deg)
+                else:
+                    return
+            except Exception:
+                logger.exception("360 scan rotation failed")
+                return
+            time.sleep(settle_s)
 
     def _planar_distance_to_pose(self, pose: PoseStamped) -> float:
         if self._latest_odom is None:
@@ -1126,27 +1327,83 @@ class NavigationSkillContainer(Module):
         out = us.execute_sport_command(cmd)
         return f"Reached '{target_name}', executing arrival_action={action!r}: {out}"
 
-    def _visual_acquire_object(
-        self, target_name: str, stored_yaw: float | None = None
-    ) -> str | None:
-        """After reaching object coordinates, visually locate and face the object.
+    def _vlm_sees_in_view(self, query: str) -> BBox | None:
+        """Bbox-returning VLM check (used by :meth:`_navigate_to_object` to
+        seed the OpenCV tracker — the bbox is required there).
 
-        If a stored bearing is available, rotate to face that direction first,
-        then use VLM detection + tracking to fine-align.
+        For yes/no presence questions where the bbox is irrelevant
+        (:meth:`_visual_acquire_object`, :meth:`verify_object_in_view`), use
+        :meth:`_vlm_object_present_in_view` instead — it is a single VLM call
+        with stricter prompting and supports a free-text disambiguation hint.
+        """
+        if self._latest_image is None:
+            return None
+        try:
+            return self._get_bbox_for_current_frame(query)
+        except Exception:
+            logger.exception("[visual_acquire] VLM bbox check failed for %r", query)
+            return None
+
+    def _vlm_object_present_in_view(self, query: str, *, description: str | None = None) -> bool:
+        """Single-call yes/no presence check on the latest camera frame.
+
+        Args:
+            query: Object name (e.g. ``"水桶"``).
+            description: Optional disambiguation hint, typically the stored
+                landmark ``state`` (``"桌上的透明矿泉水瓶"``). Helps the VLM
+                tell similar objects apart (水瓶 vs 水桶, 书桌 vs 会议桌).
+        """
+        if self._latest_image is None:
+            return False
+        try:
+            return vlm_object_present_in_view(
+                self._vl_model, self._latest_image, query, description=description
+            )
+        except Exception:
+            logger.exception("[visual_acquire] VLM presence check failed for %r", query)
+            return False
+
+    def _visual_acquire_object(
+        self,
+        target_name: str,
+        stored_yaw: float | None = None,
+        *,
+        description: str | None = None,
+        announce: bool = True,
+    ) -> str | None:
+        """After arriving at the landmark, confirm the target is in the camera.
+
+        Pure visual-confirmation flow (no walking, no tracker):
+          1. (Optional) face the stored bearing if it differs from current yaw.
+          2. VLM-check the current frame. If found → success.
+          3. Otherwise rotate 60° in place, settle, VLM-check again.
+             Repeat up to 6 times (full 360° sweep).
+          4. If all 6 steps complete without sighting → failure (return None).
+
+        Sighting is established purely from the VLM bbox detection — the
+        OpenCV tracker (used by :meth:`_navigate_to_object`) is irrelevant
+        for "does the camera see it?" and its init is fragile on low-contrast
+        bboxes, so we do not require tracker init success here.
 
         Args:
             target_name: The object name to search for.
-            stored_yaw: If known, the world-frame yaw angle (radians) to face first.
+            stored_yaw: World-frame yaw (radians) where the object was
+                originally observed, if known.
+            description: Optional disambiguation hint passed to the VLM (the
+                stored landmark ``state``, e.g. ``"桌上的透明矿泉水瓶"``).
+                Reduces same-radical confusions (水瓶 vs 水桶) at no extra
+                latency cost — it just rides along on the same VLM call.
 
         Returns:
-            Success message if object was visually acquired, None otherwise.
+            Success message if the camera sees the object, else ``None``.
         """
-        # Step 1: face the stored bearing if available
         if stored_yaw is not None:
             euler = self._odom_euler_tuple()
             if euler is not None:
-                diff = stored_yaw - euler[2]
-                diff = math.atan2(math.sin(diff), math.cos(diff))
+                diff = math.atan2(
+                    math.sin(stored_yaw - euler[2]),
+                    math.cos(stored_yaw - euler[2]),
+                )
                 diff_deg = math.degrees(diff)
                 if abs(diff_deg) > 5.0:
                     logger.info(
@@ -1158,28 +1415,42 @@ class NavigationSkillContainer(Module):
                     self._rotate_in_place_degrees(diff_deg)
                     time.sleep(0.5)
 
-        # Step 2: VLM detection + tracking in current view
-        try:
-            result = self._navigate_to_object(target_name, timeout=15.0)
-            if result:
-                logger.info("[visual_acquire] ✓ '%s' found in current view", target_name)
-                return f"Visually acquired '{target_name}'"
-        except Exception:
-            logger.exception("[visual_acquire] VLM re-scan error for '%s'", target_name)
+        if self._vlm_object_present_in_view(target_name, description=description):
+            logger.info("[visual_acquire] ✓ '%s' found in current view", target_name)
+            if announce:
+                self._announce_object_found(target_name)
+            return f"Visually acquired '{target_name}'"
 
-        # Step 3: 360° scan if not in current view
-        logger.info("[visual_acquire] '%s' not in view; doing 360° scan ...", target_name)
-        self._rotate_scan_in_place()
-        time.sleep(0.5)
-        try:
-            result = self._navigate_to_object(target_name, timeout=10.0)
-            if result:
-                logger.info("[visual_acquire] ✓ '%s' found after 360° scan", target_name)
-                return f"Visually acquired '{target_name}' after 360° scan"
-        except Exception:
-            logger.exception("[visual_acquire] VLM re-scan after 360° error for '%s'", target_name)
+        logger.info(
+            "[visual_acquire] '%s' not in current view; starting 6×60° rotational scan",
+            target_name,
+        )
+        steps = 6
+        step_deg = 60.0
+        for i in range(steps):
+            if not self._rotate_in_place_degrees(step_deg):
+                logger.warning(
+                    "[visual_acquire] rotation step %d/%d failed for '%s'",
+                    i + 1,
+                    steps,
+                    target_name,
+                )
+                return None
+            time.sleep(0.3)  # let the camera publish a fresh frame
+            if self._vlm_object_present_in_view(target_name, description=description):
+                rotated = int(step_deg * (i + 1))
+                logger.info(
+                    "[visual_acquire] ✓ '%s' found at step %d/%d (%d° rotated)",
+                    target_name,
+                    i + 1,
+                    steps,
+                    rotated,
+                )
+                if announce:
+                    self._announce_object_found(target_name)
+                return f"Visually acquired '{target_name}' after {rotated}° scan"
 
-        logger.warning("[visual_acquire] ✗ '%s' not found visually", target_name)
+        logger.warning("[visual_acquire] ✗ '%s' not found after full 6×60° scan", target_name)
         return None
 
     def _parse_vlm_object_list_response(self, response: str | None) -> list[dict[str, Any]]:
@@ -1221,6 +1492,7 @@ class NavigationSkillContainer(Module):
         frame_poses: list[tuple[tuple[float, float, float], tuple[float, float, float]]]
         | None = None,
         frames: list[Any] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> int:
         stored = 0
         hfov_rad = math.radians(_CAMERA_HFOV_DEG)
@@ -1283,6 +1555,8 @@ class NavigationSkillContainer(Module):
                 "observed_position": list(obj_pos),
                 "observed_rotation": list(obj_rot),
             }
+            if extra_metadata:
+                meta.update(extra_metadata)
             if room_name:
                 meta["room_name"] = room_name
             if view_idx is not None:
@@ -1421,6 +1695,107 @@ class NavigationSkillContainer(Module):
             n,
         )
 
+    def _detect_objects_in_current_view(
+        self, extra_metadata: dict[str, Any] | None = None
+    ) -> tuple[int, list[str], str]:
+        if self._latest_image is None:
+            return 0, [], "No camera image available."
+        if not hasattr(self._latest_image, "data"):
+            return 0, [], "Camera image has no pixel data."
+
+        logger.info(
+            "[detect_objects_in_view] START image_shape=%s",
+            getattr(self._latest_image.data, "shape", None),
+        )
+        try:
+            response = self._vlm_query_all_images(
+                [self._latest_image.data], _VLM_OBJECT_LIST_PROMPT
+            )
+        except Exception as exc:
+            logger.exception("[detect_objects_in_view] VLM call failed")
+            return 0, [], f"VLM call failed: {exc}"
+
+        objects = self._parse_vlm_object_list_response(response)
+        if not objects:
+            return 0, [], f"No objects parsed from VLM response: {(response or '')[:200]}"
+
+        pos = self._latest_odom.position if self._latest_odom else None
+        euler_tuple = self._odom_euler_tuple()
+        position = (float(pos.x), float(pos.y), float(pos.z)) if pos else (0.0, 0.0, 0.0)
+        rotation = euler_tuple if euler_tuple else (0.0, 0.0, 0.0)
+        stored = self._store_detected_objects(
+            objects,
+            position,
+            rotation,
+            frames=[self._latest_image.data],
+            frame_poses=[(position, rotation)],
+            extra_metadata=extra_metadata,
+        )
+        names = [
+            _normalize_vlm_object_name((o.get("name") or "").strip())
+            for o in objects
+            if (o.get("name") or "").strip()
+        ]
+        if stored:
+            return stored, names, f"Detected {stored} object(s): {', '.join(names)}."
+        return 0, names, "No nameable objects detected."
+
+    @skill
+    def verify_object_in_view(self, name: str) -> str:
+        """Re-confirm a specific object is currently visible in the camera.
+
+        Asks the VLM a single yes/no question about the current frame; if it
+        misses, rotate in 6 x 60-degree steps with another yes/no after each
+        step. The stored landmark description (``state``, e.g.
+        ``"桌上的透明矿泉水瓶"``) — if any — is forwarded to the VLM as a
+        disambiguation hint, which catches same-radical confusions like
+        水瓶 ↔ 水桶 or 书桌 ↔ 会议桌 without an extra round-trip.
+
+        Call this whenever you need to verify physical presence — DO NOT rely
+        on dialogue memory. The physical world can change between requests
+        (objects can be moved by humans). For example, if you JUST navigated
+        to "展示板" but the user asks again to find "展示板", call this skill
+        to confirm it is still there — never reply "we are already there"
+        without verifying.
+
+        This skill does NOT navigate. If verification fails, follow up with
+        ``navigate_with_text`` to search elsewhere.
+
+        Args:
+            name: The object name (typically Chinese, e.g. "展示板") to look
+                for in the current camera view.
+
+        Returns:
+            str: ``"YES: ..."`` if the object is visible (with rotation amount
+            if a scan was needed), or ``"NO: ..."`` if not seen after the full
+            sweep, including a hint to search elsewhere.
+        """
+        if not self._skill_started:
+            raise ValueError(f"{self} has not been started.")
+        if self._latest_image is None:
+            return "NO: no camera image available."
+
+        logger.info("[verify_object_in_view] START name=%r", name)
+        description: str | None = None
+        try:
+            obj_rec = self._resolve_landmark_from_query(name)
+        except Exception:
+            obj_rec = None
+        if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
+            description = obj_rec.state or None
+            if description:
+                logger.info("[verify_object_in_view] using stored description=%r", description)
+
+        result = self._visual_acquire_object(name, stored_yaw=None, description=description)
+        if result is not None:
+            return f"YES: {result}. The camera currently sees '{name}'."
+        return (
+            f"NO: '{name}' is NOT visible in the camera after a full 6x60deg scan. "
+            "The object may have been moved or is no longer here. "
+            f"Use `navigate_with_text({name!r})` to search other locations, or "
+            "`detect_objects_in_view` to list what is actually here."
+        )
+
     @skill
     def detect_objects_in_view(self) -> str:
         """Detect nameable objects in the current camera frame using VLM.
@@ -1434,43 +1809,10 @@ class NavigationSkillContainer(Module):
         """
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
-        if self._latest_image is None:
-            return "No camera image available."
-        if not hasattr(self._latest_image, "data"):
-            return "Camera image has no pixel data."
-
-        logger.info(
-            "[detect_objects_in_view] START image_shape=%s",
-            getattr(self._latest_image.data, "shape", None),
-        )
-        try:
-            response = self._vlm_query_all_images(
-                [self._latest_image.data], _VLM_OBJECT_LIST_PROMPT
-            )
-        except Exception as exc:
-            logger.exception("[detect_objects_in_view] VLM call failed")
-            return f"VLM call failed: {exc}"
-
-        objects = self._parse_vlm_object_list_response(response)
-        if not objects:
-            return f"No objects parsed from VLM response: {(response or '')[:200]}"
-
-        pos = self._latest_odom.position if self._latest_odom else None
-        euler_tuple = self._odom_euler_tuple()
-        position = (float(pos.x), float(pos.y), float(pos.z)) if pos else (0.0, 0.0, 0.0)
-        rotation = euler_tuple if euler_tuple else (0.0, 0.0, 0.0)
-        stored = self._store_detected_objects(
-            objects,
-            position,
-            rotation,
-            frames=[self._latest_image.data],
-            frame_poses=[(position, rotation)],
-        )
-        names = [(o.get("name") or "").strip() for o in objects if (o.get("name") or "").strip()]
-
+        stored, names, message = self._detect_objects_in_current_view()
         if stored:
             return f"Detected {stored} object(s): {', '.join(names)}. Stored in landmark memory."
-        return "No nameable objects detected."
+        return message
 
     def _bbox_reasonable_for_tracking(self, bbox: BBox) -> bool:
         if self._latest_image is None or not hasattr(self._latest_image, "data"):
@@ -1622,12 +1964,16 @@ class NavigationSkillContainer(Module):
                     # Use stored bearing if object was previously tagged
                     obj_rec = self._resolve_landmark_from_query(query)
                     stored_yaw: float | None = None
+                    description: str | None = None
                     if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
                         stored_yaw = (
                             obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
                         )
+                        description = obj_rec.state or None
                     if stored_yaw is not None:
-                        vis_msg = self._visual_acquire_object(query, stored_yaw)
+                        vis_msg = self._visual_acquire_object(
+                            query, stored_yaw, description=description
+                        )
                         if vis_msg:
                             return vis_msg
                     found = self._navigate_to_object(query, timeout=15.0)
@@ -1673,9 +2019,14 @@ class NavigationSkillContainer(Module):
         obj_rec = self._resolve_landmark_from_query(query)
         if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
             stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
-            vis_msg = self._visual_acquire_object(query, stored_yaw)
+            vis_msg = self._visual_acquire_object(
+                query, stored_yaw, description=obj_rec.state or None, announce=False
+            )
+            self._announce_object_found(query)
             if vis_msg:
                 return f"{prefix} ({vis_msg})"
+        else:
+            self._announce_object_found(query)
         return prefix
 
     def _navigate_using_semantic_map(self, query: str) -> str | None:
@@ -1702,15 +2053,258 @@ class NavigationSkillContainer(Module):
             return None
 
         message = f"Found a location in the semantic map matching '{query}'."
+        # "找到了"指的是在语义地图中找到了匹配, 导航结果由 _navigate_to 异步完成
+        self._announce_object_found(query)
         return self._navigate_to(goal_pose, message)
+
+    @staticmethod
+    def _remember_memory_blindspot_goal(
+        recent_goals: list[tuple[float, float]], pose: PoseStamped
+    ) -> None:
+        recent_goals.append((float(pose.position.x), float(pose.position.y)))
+        if len(recent_goals) > 20:
+            recent_goals.pop(0)
+
+    def _wait_for_memory_blindspot_goal(
+        self,
+        timeout_sec: float,
+        stuck_timeout_sec: float,
+        progress_epsilon_m: float,
+    ) -> str:
+        deadline = time.time() + max(0.0, timeout_sec)
+        last_progress_time = time.time()
+        last_progress_position = (
+            (
+                float(self._latest_odom.position.x),
+                float(self._latest_odom.position.y),
+                float(self._latest_odom.position.z),
+            )
+            if self._latest_odom is not None
+            else None
+        )
+        while time.time() < deadline:
+            if self._memory_blindspot_patrol_stop:
+                self._navigation.cancel_goal()
+                return "stopped"
+            if self._navigation.is_goal_reached():
+                return "reached"
+            if self._latest_odom is not None and last_progress_position is not None:
+                current_position = (
+                    float(self._latest_odom.position.x),
+                    float(self._latest_odom.position.y),
+                    float(self._latest_odom.position.z),
+                )
+                moved = math.dist(current_position, last_progress_position)
+                if moved >= progress_epsilon_m:
+                    last_progress_time = time.time()
+                    last_progress_position = current_position
+                elif time.time() - last_progress_time >= stuck_timeout_sec:
+                    self._navigation.cancel_goal()
+                    return "stuck"
+            time.sleep(0.2)
+        self._navigation.cancel_goal()
+        return "timeout"
+
+    @skill
+    def explore_memory_blindspot(
+        self,
+        search_radius_m: float = 5.0,
+        coverage_radius_m: float = 1.0,
+        stale_after_sec: float = 600.0,
+    ) -> str:
+        """Find a nearby reachable area with missing or stale spatial memory and navigate there.
+
+        Args:
+            search_radius_m: Radius around the robot to search in meters.
+            coverage_radius_m: Memory coverage radius in meters.
+            stale_after_sec: Treat memory older than this as stale. Use 0 to disable staleness.
+        """
+        if not self._skill_started:
+            raise ValueError(f"{self} has not been started.")
+        if self._latest_odom is None:
+            return "No odometry data received yet, cannot explore memory blind spots."
+        if self._latest_global_costmap is None:
+            return "No global costmap received yet, cannot explore memory blind spots."
+
+        target = self._find_nearest_memory_blindspot(
+            search_radius_m=search_radius_m,
+            coverage_radius_m=coverage_radius_m,
+            stale_after_sec=stale_after_sec,
+        )
+        if target is None:
+            return (
+                f"No reachable memory blind spot found within {search_radius_m:.1f}m. "
+                "Nearby spatial memory coverage looks healthy."
+            )
+
+        pose = cast("PoseStamped", target["pose"])
+        ok = self._navigation.set_goal(pose)
+        if not ok:
+            return "Found a memory blind spot, but navigation rejected the goal."
+
+        return (
+            f"Found a {target['target_type']} ({target['reason']}) "
+            f"{float(target['distance_m']):.1f}m away at "
+            f"({pose.position.x:.2f}, {pose.position.y:.2f}). "
+            "Started navigating there to collect spatial memory."
+        )
+
+    @skill
+    def patrol_memory_blindspots(
+        self,
+        search_radius_m: float = 8.0,
+        coverage_radius_m: float = 1.0,
+        stale_after_sec: float = 600.0,
+        max_goals: int = 0,
+        max_duration_sec: float = 120.0,
+        goal_timeout_sec: float = 90.0,
+        stuck_timeout_sec: float = 15.0,
+        progress_epsilon_m: float = 0.25,
+        cooldown_sec: float = 2.0,
+        recognize_on_arrival: bool = True,
+        include_object_summary: bool = True,
+    ) -> str:
+        """Explore areas that are not yet covered by spatial memory.
+
+        Use this when the user asks the robot to explore unexplored areas,
+        inspect unvisited places, fill spatial-memory gaps, refresh memory coverage,
+        or build spatial memory over time. The robot navigates to safe observation
+        points near spatial-memory-uncovered areas, records new spatial memory, and
+        can recognize objects on arrival.
+
+        Args:
+            search_radius_m: Radius around the robot to search in meters.
+            coverage_radius_m: Memory coverage radius in meters.
+            stale_after_sec: Treat memory older than this as stale. Use 0 to disable staleness.
+            max_goals: Optional target count limit. 0 means only use max_duration_sec.
+            max_duration_sec: Maximum patrol duration.
+            goal_timeout_sec: Per-goal timeout.
+            stuck_timeout_sec: Cancel and try another target if odometry makes no progress this long.
+            progress_epsilon_m: Minimum movement counted as progress toward the current target.
+            cooldown_sec: Delay between goals.
+            recognize_on_arrival: Run VLM object recognition after reaching a target.
+            include_object_summary: Include objects found during this patrol in the return text.
+        """
+        if not self._skill_started:
+            raise ValueError(f"{self} has not been started.")
+        if self._latest_odom is None:
+            return "No odometry data received yet, cannot patrol memory blind spots."
+        if self._latest_global_costmap is None:
+            return "No global costmap received yet, cannot patrol memory blind spots."
+
+        started_at = time.time()
+        deadline = started_at + max(0.0, max_duration_sec)
+        visited = 0
+        timed_out = 0
+        stuck = 0
+        failed = 0
+        max_failures = 3
+        stop_reason = "max_duration_sec reached"
+        recent_goals: list[tuple[float, float]] = []
+        run_id = f"memory_blindspot_{int(started_at)}"
+        objects_by_target: list[tuple[str, list[str]]] = []
+        self._memory_blindspot_patrol_stop = False
+
+        while time.time() < deadline:
+            if self._memory_blindspot_patrol_stop:
+                stop_reason = "stop command received"
+                break
+            if max_goals > 0 and visited >= max_goals:
+                stop_reason = f"max_goals={max_goals} reached"
+                break
+
+            target = self._find_nearest_memory_blindspot(
+                search_radius_m=search_radius_m,
+                coverage_radius_m=coverage_radius_m,
+                stale_after_sec=stale_after_sec,
+                exclude_recent_goals=recent_goals,
+            )
+            if target is None:
+                stop_reason = (
+                    f"no reachable memory-uncovered target remained within {search_radius_m:.1f}m"
+                )
+                break
+
+            pose = cast("PoseStamped", target["pose"])
+            target_label = f"{target['target_type']}@({pose.position.x:.2f},{pose.position.y:.2f})"
+            if not self._navigation.set_goal(pose):
+                self._remember_memory_blindspot_goal(recent_goals, pose)
+                failed += 1
+                if failed >= max_failures:
+                    stop_reason = "navigation rejected too many memory blindspot goals"
+                    break
+                continue
+
+            remaining_sec = max(0.0, deadline - time.time())
+            if remaining_sec <= 0:
+                stop_reason = "max_duration_sec reached"
+                break
+
+            status = self._wait_for_memory_blindspot_goal(
+                min(goal_timeout_sec, remaining_sec),
+                stuck_timeout_sec,
+                progress_epsilon_m,
+            )
+            if status == "stopped":
+                stop_reason = "stop command received"
+                break
+            if status in {"timeout", "stuck"}:
+                self._remember_memory_blindspot_goal(recent_goals, pose)
+                failed += 1
+                if status == "stuck":
+                    stuck += 1
+                else:
+                    timed_out += 1
+            else:
+                visited += 1
+                failed = 0
+                self._remember_memory_blindspot_goal(recent_goals, pose)
+                if recognize_on_arrival:
+                    stored, names, _ = self._detect_objects_in_current_view(
+                        {
+                            "source": "memory_blindspot_explorer",
+                            "exploration_run_id": run_id,
+                            "target_type": str(target["target_type"]),
+                            "target_reason": str(target["reason"]),
+                            "target_pose": [
+                                float(pose.position.x),
+                                float(pose.position.y),
+                                float(pose.position.z),
+                            ],
+                        }
+                    )
+                    if stored and names:
+                        objects_by_target.append((target_label, names))
+
+            if failed >= max_failures:
+                stop_reason = "too many consecutive navigation failures"
+                break
+            time.sleep(min(max(0.0, cooldown_sec), max(0.0, deadline - time.time())))
+
+        elapsed = time.time() - started_at
+        lines = [
+            "Memory-driven exploration finished: "
+            f"visited {visited} goal(s), timed out {timed_out}, "
+            f"stuck {stuck}, elapsed {elapsed:.0f}s.",
+            f"Stopped because {stop_reason}.",
+        ]
+        if include_object_summary:
+            if objects_by_target:
+                lines.append("New objects found in explored areas:")
+                for target_label, names in objects_by_target:
+                    lines.append(f"- {target_label}: {', '.join(names)}")
+            else:
+                lines.append("No new objects were recognized in explored areas.")
+        return "\n".join(lines)
 
     @skill
     def stop_navigation(self) -> str:
-        """Immediatly stop moving."""
+        """Immediately stop moving."""
 
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._memory_blindspot_patrol_stop = True
         self._cancel_goal_and_stop()
 
         return "Stopped"
@@ -1722,6 +2316,7 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._memory_blindspot_patrol_stop = True
         self._cancel_goal_and_stop()
         exploration_msg = ""
         if self._frontier_explorer is not None:
@@ -2030,31 +2625,63 @@ class NavigationSkillContainer(Module):
                 )
             return None  # Success
 
-        # First attempt
-        err = _try_navigate()
-        if err is None:
+        def _post_arrival_message(*, retry: bool) -> str:
+            """Common arrival logic: visual acquire → conditionally run arrival_action."""
             tname = target.name or target.record_id
             vis_msg = ""
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
+                vis_msg = (
+                    self._visual_acquire_object(
+                        tname,
+                        stored_yaw,
+                        description=target.state or None,
+                        announce=False,
+                    )
+                    or ""
+                )
+                tag = "Visual acquire (retry)" if retry else "Visual acquire"
                 if vis_msg:
-                    logger.info("[L3] Visual acquire: %s", vis_msg)
+                    logger.info("[L3] %s: %s", tag, vis_msg)
                 else:
-                    logger.warning("[L3] Visual acquire: '%s' not found in view", tname)
+                    logger.warning("[L3] %s: '%s' not found in view", tag, tname)
+
+            # Object landmark + camera doesn't see it: do NOT run arrival_action
+            # (pointing / waving at a non-visible object is misleading). Return a
+            # clear failure so the agent can choose its next step.
+            if is_object_landmark and not vis_msg:
+                suffix = " after drift recovery" if retry else ""
+                return (
+                    f"Arrived at stored '{tname}' coordinate{suffix} but the camera "
+                    f"could not visually acquire '{tname}'. The original landmark may "
+                    "be a VLM hallucination, the object may have moved, or the stored "
+                    "bearing may be inaccurate. Try `detect_objects_in_view` to see "
+                    "what is actually here, or move and re-scan. arrival_action skipped."
+                )
+
             if run_arrival_action:
                 action_msg = self._run_arrival_action(arrival_action, tname)
+                if is_object_landmark:
+                    self._announce_object_found(tname)
                 if vis_msg:
                     return f"{action_msg} ({vis_msg})"
-                if is_object_landmark:
-                    return f"{action_msg} (could not visually acquire '{tname}')"
                 return action_msg
-            base = f"Arrived near '{tname}' standoff"
+
+            base = (
+                f"Arrived near '{tname}' standoff after drift recovery"
+                if retry
+                else f"Arrived near '{tname}' standoff"
+            )
+            if is_object_landmark:
+                self._announce_object_found(tname)
             if vis_msg:
                 return f"{base} ({vis_msg})"
-            if is_object_landmark:
-                return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
             return f"{base} (arrival_action not run)."
+
+        # First attempt
+        err = _try_navigate()
+        if err is None:
+            return _post_arrival_message(retry=False)
 
         # Severe drift recovery: re-plan topology from current odom position
         logger.warning(
@@ -2065,28 +2692,7 @@ class NavigationSkillContainer(Module):
 
         err2 = _try_navigate()
         if err2 is None:
-            tname = target.name or target.record_id
-            vis_msg = ""
-            if is_object_landmark:
-                stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
-                if vis_msg:
-                    logger.info("[L3] Visual acquire (retry): %s", vis_msg)
-                else:
-                    logger.warning("[L3] Visual acquire (retry): '%s' not found in view", tname)
-            if run_arrival_action:
-                action_msg = self._run_arrival_action(arrival_action, tname)
-                if vis_msg:
-                    return f"{action_msg} ({vis_msg})"
-                if is_object_landmark:
-                    return f"{action_msg} (could not visually acquire '{tname}')"
-                return action_msg
-            base = f"Arrived near '{tname}' standoff after drift recovery"
-            if vis_msg:
-                return f"{base} ({vis_msg})"
-            if is_object_landmark:
-                return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
-            return f"{base} (arrival_action not run)."
+            return _post_arrival_message(retry=True)
 
         return (
             "Navigation aborted: severe visual/odom drift persisted after re-plan. "
