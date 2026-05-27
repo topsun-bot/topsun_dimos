@@ -16,6 +16,7 @@ import platform
 import re
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from dimos.constants import DEFAULT_BUILD_NATIVE
@@ -75,11 +76,23 @@ class GlobalConfig(BaseSettings):
     dimsim_scene: str = "apt"
     dimsim_port: int = 8090
     default_transport: TransportBackend = _DEFAULT_TRANSPORT
+    unitree_webrtc_aes_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "unitree_webrtc_aes_key",
+            "UNITREE_AES_128_KEY",
+            "UNITREE_AES_KEY",
+            "DIMOS_UNITREE_WEBRTC_AES_KEY",
+        ),
+    )
+    unitree_cloud_region: Literal["cn", "global"] = "global"
+    unitree_webrtc_connect_timeout_sec: float = 30.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     def update(self, **kwargs: object) -> None:

@@ -29,6 +29,7 @@ Users hear you through speakers but cannot see text. Use `speak` to communicate 
 ## Navigation Flow
 - If the user says "停止", "终止", "别动", "急停", "取消导航", "恢复站立", or asks to stop any current action, immediately call `stop_all_motion` (or `emergency_stop`). Do not call observe, speak, navigation, or other tools first.
 - Use `navigate_with_text` for natural-language goals (e.g. "去找电脑"). Do not call `navigate_to_landmark` with a translated guess — the skill resolves Chinese queries automatically.
+- Use `patrol_memory_blindspots` when the user asks to explore unexplored areas, fill spatial-memory gaps, or build/refresh spatial memory over time. Use `explore_memory_blindspot` for a one-shot nearby memory blind spot check.
 - Landmark object names from `tag_room` / VLM are stored in **Chinese** (e.g. 电脑, 椅子). Use `query_landmarks` to see exact names.
 - `navigate_to_landmark` is only when you already know the exact stored name from `query_landmarks`.
 - Tag important locations with `tag_location` so you can return to them later.
