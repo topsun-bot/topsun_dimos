@@ -40,6 +40,18 @@ def agent_setup(request, mcp_url: str, lcm_url: str):
     unsubs: list = []
     recording = bool(os.getenv("RECORD"))
 
+    def cleanup() -> None:
+        nonlocal coordinator
+        if coordinator is not None:
+            coordinator.stop()
+            coordinator = None
+
+        while transports:
+            transports.pop().stop()
+
+        while unsubs:
+            unsubs.pop()()
+
     def fn(
         *,
         blueprints,
@@ -87,20 +99,17 @@ def agent_setup(request, mcp_url: str, lcm_url: str):
         global_config.update(viewer="none")
 
         nonlocal coordinator
-        coordinator = ModuleCoordinator.build(blueprint)
+        try:
+            coordinator = ModuleCoordinator.build(blueprint)
 
-        if not finished_event.wait(60):
-            raise TimeoutError("Timed out waiting for agent to finish processing messages.")
+            if not finished_event.wait(60):
+                raise TimeoutError("Timed out waiting for agent to finish processing messages.")
 
-        return history
+            return history
+        except BaseException:
+            cleanup()
+            raise
 
     yield fn
 
-    if coordinator is not None:
-        coordinator.stop()
-
-    for transport in transports:
-        transport.stop()
-
-    for unsub in unsubs:
-        unsub()
+    cleanup()
