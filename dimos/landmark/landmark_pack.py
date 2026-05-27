@@ -75,8 +75,7 @@ def load_manifest(pack_name: str, *, pack_dir: Path | None = None) -> dict[str, 
         import yaml
     except ImportError:
         raise ImportError(
-            "pyyaml is required for landmark pack operations. "
-            "Install it with: pip install pyyaml"
+            "pyyaml is required for landmark pack operations. Install it with: pip install pyyaml"
         )
 
     pdir = pack_dir or _default_pack_dir(pack_name)
