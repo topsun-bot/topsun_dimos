@@ -71,7 +71,7 @@ class Go2FleetConnection(GO2Connection):
     def start(self) -> None:
         self._extra_connections.clear()
         for ip in self._extra_ips:
-            conn = make_connection(ip, self.config.g)
+            conn = make_connection(ip, self.config.g, aes_128_key=self.config.aes_128_key)
             conn.start()
             self._extra_connections.append(conn)
 
