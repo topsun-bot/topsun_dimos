@@ -696,6 +696,72 @@ def test_region_failure_penalty_matches_stable_fingerprint() -> None:
     assert float(second["score"]) >= float(first["score"]) + 2.0
 
 
+def test_region_failure_attempt_limit_skips_cooldown_region() -> None:
+    nav = _nav_container()
+    grid = np.zeros((11, 11), dtype=np.int8)
+    nav._latest_odom = _pose(0.0, 0.0)
+    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+
+    first = nav._find_nearest_memory_blindspot(search_radius_m=3.0, coverage_radius_m=0.5)
+    assert first is not None
+    failed_regions = [
+        MemoryBlindspotVisitState(
+            region_id=str(first["region_id"]),
+            region_fingerprint=str(first["region_fingerprint"]),
+            target_pose=(
+                float(first["pose"].position.x),
+                float(first["pose"].position.y),
+                float(first["pose"].position.z),
+            ),
+            status="stuck",
+            timestamp=time.time(),
+            cooldown_until=time.time() + 60.0,
+            attempts=2,
+        )
+    ]
+
+    second = nav._find_nearest_memory_blindspot(
+        search_radius_m=3.0,
+        coverage_radius_m=0.5,
+        failed_regions=failed_regions,
+        max_region_attempts=2,
+    )
+
+    assert second is None
+
+
+def test_blindspot_recovery_snaps_from_unsafe_start_cell() -> None:
+    nav = _nav_container()
+    grid = np.zeros((7, 7), dtype=np.int8)
+    grid[3, 3] = CostValues.OCCUPIED
+    nav._latest_odom = _pose(1.5, 1.5)
+    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
+    nav._navigation = _FakeNavigation()
+    nav._unitree_skill_container = None
+    nav._memory_blindspot_patrol_stop = False
+
+    recovered = nav._attempt_memory_blindspot_recovery(
+        timeout_sec=1.0,
+        clearance_m=0.0,
+        open_goal_clearance_m=0.0,
+        recovery_radius_m=2.0,
+        recovery_min_move_m=0.1,
+    )
+
+    assert recovered
+    assert nav._navigation.cancel_count == 1
+    assert nav._navigation.goals
+    goal_grid = nav._latest_global_costmap.world_to_grid(
+        (
+            nav._navigation.goals[-1].position.x,
+            nav._navigation.goals[-1].position.y,
+            nav._navigation.goals[-1].position.z,
+        )
+    )
+    assert int(grid[round(goal_grid.y), round(goal_grid.x)]) != CostValues.OCCUPIED
+
+
 def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
     nav = _nav_container()
     rooms = [

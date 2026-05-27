@@ -411,6 +411,40 @@ class NavigationSkillContainer(Module):
             max_distance_m,
         )
 
+    def _nearest_safe_costmap_cell(
+        self,
+        costmap: OccupancyGrid,
+        center_gx: int,
+        center_gy: int,
+        search_radius_m: float,
+        clearance_m: float,
+        origin_world: Vector3 | None = None,
+    ) -> tuple[int, int] | None:
+        search_cells = max(1, math.ceil(search_radius_m / max(costmap.resolution, 1e-6)))
+        candidates: list[tuple[int, int, float]] = []
+        for gy in range(
+            max(0, center_gy - search_cells), min(costmap.height, center_gy + search_cells + 1)
+        ):
+            for gx in range(
+                max(0, center_gx - search_cells), min(costmap.width, center_gx + search_cells + 1)
+            ):
+                if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
+                    continue
+                if origin_world is None:
+                    distance = math.hypot(gx - center_gx, gy - center_gy) * costmap.resolution
+                else:
+                    world = costmap.grid_to_world((gx, gy, 0.0))
+                    distance = math.hypot(
+                        float(world.x) - float(origin_world.x),
+                        float(world.y) - float(origin_world.y),
+                    )
+                if distance <= search_radius_m:
+                    candidates.append((gx, gy, distance))
+        if not candidates:
+            return None
+        gx, gy, _ = min(candidates, key=lambda item: item[2])
+        return gx, gy
+
     def _reachable_safe_cells(
         self,
         costmap: OccupancyGrid,
@@ -601,6 +635,30 @@ class NavigationSkillContainer(Module):
                 penalty = max(penalty, 3.0 + state.attempts)
         return penalty
 
+    @staticmethod
+    def _region_failure_attempts(
+        region: MemoryBlindspotRegion,
+        failed_regions: list[MemoryBlindspotVisitState] | None,
+        now: float,
+        match_radius_m: float = 1.0,
+    ) -> int:
+        if not failed_regions:
+            return 0
+        attempts = 0
+        for state in failed_regions:
+            if state.cooldown_until <= now:
+                continue
+            if state.region_fingerprint == region.region_fingerprint:
+                attempts = max(attempts, state.attempts)
+                continue
+            distance = math.hypot(
+                region.centroid[0] - state.target_pose[0],
+                region.centroid[1] - state.target_pose[1],
+            )
+            if distance <= match_radius_m:
+                attempts = max(attempts, state.attempts)
+        return attempts
+
     def _make_region_from_cells(
         self,
         costmap: OccupancyGrid,
@@ -773,6 +831,7 @@ class NavigationSkillContainer(Module):
         failed_regions: list[MemoryBlindspotVisitState] | None = None,
         min_region_cells: int = 4,
         max_area_bonus_m2: float = 8.0,
+        max_region_attempts: int = 2,
     ) -> dict[str, Any] | None:
         if self._latest_odom is None or self._latest_global_costmap is None:
             return None
@@ -863,6 +922,12 @@ class NavigationSkillContainer(Module):
 
         best_candidate: dict[str, Any] | None = None
         for region in regions:
+            if (
+                max_region_attempts > 0
+                and self._region_failure_attempts(region, failed_regions, now)
+                >= max_region_attempts
+            ):
+                continue
             goal_cell = self._select_region_goal_cell(
                 region,
                 costmap,
@@ -2645,6 +2710,7 @@ class NavigationSkillContainer(Module):
         self,
         timeout_sec: float,
         clearance_m: float = 0.5,
+        open_goal_clearance_m: float | None = None,
         recovery_radius_m: float = 2.0,
         recovery_min_move_m: float = 0.6,
     ) -> bool:
@@ -2679,6 +2745,19 @@ class NavigationSkillContainer(Module):
         robot_grid = costmap.world_to_grid((robot.x, robot.y, robot.z))
         start_gx = round(robot_grid.x)
         start_gy = round(robot_grid.y)
+        if not self._is_costmap_goal_cell_safe(costmap, start_gx, start_gy, clearance_m):
+            safe_start = self._nearest_safe_costmap_cell(
+                costmap,
+                start_gx,
+                start_gy,
+                recovery_radius_m,
+                clearance_m,
+                robot,
+            )
+            if safe_start is None:
+                return False
+            start_gx, start_gy = safe_start
+
         reachable = self._reachable_safe_cells(
             costmap,
             start_gx,
@@ -2686,6 +2765,7 @@ class NavigationSkillContainer(Module):
             recovery_radius_m,
             clearance_m,
         )
+        goal_clearance_m = open_goal_clearance_m if open_goal_clearance_m is not None else clearance_m
         candidates = [
             (cell, distance)
             for cell, distance in reachable.items()
@@ -2695,10 +2775,29 @@ class NavigationSkillContainer(Module):
         ]
         if not candidates:
             return False
+        open_candidates = [
+            (cell, distance)
+            for cell, distance in candidates
+            if self._is_costmap_goal_cell_safe(costmap, cell[0], cell[1], goal_clearance_m)
+        ]
+        if open_candidates:
+            candidates = open_candidates
         goal_cell, _ = max(
             candidates,
             key=lambda item: (
-                self._costmap_safe_neighbor_count(costmap, item[0][0], item[0][1], clearance_m),
+                self._costmap_safe_neighbor_count(
+                    costmap,
+                    item[0][0],
+                    item[0][1],
+                    goal_clearance_m
+                    if self._is_costmap_goal_cell_safe(
+                        costmap,
+                        item[0][0],
+                        item[0][1],
+                        goal_clearance_m,
+                    )
+                    else clearance_m,
+                ),
                 item[1],
             ),
         )
@@ -2787,6 +2886,7 @@ class NavigationSkillContainer(Module):
         arrival_settle_sec: float = 2.0,
         wait_for_memory_frame_sec: float = 5.0,
         region_failure_cooldown_sec: float = 60.0,
+        max_region_attempts: int = 2,
         recovery_goal_timeout_sec: float = 10.0,
         traversal_clearance_m: float = 0.35,
         open_goal_clearance_m: float = 0.5,
@@ -2815,6 +2915,7 @@ class NavigationSkillContainer(Module):
             arrival_settle_sec: Stabilization delay after reaching a target.
             wait_for_memory_frame_sec: Time to wait for a new spatial-memory frame on arrival.
             region_failure_cooldown_sec: Cooldown for failed blindspot regions.
+            max_region_attempts: Maximum failed attempts for a region during its cooldown.
             recovery_goal_timeout_sec: Timeout for recovery escape goals after stuck detection.
             traversal_clearance_m: Minimum clearance for traversable cells.
             open_goal_clearance_m: Preferred clearance for open-space exploration goals.
@@ -2858,6 +2959,7 @@ class NavigationSkillContainer(Module):
                 if remaining_recovery_sec > 0 and self._attempt_memory_blindspot_recovery(
                     timeout_sec=min(recovery_goal_timeout_sec, remaining_recovery_sec),
                     clearance_m=traversal_clearance_m,
+                    open_goal_clearance_m=open_goal_clearance_m,
                 ):
                     recovered += 1
                     continue
@@ -2876,6 +2978,7 @@ class NavigationSkillContainer(Module):
                 corridor_goal_clearance_m=corridor_goal_clearance_m,
                 exclude_recent_goals=recent_goals,
                 failed_regions=failed_regions,
+                max_region_attempts=max_region_attempts,
             )
             if target is None:
                 stop_reason = (
@@ -2929,6 +3032,7 @@ class NavigationSkillContainer(Module):
                     if remaining_recovery_sec > 0 and self._attempt_memory_blindspot_recovery(
                         timeout_sec=min(recovery_goal_timeout_sec, remaining_recovery_sec),
                         clearance_m=traversal_clearance_m,
+                        open_goal_clearance_m=open_goal_clearance_m,
                     ):
                         recovered += 1
                     else:
