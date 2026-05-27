@@ -237,6 +237,13 @@ def import_pack(
             rec["session_id"] = ""
 
     # Write to a temp dir first so a partial write doesn't destroy existing data
+    # Rewrite snapshot paths to be relative filenames so they work
+    # on any machine after import (source paths may be absolute).
+    for rec in records:
+        p = rec.get("image_snapshot_path")
+        if p and isinstance(p, str):
+            rec["image_snapshot_path"] = Path(p).name
+
     tmp_dir = LANDMARK_MEMORY_DIR.with_name("landmark_memory.tmp")
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)

@@ -296,25 +296,34 @@ def run(
         print(arg_help(blueprint.config(), blueprint))
         return
 
-    # Auto-import landmark pack if --landmark-pack is set
-    if landmark_pack:
-        from dimos.landmark.landmark_pack import import_pack as landmark_import
-
-        try:
-            result = landmark_import(landmark_pack, force=True)
-            logger.info(
-                "Auto-imported landmark pack '%s': %d records",
-                result.pack_name,
-                result.record_count,
-            )
-        except (FileNotFoundError, RuntimeError, ValueError) as e:
-            typer.echo(f"Error importing landmark pack: {e}", err=True)
-            raise typer.Exit(1)
-
     blueprint_config = blueprint.config()
     kwargs = load_config_args(blueprint_config, blueprint_args, config_path)
     if cli_config_overrides:
         kwargs["g"] = cli_config_overrides
+
+    # Auto-import landmark pack if --landmark-pack is set.
+    # Run AFTER config validation so bad args don't destroy existing memory.
+    # Skip if landmarks already exist (e.g. restart).
+    if landmark_pack:
+        from dimos.landmark.landmark_pack import LANDMARK_MEMORY_DIR, import_pack as landmark_import
+
+        dest_json = LANDMARK_MEMORY_DIR / "landmarks.json"
+        if dest_json.exists():
+            logger.info(
+                "Landmark memory already exists; skipping auto-import of '%s'",
+                landmark_pack,
+            )
+        else:
+            try:
+                result = landmark_import(landmark_pack, force=True)
+                logger.info(
+                    "Auto-imported landmark pack '%s': %d records",
+                    result.pack_name,
+                    result.record_count,
+                )
+            except (FileNotFoundError, RuntimeError, ValueError) as e:
+                typer.echo(f"Error importing landmark pack: {e}", err=True)
+                raise typer.Exit(1)
 
     coordinator = ModuleCoordinator.build(blueprint, kwargs)
 
