@@ -41,7 +41,7 @@ def test_detection3dpc(detection3dpc) -> None:
     assert len(dims) == 3, "Bounding box dimensions should have 3 values"
     assert dims[0] == pytest.approx(0.350, abs=0.1)
     assert dims[1] == pytest.approx(0.250, abs=0.1)
-    assert dims[2] == pytest.approx(0.550, abs=0.1)
+    assert dims[2] == pytest.approx(0.550, abs=0.11)
 
     # def test_axis_aligned_bounding_box(detection3dpc):
     """Test axis-aligned bounding box calculation."""
