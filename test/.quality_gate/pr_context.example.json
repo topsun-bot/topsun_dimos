@@ -1,0 +1,6 @@
+{
+  "title": "feat: example PR for quality gate",
+  "body": "## Summary\nAdd quality gate test framework.\n\n## Acceptance criteria\n- Framework runs unit and regression layers\n- Structured JSON and Markdown reports are generated\n\n## Test plan\n- uv run pytest test/ -c test/pytest.ini",
+  "changed_files": ["test/framework/runner.py", "test/unit/test_global_config.py"],
+  "base_ref": "main"
+}

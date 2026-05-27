@@ -325,6 +325,8 @@ If multiple modules match the spec, use `.remappings()` to resolve. Source: `dim
 
 ## Testing
 
+**Quality Gate (`test/` only):** Tests are expanded on `main` daily per [`test/AGENTS.md`](test/AGENTS.md). PRs run regression only via workflow `quality-gate-regression` (non-blocking). Local: `./test/bin/run_regression.sh`.
+
 ```bash
 # Fast tests (default)
 uv run pytest

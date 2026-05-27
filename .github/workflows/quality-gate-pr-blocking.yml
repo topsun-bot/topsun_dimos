@@ -1,0 +1,151 @@
+name: quality-gate-pr-blocking
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+      - ready_for_review
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  UV_NO_SYNC: "1"
+
+jobs:
+  quality-gate:
+    name: PR test-to-description gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependency for pyaudio (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
+      - name: Install test dependencies
+        run: uv sync --group tests --frozen
+
+      - name: Run quality gate
+        id: gate
+        continue-on-error: true
+        env:
+          QUALITY_GATE_PR_TITLE: ${{ github.event.pull_request.title }}
+          QUALITY_GATE_PR_BODY: ${{ github.event.pull_request.body || '' }}
+          QUALITY_GATE_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PYTHONPATH: .
+        run: |
+          set -o pipefail
+          uv run python test/bin/run_quality_gate.py --print-json \
+            2>&1 | tee quality-gate.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Build PR comment body
+        if: always()
+        run: |
+          python3 <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          marker = "<!-- quality-gate-pr-blocking -->"
+          report_path = Path("test/.quality_gate/reports/quality_gate_report.json")
+          report: dict[str, object] = {}
+          if report_path.is_file():
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+
+          status = str(report.get("status", "failed")).lower()
+          failure_reasons = [str(x) for x in report.get("failure_reasons", [])]
+          blocked_reason = report.get("blocked_reason")
+          blocked_reason_str = str(blocked_reason) if blocked_reason else ""
+
+          if status == "passed":
+              body = f"{marker}\norigin_test Pass\n"
+          else:
+              lines = [
+                  marker,
+                  "❌ origin_test Rejected",
+                  "",
+                  "驳回理由：",
+              ]
+              if blocked_reason_str:
+                  lines.append(f"- {blocked_reason_str}")
+              for reason in failure_reasons[:20]:
+                  lines.append(f"- {reason}")
+              if not blocked_reason_str and not failure_reasons:
+                  lines.append("- Quality Gate 失败，请查看 workflow 日志。")
+              lines.extend(
+                  [
+                      "",
+                      "> 请根据以上问题补充/修正测试与 PR 描述后重新提交。",
+                  ]
+              )
+              body = "\n".join(lines).rstrip() + "\n"
+
+          Path("quality-gate-pr-comment.md").write_text(body, encoding="utf-8")
+          PY
+
+      - name: Create or update PR comment
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- quality-gate-pr-blocking -->';
+            const body = fs.readFileSync('quality-gate-pr-comment.md', 'utf8');
+            const issue_number = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 }
+            );
+            const botComment = comments.find(
+              (c) => c.user && c.user.type === 'Bot' && c.body && c.body.includes(marker)
+            );
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Enforce gate result
+        if: always()
+        run: |
+          test "${{ steps.gate.outputs.exit_code }}" = "0"

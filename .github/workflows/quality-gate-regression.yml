@@ -1,0 +1,162 @@
+# Regression tests under test/regression/ — informational on PRs, does not block merge.
+# Posts/updates a PR comment with results. Branch protection should require only "ci".
+name: quality-gate-regression
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  UV_NO_SYNC: "1"
+
+jobs:
+  regression:
+    name: regression (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependency for pyaudio (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
+      - name: Install test dependencies
+        run: uv sync --group tests --frozen
+
+      - name: Run regression tests only
+        id: pytest
+        continue-on-error: true
+        env:
+          PYTHONPATH: .
+        run: |
+          set -o pipefail
+          uv run pytest test/regression \
+            -c test/pytest.ini \
+            -m regression \
+            --tb=short \
+            -q \
+            --junitxml=regression-junit.xml \
+            -p no:launch_testing \
+            -p no:launch_ros \
+            2>&1 | tee pytest-regression.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Build PR comment
+        if: always()
+        run: |
+          python3 <<'PY'
+          from __future__ import annotations
+
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          junit = Path("regression-junit.xml")
+          log = Path("pytest-regression.log")
+          exit_code = os.environ.get("PYTEST_EXIT_CODE", "0")
+
+          passed = failed = skipped = errors = 0
+          failures: list[str] = []
+
+          if junit.is_file():
+              root = ET.parse(junit).getroot()
+              suite = root if root.tag == "testsuite" else root.find("testsuite")
+              if suite is not None:
+                  tests = int(suite.attrib.get("tests", 0))
+                  failed = int(suite.attrib.get("failures", 0))
+                  errors = int(suite.attrib.get("errors", 0))
+                  skipped = int(suite.attrib.get("skipped", 0))
+                  passed = max(tests - failed - errors - skipped, 0)
+                  for case in suite.findall("testcase"):
+                      if case.find("failure") is not None or case.find("error") is not None:
+                          name = case.attrib.get("name", "?")
+                          cls = case.attrib.get("classname", "")
+                          failures.append(f"`{cls}::{name}`" if cls else f"`{name}`")
+
+          ok = exit_code == "0" and failed == 0 and errors == 0
+          icon = "✅" if ok else "⚠️"
+          status = "通过" if ok else "有失败"
+
+          lines = [
+              f"### {icon} Quality Gate 回归测试（不阻塞合并）",
+              "",
+              f"**结论：** {status}",
+              "",
+              "| 指标 | 数量 |",
+              "|------|------|",
+              f"| 通过 | {passed} |",
+              f"| 失败 | {failed} |",
+              f"| 错误 | {errors} |",
+              f"| 跳过 | {skipped} |",
+              "",
+          ]
+
+          if failures:
+              lines.append("**失败用例：**")
+              for f in failures[:20]:
+                  lines.append(f"- {f}")
+              if len(failures) > 20:
+                  lines.append(f"- … 另有 {len(failures) - 20} 个")
+              lines.append("")
+
+          if not ok:
+              lines += [
+                  "> 本检查 **不会阻止 PR 合并**（请勿将 `quality-gate-regression` 设为 required check）。",
+                  "> 请确认是否破坏 `main` 上锁定的历史行为，或联系测试库维护者更新 `test/regression/`。",
+                  "",
+              ]
+
+          if log.is_file():
+              tail = log.read_text(encoding="utf-8", errors="replace")[-4000:]
+              lines += [
+                  "<details>",
+                  "<summary>pytest 日志（末尾）</summary>",
+                  "",
+                  "```text",
+                  tail.replace("```", "``\\`"),
+                  "```",
+                  "",
+                  "</details>",
+                  "",
+              ]
+
+          lines += [
+              f"Workflow run: [{os.environ['GITHUB_RUN_ID']}]({os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']})",
+              "",
+              "_由 `quality-gate-regression` 自动更新；同一 PR 下会覆盖本条评论。_",
+          ]
+
+          Path("regression-comment.md").write_text("\n".join(lines), encoding="utf-8")
+          PY
+        env:
+          PYTEST_EXIT_CODE: ${{ steps.pytest.outputs.exit_code }}
+
+      - name: Post or update PR comment
+        if: always()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: regression-comment.md
+          comment-id: quality-gate-regression
