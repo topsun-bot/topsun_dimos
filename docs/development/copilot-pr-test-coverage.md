@@ -18,8 +18,8 @@
 
 本仓库已提供：
 
-- [`.github/copilot-instructions.md`](../../.github/copilot-instructions.md) — 全仓库审查要点与评论模板
-- [`.github/instructions/test-coverage-review.instructions.md`](../../.github/instructions/test-coverage-review.instructions.md) — 针对测试路径的补充规则
+- [`.github/copilot-instructions.md`](/.github/copilot-instructions.md) — 全仓库审查要点与评论模板
+- [`.github/instructions/test-coverage-review.instructions.md`](/.github/instructions/test-coverage-review.instructions.md) — 针对测试路径的补充规则
 
 > Copilot 使用 **PR 的 base 分支（通常是 `main`）** 上的指令文件。请先合入本说明与指令文件，再对功能 PR 启用自动审查。
 
@@ -41,7 +41,7 @@
 
 ## 同事开 PR 时
 
-1. PR 描述写清 **验收标准 / Test plan**（与 [PR 模板](../../.github/pull_request_template.md) 一致）。
+1. PR 描述写清 **验收标准 / Test plan**（与 [PR 模板](/.github/pull_request_template.md) 一致）。
 2. 在功能变更之外，补充或修改对应测试（`dimos/**/test_*.py` 或团队约定的测试目录）。
 3. 等待 Copilot 在 PR 中发表评论（通常数十秒内）；每次 push 若开启 **Review new pushes** 会更新。
 4. 手动触发（可选）：
