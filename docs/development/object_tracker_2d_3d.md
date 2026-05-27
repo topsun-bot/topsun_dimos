@@ -1,7 +1,7 @@
 # ObjectTracker2D / ObjectTracker3D 技术说明
 
-**日期：** 2026-05-22  
-**源码：** `dimos/perception/object_tracker_2d.py`、`dimos/perception/object_tracker_3d.py`  
+**日期：** 2026-05-22
+**源码：** `dimos/perception/object_tracker_2d.py`、`dimos/perception/object_tracker_3d.py`
 **说明：** 行号以当前 `main` 工作区为准；若 rebase 后漂移，以文件内符号为准。
 
 ---

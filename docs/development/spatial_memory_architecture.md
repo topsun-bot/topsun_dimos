@@ -1,6 +1,6 @@
 # 空间记忆（Spatial Memory）架构说明
 
-> 调查分支：`feat/gy_semantic-nav-robust-loop`  
+> 调查分支：`feat/gy_semantic-nav-robust-loop`
 > 依据：仓库内代码与测试，不含未实现设想。
 
 ---
@@ -9,9 +9,9 @@
 
 DimOS 的**空间记忆**指在机器人运动时，将**彩色相机帧**与 **world 坐标系下的位姿**绑定，用 **CLIP** 生成嵌入，写入 **ChromaDB** 与本地 **VisualMemory**，并支持：
 
-- 按**文本**（CLIP 图文匹配）检索历史画面与位姿  
-- **命名地点**（`RobotLocation`）的语义标注与查询  
-- **房间参考图**（`room_images` 集合）的视觉重定位  
+- 按**文本**（CLIP 图文匹配）检索历史画面与位姿
+- **命名地点**（`RobotLocation`）的语义标注与查询
+- **房间参考图**（`room_images` 集合）的视觉重定位
 
 消费方主要是 `NavigationSkillContainer`（通过 `SpatialMemorySpec` RPC 代理），用于 `tag_location`、`navigate_with_text` 等多层回退导航。
 
@@ -56,9 +56,9 @@ DimOS 的**空间记忆**指在机器人运动时，将**彩色相机帧**与 **
 
 `unitree_go2_spatial` 在 `unitree_go2` 之上额外挂载：
 
-- `SpatialMemory`（`new_memory=global_config.new_memory`）  
-- `SpatialLandmarkMemoryModule`  
-- `ObjectTracker2D`、`BBoxNavigationModule`、`PerceiveLoopSkill`、`SecurityModule`  
+- `SpatialMemory`（`new_memory=global_config.new_memory`）
+- `SpatialLandmarkMemoryModule`
+- `ObjectTracker2D`、`BBoxNavigationModule`、`PerceiveLoopSkill`、`SecurityModule`
 
 组件注册名（可 `--disable`）：`spatial-memory` → `dimos.perception.spatial_perception.SpatialMemory`（`all_blueprints.py`）。
 
@@ -166,7 +166,7 @@ LCM：流与 RPC 经 DimOS `LCMTransport` / RPC 通道（测试示例：`LCMTran
 
 `dimos/core/global_config.py`：`new_memory: bool = False`
 
-- CLI：`--new-memory` / `--no-new-memory`（Typer 由 `GlobalConfig` 字段自动生成）  
+- CLI：`--new-memory` / `--no-new-memory`（Typer 由 `GlobalConfig` 字段自动生成）
 - 环境变量：Pydantic Settings 支持 `NEW_MEMORY`（及 `.env`）
 
 为 `True` 时：启动时清空 Chroma 目录并新建 `VisualMemory`。
@@ -241,12 +241,12 @@ pytest dimos/perception/test_spatial_memory_module.py -q  # 标记 slow，CI 可
 
 ## 限制与待办（代码与文档已标明）
 
-1. **遗留依赖**：`SpatialMemory` 仍依赖 `dimos/agents_deprecated/memory/*`（`modules_cn.md` 已注明）。  
-2. **Chroma 脆弱性**：损坏时自动 wipe 重建（`_recover_chromadb_if_needed`），可能丢历史帧。  
-3. **无输出流**：Agent 文档写「订阅 spatial memory 流」；实际为 **RPC 拉取**，非 `Out` 话题订阅。  
-4. **`EmbeddingMemory`**：Rx 管线仅 `subscribe(print)`，非生产路径。  
-5. **`memory2`**：与 `SpatialMemory` 未在 blueprint 中统一；长期可能迁移。  
-6. **`SpatialLandmarkMemoryModule`**：无 `all_blueprints` 短名，只能随组合 blueprint 启用。  
+1. **遗留依赖**：`SpatialMemory` 仍依赖 `dimos/agents_deprecated/memory/*`（`modules_cn.md` 已注明）。
+2. **Chroma 脆弱性**：损坏时自动 wipe 重建（`_recover_chromadb_if_needed`），可能丢历史帧。
+3. **无输出流**：Agent 文档写「订阅 spatial memory 流」；实际为 **RPC 拉取**，非 `Out` 话题订阅。
+4. **`EmbeddingMemory`**：Rx 管线仅 `subscribe(print)`，非生产路径。
+5. **`memory2`**：与 `SpatialMemory` 未在 blueprint 中统一；长期可能迁移。
+6. **`SpatialLandmarkMemoryModule`**：无 `all_blueprints` 短名，只能随组合 blueprint 启用。
 7. **查询阈值**：`query_tagged_location` 语义距离 `< 0.3` 才返回；房间视觉匹配依赖 Chroma distance（导航侧 `_room_visual_max_distance` 等）。
 
 ---
