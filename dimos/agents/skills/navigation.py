@@ -1130,9 +1130,7 @@ class NavigationSkillContainer(Module):
         result = self._navigate_to_object_result(query, timeout=timeout, vlm_query=vlm_query)
         if not result.arrived:
             return None
-        action_msg = (
-            self._run_arrival_action(arrival_action, query) if run_arrival_action else None
-        )
+        action_msg = self._run_arrival_action(arrival_action, query) if run_arrival_action else None
         if announce:
             self._announce_object_found(query)
         if action_msg is not None:
