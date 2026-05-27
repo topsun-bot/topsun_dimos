@@ -16,9 +16,9 @@
 """
 Go2 agentic blueprint using a local Qwen MLX OpenAI-compatible server.
 
-Defaults to ``http://10.10.197.175:8080`` and
-``/Users/dijia/models/Qwen3.6-27B-mlx-bf16``.
-Override with ``DIMOS_QWEN_MLX_BASE_URL`` and ``DIMOS_QWEN_MLX_MODEL`` if needed.
+Defaults to a server on ``http://127.0.0.1:8080`` and the portable model label
+``Qwen3.6-27B-mlx-bf16``. If a deployment needs a remote host or an absolute
+local model path, set ``DIMOS_QWEN_MLX_BASE_URL`` and ``DIMOS_QWEN_MLX_MODEL``.
 """
 
 from dimos.agents.mcp.mcp_client import McpClient
