@@ -1,0 +1,74 @@
+[
+  {
+    "name": "\u53a8\u623f",
+    "record_type": "room",
+    "position": [
+      1.5,
+      2.0,
+      0.0
+    ],
+    "rotation": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "description": "\u53a8\u623f\u533a\u57df\uff0c\u6709\u51b0\u7bb1\u548c\u6c34\u69fd",
+    "record_id": "rec_demo_kitchen_01",
+    "confidence": 0.95,
+    "image_snapshot_path": "",
+    "timestamp": 1748217600.0,
+    "last_seen": 1748217600.0,
+    "observation_count": 1,
+    "session_id": "",
+    "state": "",
+    "metadata": {}
+  },
+  {
+    "name": "\u8d70\u5eca",
+    "record_type": "room",
+    "position": [
+      3.0,
+      0.5,
+      0.0
+    ],
+    "rotation": [
+      0.0,
+      0.0,
+      1.57
+    ],
+    "description": "\u8fde\u63a5\u5404\u623f\u95f4\u7684\u4e3b\u8d70\u5eca",
+    "record_id": "rec_demo_corridor_01",
+    "confidence": 0.9,
+    "image_snapshot_path": "",
+    "timestamp": 1748217610.0,
+    "last_seen": 1748217610.0,
+    "observation_count": 1,
+    "session_id": "",
+    "state": "",
+    "metadata": {}
+  },
+  {
+    "name": "\u7535\u8111",
+    "record_type": "landmark",
+    "position": [
+      4.5,
+      1.2,
+      0.0
+    ],
+    "rotation": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "description": "\u529e\u516c\u684c\u4e0a\u7684\u53f0\u5f0f\u7535\u8111",
+    "record_id": "rec_demo_computer_01",
+    "confidence": 0.88,
+    "image_snapshot_path": "",
+    "timestamp": 1748217620.0,
+    "last_seen": 1748217620.0,
+    "observation_count": 1,
+    "session_id": "",
+    "state": "",
+    "metadata": {}
+  }
+]

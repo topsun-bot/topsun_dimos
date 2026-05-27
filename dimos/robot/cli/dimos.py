@@ -38,6 +38,7 @@ from dimos.constants import CONFIG_DIR, LOG_DIR
 from dimos.core.daemon import daemonize, install_signal_handlers
 from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.run_registry import get_most_recent, is_pid_alive, stop_entry
+from dimos.robot.cli.landmarks import app as landmarks_app
 from dimos.robot.unitree.go2.cli.go2tool import app as go2tool_app
 from dimos.utils.logging_config import setup_logger
 from dimos.visualization.rerun.constants import RerunOpenOption
@@ -55,6 +56,22 @@ main = typer.Typer(
 load_dotenv()
 
 SIMULATORS = ("mujoco", "dimsim")
+
+
+def _strip_landmark_pack_argv(argv: list[str]) -> list[str]:
+    """Remove --landmark-pack and its value from argv so restart doesn't re-import."""
+    out: list[str] = []
+    skip_next = False
+    for a in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--landmark-pack" or a.startswith("--landmark-pack="):
+            if a == "--landmark-pack":
+                skip_next = True
+            continue
+        out.append(a)
+    return out
 
 
 def _normalize_simulation_argv(argv: list[str]) -> list[str]:
@@ -140,6 +157,7 @@ def create_dynamic_callback():  # type: ignore[no-untyped-def]
 
 main.callback()(create_dynamic_callback())  # type: ignore[no-untyped-call]
 main.add_typer(go2tool_app, name="go2tool")
+main.add_typer(landmarks_app, name="landmarks")
 
 
 def arg_help(
@@ -222,6 +240,11 @@ def run(
         CONFIG_DIR / "dimos", "--config", "-c", help="Path to config file"
     ),
     show_help: bool = typer.Option(False, "--help"),
+    landmark_pack: str | None = typer.Option(
+        None,
+        "--landmark-pack",
+        help="Import a landmark pack before starting the blueprint",
+    ),
 ) -> None:
     """Start a robot blueprint"""
     logger.info("Starting DimOS")
@@ -294,6 +317,22 @@ def run(
     if cli_config_overrides:
         kwargs["g"] = cli_config_overrides
 
+    # Auto-import landmark pack if --landmark-pack is set.
+    # Run AFTER config validation so bad args don't destroy existing memory.
+    if landmark_pack:
+        from dimos.landmark.landmark_pack import import_pack as landmark_import
+
+        try:
+            result = landmark_import(landmark_pack, force=True)
+            logger.info(
+                "Auto-imported landmark pack '%s': %d records",
+                result.pack_name,
+                result.record_count,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as e:
+            typer.echo(f"Error importing landmark pack: {e}", err=True)
+            raise typer.Exit(1)
+
     coordinator = ModuleCoordinator.build(blueprint, kwargs)
 
     if daemon:
@@ -326,7 +365,7 @@ def run(
             cli_args=list(robot_types),
             config_overrides=cli_config_overrides,
             rpyc_port=rpyc_port,
-            original_argv=sys.argv,
+            original_argv=_strip_landmark_pack_argv(sys.argv),
         )
         entry.save()
         spawn_watchdog(run_id, log_dir=log_dir)
@@ -343,7 +382,7 @@ def run(
             cli_args=list(robot_types),
             config_overrides=cli_config_overrides,
             rpyc_port=rpyc_port,
-            original_argv=sys.argv,
+            original_argv=_strip_landmark_pack_argv(sys.argv),
         )
         entry.save()
         spawn_watchdog(run_id, log_dir=log_dir)
