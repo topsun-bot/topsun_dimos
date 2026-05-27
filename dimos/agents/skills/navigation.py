@@ -68,8 +68,6 @@ class MemoryBlindspotRegion:
     farthest_distance_m: float
     frontier_cell_count: int
     score: float
-    is_corridor: bool = False
-    is_narrow_pocket: bool = False
 
 
 @dataclass
@@ -344,9 +342,6 @@ class NavigationSkillContainer(Module):
             ):
                 if (nx - gx) ** 2 + (ny - gy) ** 2 > clearance_cells**2:
                     continue
-                obstacle_distance_m = math.hypot(nx - gx, ny - gy) * costmap.resolution
-                if obstacle_distance_m >= clearance_m:
-                    continue
                 if int(costmap.grid[ny, nx]) >= CostValues.OCCUPIED:
                     return False
         return True
@@ -379,37 +374,6 @@ class NavigationSkillContainer(Module):
                 if self._is_costmap_goal_cell_safe(costmap, nx, ny, clearance_m):
                     count += 1
         return count
-
-    def _nearest_obstacle_distance_m(
-        self,
-        costmap: OccupancyGrid,
-        gx: int,
-        gy: int,
-        max_distance_m: float,
-    ) -> float | None:
-        max_cells = max(1, math.ceil(max_distance_m / max(costmap.resolution, 1e-6)))
-        nearest: float | None = None
-        for ny in range(max(0, gy - max_cells), min(costmap.height, gy + max_cells + 1)):
-            for nx in range(max(0, gx - max_cells), min(costmap.width, gx + max_cells + 1)):
-                if int(costmap.grid[ny, nx]) < CostValues.OCCUPIED:
-                    continue
-                distance = math.hypot(nx - gx, ny - gy) * costmap.resolution
-                if nearest is None or distance < nearest:
-                    nearest = distance
-        return nearest
-
-    def _current_obstacle_clearance_m(self, max_distance_m: float = 2.0) -> float | None:
-        if self._latest_odom is None or self._latest_global_costmap is None:
-            return None
-        costmap = self._latest_global_costmap
-        robot = self._latest_odom.position
-        robot_grid = costmap.world_to_grid((robot.x, robot.y, robot.z))
-        return self._nearest_obstacle_distance_m(
-            costmap,
-            round(robot_grid.x),
-            round(robot_grid.y),
-            max_distance_m,
-        )
 
     def _nearest_safe_costmap_cell(
         self,
@@ -685,16 +649,6 @@ class NavigationSkillContainer(Module):
         area_m2 = len(cells) * costmap.resolution * costmap.resolution
         nearest_distance_m = min(distances)
         farthest_distance_m = max(distances)
-        xs = [cell[0] for cell in cells]
-        ys = [cell[1] for cell in cells]
-        length_m = max(max(xs) - min(xs) + 1, max(ys) - min(ys) + 1) * costmap.resolution
-        width_m = min(max(xs) - min(xs) + 1, max(ys) - min(ys) + 1) * costmap.resolution
-        depth_m = farthest_distance_m - nearest_distance_m
-        aspect_ratio = length_m / max(width_m, costmap.resolution)
-        is_corridor = length_m >= 1.5 and aspect_ratio >= 2.5 and farthest_distance_m >= 0.9
-        is_narrow_pocket = not is_corridor and (
-            area_m2 < 0.8 or depth_m < 0.8 or len(cells) < max(min_region_cells * 2, 8)
-        )
         region = MemoryBlindspotRegion(
             region_id=fingerprint,
             region_fingerprint=fingerprint,
@@ -707,8 +661,6 @@ class NavigationSkillContainer(Module):
             farthest_distance_m=farthest_distance_m,
             frontier_cell_count=frontier_count,
             score=0.0,
-            is_corridor=is_corridor,
-            is_narrow_pocket=is_narrow_pocket,
         )
         frontier_bonus = 1.0 if target_type == "memory_frontier" else 0.0
         corridor_depth_bonus = min(farthest_distance_m, 5.0) * 0.2
@@ -771,23 +723,16 @@ class NavigationSkillContainer(Module):
 
     def _validate_memory_blindspot_goal_cell(
         self,
-        region: MemoryBlindspotRegion,
         costmap: OccupancyGrid,
         gx: int,
         gy: int,
-        traversal_clearance_m: float,
-        open_goal_clearance_m: float,
-        corridor_goal_clearance_m: float,
+        clearance_m: float,
     ) -> bool:
-        if not self._is_costmap_goal_cell_safe(costmap, gx, gy, traversal_clearance_m):
+        if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
             return False
-        if self._is_costmap_goal_cell_safe(costmap, gx, gy, open_goal_clearance_m):
-            return self._costmap_safe_neighbor_count(costmap, gx, gy, traversal_clearance_m) >= 1
-        if region.is_corridor and self._is_costmap_goal_cell_safe(
-            costmap, gx, gy, corridor_goal_clearance_m
-        ):
-            return self._costmap_safe_neighbor_count(costmap, gx, gy, traversal_clearance_m) >= 1
-        return False
+        # Lightweight stand-in for planner validation: avoid isolated cells that
+        # are technically free but leave little room for the local planner.
+        return self._costmap_safe_neighbor_count(costmap, gx, gy, clearance_m) >= 1
 
     def _goal_orientation_for_region(
         self,
@@ -825,8 +770,6 @@ class NavigationSkillContainer(Module):
         coverage_radius_m: float = 1.0,
         stale_after_sec: float = 600.0,
         clearance_m: float = 0.35,
-        open_goal_clearance_m: float = 0.5,
-        corridor_goal_clearance_m: float = 0.35,
         exclude_recent_goals: list[tuple[float, float]] | None = None,
         failed_regions: list[MemoryBlindspotVisitState] | None = None,
         min_region_cells: int = 4,
@@ -940,16 +883,11 @@ class NavigationSkillContainer(Module):
             gx, gy = goal_cell
             if reachable_distances.get(goal_cell, 0.0) < min_goal_distance:
                 continue
-            if region.is_narrow_pocket:
-                continue
             if not self._validate_memory_blindspot_goal_cell(
-                region,
                 costmap,
                 gx,
                 gy,
                 clearance_m,
-                open_goal_clearance_m,
-                corridor_goal_clearance_m,
             ):
                 continue
             world = costmap.grid_to_world((gx, gy, 0.0))
@@ -2709,8 +2647,7 @@ class NavigationSkillContainer(Module):
     def _attempt_memory_blindspot_recovery(
         self,
         timeout_sec: float,
-        clearance_m: float = 0.5,
-        open_goal_clearance_m: float | None = None,
+        clearance_m: float = 0.45,
         recovery_radius_m: float = 2.0,
         recovery_min_move_m: float = 0.6,
     ) -> bool:
@@ -2765,7 +2702,6 @@ class NavigationSkillContainer(Module):
             recovery_radius_m,
             clearance_m,
         )
-        goal_clearance_m = open_goal_clearance_m if open_goal_clearance_m is not None else clearance_m
         candidates = [
             (cell, distance)
             for cell, distance in reachable.items()
@@ -2775,29 +2711,10 @@ class NavigationSkillContainer(Module):
         ]
         if not candidates:
             return False
-        open_candidates = [
-            (cell, distance)
-            for cell, distance in candidates
-            if self._is_costmap_goal_cell_safe(costmap, cell[0], cell[1], goal_clearance_m)
-        ]
-        if open_candidates:
-            candidates = open_candidates
         goal_cell, _ = max(
             candidates,
             key=lambda item: (
-                self._costmap_safe_neighbor_count(
-                    costmap,
-                    item[0][0],
-                    item[0][1],
-                    goal_clearance_m
-                    if self._is_costmap_goal_cell_safe(
-                        costmap,
-                        item[0][0],
-                        item[0][1],
-                        goal_clearance_m,
-                    )
-                    else clearance_m,
-                ),
+                self._costmap_safe_neighbor_count(costmap, item[0][0], item[0][1], clearance_m),
                 item[1],
             ),
         )
@@ -2822,9 +2739,6 @@ class NavigationSkillContainer(Module):
         search_radius_m: float = 5.0,
         coverage_radius_m: float = 1.0,
         stale_after_sec: float = 600.0,
-        traversal_clearance_m: float = 0.35,
-        open_goal_clearance_m: float = 0.5,
-        corridor_goal_clearance_m: float = 0.35,
     ) -> str:
         """Find a nearby reachable area with missing or stale spatial memory and navigate there.
 
@@ -2832,9 +2746,6 @@ class NavigationSkillContainer(Module):
             search_radius_m: Radius around the robot to search in meters.
             coverage_radius_m: Memory coverage radius in meters.
             stale_after_sec: Treat memory older than this as stale. Use 0 to disable staleness.
-            traversal_clearance_m: Minimum clearance for traversable cells.
-            open_goal_clearance_m: Preferred clearance for open-space exploration goals.
-            corridor_goal_clearance_m: Minimum goal clearance allowed for corridor regions.
         """
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
@@ -2847,9 +2758,6 @@ class NavigationSkillContainer(Module):
             search_radius_m=search_radius_m,
             coverage_radius_m=coverage_radius_m,
             stale_after_sec=stale_after_sec,
-            clearance_m=traversal_clearance_m,
-            open_goal_clearance_m=open_goal_clearance_m,
-            corridor_goal_clearance_m=corridor_goal_clearance_m,
         )
         if target is None:
             return (
@@ -2888,9 +2796,6 @@ class NavigationSkillContainer(Module):
         region_failure_cooldown_sec: float = 60.0,
         max_region_attempts: int = 2,
         recovery_goal_timeout_sec: float = 10.0,
-        traversal_clearance_m: float = 0.35,
-        open_goal_clearance_m: float = 0.5,
-        corridor_goal_clearance_m: float = 0.35,
     ) -> str:
         """Explore areas that are not yet covered by spatial memory.
 
@@ -2917,9 +2822,6 @@ class NavigationSkillContainer(Module):
             region_failure_cooldown_sec: Cooldown for failed blindspot regions.
             max_region_attempts: Maximum failed attempts for a region during its cooldown.
             recovery_goal_timeout_sec: Timeout for recovery escape goals after stuck detection.
-            traversal_clearance_m: Minimum clearance for traversable cells.
-            open_goal_clearance_m: Preferred clearance for open-space exploration goals.
-            corridor_goal_clearance_m: Minimum goal clearance allowed for corridor regions.
         """
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
@@ -2951,31 +2853,11 @@ class NavigationSkillContainer(Module):
             if max_goals > 0 and visited >= max_goals:
                 stop_reason = f"max_goals={max_goals} reached"
                 break
-            current_clearance = self._current_obstacle_clearance_m(traversal_clearance_m)
-            if current_clearance is not None and current_clearance < traversal_clearance_m:
-                stuck += 1
-                failed += 1
-                remaining_recovery_sec = max(0.0, deadline - time.time())
-                if remaining_recovery_sec > 0 and self._attempt_memory_blindspot_recovery(
-                    timeout_sec=min(recovery_goal_timeout_sec, remaining_recovery_sec),
-                    clearance_m=traversal_clearance_m,
-                    open_goal_clearance_m=open_goal_clearance_m,
-                ):
-                    recovered += 1
-                    continue
-                recovery_failed += 1
-                stop_reason = (
-                    f"obstacle clearance below {traversal_clearance_m:.2f}m and recovery failed"
-                )
-                break
 
             target = self._find_nearest_memory_blindspot(
                 search_radius_m=search_radius_m,
                 coverage_radius_m=coverage_radius_m,
                 stale_after_sec=stale_after_sec,
-                clearance_m=traversal_clearance_m,
-                open_goal_clearance_m=open_goal_clearance_m,
-                corridor_goal_clearance_m=corridor_goal_clearance_m,
                 exclude_recent_goals=recent_goals,
                 failed_regions=failed_regions,
                 max_region_attempts=max_region_attempts,
@@ -3031,8 +2913,6 @@ class NavigationSkillContainer(Module):
                     remaining_recovery_sec = max(0.0, deadline - time.time())
                     if remaining_recovery_sec > 0 and self._attempt_memory_blindspot_recovery(
                         timeout_sec=min(recovery_goal_timeout_sec, remaining_recovery_sec),
-                        clearance_m=traversal_clearance_m,
-                        open_goal_clearance_m=open_goal_clearance_m,
                     ):
                         recovered += 1
                     else:

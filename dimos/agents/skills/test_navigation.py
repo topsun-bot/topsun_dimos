@@ -570,46 +570,6 @@ def test_blindspot_goal_rejects_occupied_cells() -> None:
     assert int(grid[gy, gx]) != CostValues.OCCUPIED
 
 
-def test_blindspot_goal_allows_narrow_corridor_below_half_meter_clearance() -> None:
-    nav = _nav_container()
-    grid = np.zeros((9, 21), dtype=np.int8)
-    grid[0, :] = CostValues.OCCUPIED
-    grid[8, :] = CostValues.OCCUPIED
-    nav._latest_odom = _pose(1.0, 0.4)
-    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.1, frame_id="map")
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
-
-    target = nav._find_nearest_memory_blindspot(
-        search_radius_m=4.0,
-        coverage_radius_m=0.5,
-        clearance_m=0.35,
-        open_goal_clearance_m=0.5,
-        corridor_goal_clearance_m=0.35,
-    )
-
-    assert target is not None
-    assert abs(target["pose"].position.x - 1.0) >= 0.9
-
-
-def test_blindspot_goal_rejects_narrow_pocket() -> None:
-    nav = _nav_container()
-    grid = np.full((7, 7), CostValues.OCCUPIED, dtype=np.int8)
-    grid[2:5, 2:5] = CostValues.FREE
-    nav._latest_odom = _pose(0.0, 0.0)
-    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.25, frame_id="map")
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
-
-    target = nav._find_nearest_memory_blindspot(
-        search_radius_m=3.0,
-        coverage_radius_m=0.5,
-        clearance_m=0.35,
-        open_goal_clearance_m=0.5,
-        corridor_goal_clearance_m=0.35,
-    )
-
-    assert target is None
-
-
 def test_blindspot_region_prefers_deep_corridor_goal() -> None:
     nav = _nav_container()
     grid = np.full((7, 21), CostValues.OCCUPIED, dtype=np.int8)
@@ -744,7 +704,6 @@ def test_blindspot_recovery_snaps_from_unsafe_start_cell() -> None:
     recovered = nav._attempt_memory_blindspot_recovery(
         timeout_sec=1.0,
         clearance_m=0.0,
-        open_goal_clearance_m=0.0,
         recovery_radius_m=2.0,
         recovery_min_move_m=0.1,
     )

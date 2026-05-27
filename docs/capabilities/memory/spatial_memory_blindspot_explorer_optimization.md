@@ -258,7 +258,6 @@ MVP 推荐策略：
 4. 如果是 `memory_frontier`，优先选择靠近 unknown 边界但仍安全的 free cell。
 5. 给 goal 设置朝向，使机器人朝向盲区深处或 unknown 边界。
 6. 发布 goal 前做 planner 可达性或轻量验证。
-7. 如果 goal 离障碍物不足开阔区域要求，但该 region 是可贯通的窄通道，则允许使用通道 clearance；如果是桌底/墙角 pocket，则跳过。
 
 走廊场景下，这会让机器人一次走到更深的位置，而不是停在入口附近。
 
@@ -268,49 +267,6 @@ MVP 推荐策略：
 - 如果没有 plan-only 接口，至少检查 flood-fill 路径距离、目标附近安全邻域数量和 obstacle clearance。
 - 如果目标姿态朝向会让机器人贴墙或原地转身受限，退回到 region 内更开阔的 cell。
 - planner 拒绝或 set_goal 失败时，把该 region 记为 `rejected` 并进入 cooldown。
-
-### 4.4.1 窄通道例外和桌底/口袋拒绝
-
-真机探索时，机器人需要继续探索窄通道，但不应为了补空间记忆钻向桌子下方、桌脚旁边、墙边死角或设备架下方。因此不能简单把所有探索目标都限制为 0.5m clearance，而应区分“可贯通通道”和“局部口袋”。
-
-MVP 使用三组阈值：
-
-```python skip
-traversal_clearance_m = 0.35
-open_goal_clearance_m = 0.5
-corridor_goal_clearance_m = 0.35
-```
-
-规则：
-
-- blindspot 候选 cell 必须至少满足 `traversal_clearance_m`，否则不进入可走空间图。
-- 普通 open-space / room / frontier goal 优先要求 `open_goal_clearance_m = 0.5m`。
-- 如果 region 被识别为 `corridor`，允许 goal clearance 降到 `corridor_goal_clearance_m = 0.35m`，以免阻止机器人探索窄通道。
-- 如果 region 被识别为 `pocket` / `dead_end_narrow`，即使满足 `0.35m` 也不作为探索推进目标，避免钻桌底、墙角或设备架下方。
-- recovery escape goal 仍优先选择更开阔区域，推荐使用 `open_goal_clearance_m`；如果当前已经在窄通道内，可退而使用 `traversal_clearance_m` 找最近可退出点。
-
-MVP corridor 判断可以用轻量几何规则：
-
-```text
-region_length_m >= 1.5
-region_length_m / max(region_width_m, resolution) >= 2.5
-farthest_distance_m >= 0.9
-region 内 deep goal 附近沿主方向前后都有 reachable free cells
-```
-
-MVP pocket / 桌底风险判断：
-
-```text
-obstacle_clearance_m < open_goal_clearance_m
-&& not corridor
-&& (
-    region_area_m2 < 0.8
-    || safe_neighbor_count is low
-    || farthest_distance_m - nearest_distance_m < 0.8
-)
-```
-
-这个规则是探索层的目标选择约束，不替代底层避障。底层 planner 仍然负责实际避障；探索层负责“不主动选择容易钻桌底或卡墙角的目标”，同时允许机器人沿可贯通窄通道继续探索。
 
 目标选择示意：
 
@@ -514,7 +470,6 @@ def _select_region_goal_cell(region_cells, robot_pose, costmap, target_type) -> 
 - `memory_frontier`: 选靠近 unknown 且离机器人较远的 safe cell。
 - `memory_gap`: 选 region 内离机器人最远但不超过 `search_radius_m` 的 safe cell。
 - 最终目标必须通过 planner 可达性或轻量可达性验证。
-- 最终目标优先满足 `open_goal_clearance_m = 0.5m`；如果是 corridor region，可使用 `corridor_goal_clearance_m = 0.35m`；如果是 pocket/dead-end narrow region，跳过。
 
 ### Step 5: 到达后等待新记忆
 
@@ -544,7 +499,7 @@ memory_frame_confirmed = self._wait_for_new_memory_frame(
 
 ### Step 6: 卡住和背角落恢复
 
-连续探索必然会遇到窄通道、墙角、死胡同、动态障碍物或导航局部规划失败。优化版不应只取消 goal 后换下一个点，还应该先尝试从卡住位置恢复出来。
+连续探索必然会遇到死胡同、动态障碍物或导航局部规划失败。优化版不应只取消 goal 后换下一个点，还应该先尝试从卡住位置恢复出来。
 
 #### 6.1 卡住判断
 
@@ -587,7 +542,7 @@ recovery_radius_m = 2.0
 recovery_min_move_m = 0.6
 recovery_max_attempts = 3
 recovery_goal_timeout_sec = 10.0
-recovery_clearance_m = 0.5
+recovery_clearance_m = 0.45
 ```
 
 #### 6.3 恢复动作顺序
@@ -670,9 +625,7 @@ Stopped because recovery failed near region memory_frontier_3; the robot avoided
 search_radius_m = 8.0
 coverage_radius_m = 1.0
 stale_after_sec = 600.0
-traversal_clearance_m = 0.35
-open_goal_clearance_m = 0.5
-corridor_goal_clearance_m = 0.35
+clearance_m = 0.35
 min_region_area_m2 = 0.25
 min_region_cells = 4
 prefer_deep_region_goal = True
@@ -687,7 +640,7 @@ recovery_radius_m = 2.0
 recovery_min_move_m = 0.6
 recovery_max_attempts = 3
 recovery_goal_timeout_sec = 10.0
-recovery_clearance_m = 0.5
+recovery_clearance_m = 0.45
 ```
 
 真机走廊测试建议：
@@ -764,7 +717,6 @@ New objects found in explored areas:
 | 到达后直接识别 | 到达后等待稳定和新 memory frame |
 | goal 朝向复用当前 odom | goal 朝向盲区深处或 unknown |
 | 只检查 safe cell | 发布前增加 planner 可达性或轻量可达性验证 |
-| 可能贴近桌脚/墙角继续推进 | 区分 corridor 和 pocket：窄通道允许 0.35m，桌底/口袋拒绝 |
 | 半径覆盖表述为视觉覆盖 | 明确 MVP 是位置采样覆盖，或增加前向扇形 FOV 近似 |
 
 用户可见 skill 名称可以保持不变，避免影响 agent prompt 和现有调用链。
@@ -785,4 +737,3 @@ MVP 优化完成后，应满足：
 10. 到达后 frame 确认不会漏掉 `arrival_settle_sec` 期间写入的新帧。
 11. 最终导航目标在发布前经过 planner 可达性或轻量可达性验证。
 12. 如果第一版只使用半径覆盖，验收报告应称为“位置采样覆盖”；如果要验收“视觉覆盖”，必须启用前向扇形 FOV 近似。
-13. 窄通道仍可探索：corridor region 允许使用 `corridor_goal_clearance_m`；桌底/墙角 pocket 不会被选为探索推进目标。
