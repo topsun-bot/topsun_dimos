@@ -120,6 +120,12 @@ class _ObjectNavigationResult:
     requires_final_confirmation: bool = True
 
 
+@dataclass(frozen=True)
+class _VisualAcquireResult:
+    message: str
+    navigation_failed: bool = False
+
+
 def _terminal_navigation_failure(message: str) -> str:
     return f"{_NAV_TERMINAL_FAILURE_PREFIX}{message}"
 
@@ -756,9 +762,9 @@ class NavigationSkillContainer(Module):
             run_arrival_action=is_object_landmark,
             enable_visual_drift=False,
         )
-        if "but navigation failed" in nav_landmark_msg.lower():
+        if _is_terminal_navigation_failure(nav_landmark_msg):
             logger.warning("[landmark] ⚠ Visual navigation failed; stop fallback chain")
-            return _terminal_navigation_failure(nav_landmark_msg)
+            return nav_landmark_msg
         if (
             "severe visual/odom drift" in nav_landmark_msg.lower()
             or "aborted" in nav_landmark_msg.lower()
@@ -1652,8 +1658,28 @@ class NavigationSkillContainer(Module):
         stop_on_found_failure: bool = True,
         vlm_query: str | None = None,
     ) -> str | None:
+        result = self._scan_yaws_for_object_result(
+            target_name,
+            center_yaw=center_yaw,
+            offsets_deg=offsets_deg,
+            timeout_per_view=timeout_per_view,
+            stop_on_found_failure=stop_on_found_failure,
+            vlm_query=vlm_query,
+        )
+        return result.message if result is not None else None
+
+    def _scan_yaws_for_object_result(
+        self,
+        target_name: str,
+        *,
+        center_yaw: float,
+        offsets_deg: tuple[float, ...],
+        timeout_per_view: float = _OBJECT_LOCAL_SCAN_TIMEOUT_S,
+        stop_on_found_failure: bool = True,
+        vlm_query: str | None = None,
+    ) -> _VisualAcquireResult | None:
         """Rotate through a small yaw fan and try VLM+tracking at each view."""
-        last_found_failure: str | None = None
+        last_found_failure: _VisualAcquireResult | None = None
         for offset_deg in offsets_deg:
             yaw = center_yaw + math.radians(offset_deg)
             logger.info(
@@ -1670,13 +1696,14 @@ class NavigationSkillContainer(Module):
                 vlm_query=vlm_query,
             )
             if result.arrived:
-                return f"Visually acquired '{target_name}' during local scan"
+                return _VisualAcquireResult(f"Visually acquired '{target_name}' during local scan")
             if result.found:
-                last_found_failure = (
+                message = (
                     f"Visually found '{target_name}' during local scan, "
                     f"but navigation failed after repeated VLM retries: {result.failure_reason}"
                 )
-                logger.warning("[local_search] %s", last_found_failure)
+                last_found_failure = _VisualAcquireResult(message, navigation_failed=True)
+                logger.warning("[local_search] %s", message)
                 if stop_on_found_failure:
                     return last_found_failure
                 continue
@@ -1724,6 +1751,20 @@ class NavigationSkillContainer(Module):
         *,
         radius_m: float = 3.0,
     ) -> str | None:
+        result = self._local_search_for_object_near_landmark_result(
+            target,
+            target_name,
+            radius_m=radius_m,
+        )
+        return result.message if result is not None else None
+
+    def _local_search_for_object_near_landmark_result(
+        self,
+        target: SpatialRecord,
+        target_name: str,
+        *,
+        radius_m: float = 3.0,
+    ) -> _VisualAcquireResult | None:
         """Search nearby viewpoints when an object is not visible at its saved coordinate."""
         if self._latest_odom is None:
             return None
@@ -1745,7 +1786,7 @@ class NavigationSkillContainer(Module):
             if stored_yaw is not None
             else _LOCAL_SEARCH_SCAN_OFFSETS_DEG
         )
-        found = self._scan_yaws_for_object(
+        found = self._scan_yaws_for_object_result(
             target_name,
             center_yaw=center_yaw,
             offsets_deg=initial_offsets,
@@ -1808,7 +1849,7 @@ class NavigationSkillContainer(Module):
             if severe:
                 return None
 
-            found = self._scan_yaws_for_object(
+            found = self._scan_yaws_for_object_result(
                 target_name,
                 center_yaw=yaw,
                 offsets_deg=_LOCAL_SEARCH_SCAN_OFFSETS_DEG,
@@ -1817,7 +1858,10 @@ class NavigationSkillContainer(Module):
                 vlm_query=vlm_query,
             )
             if found:
-                return f"{found} from a nearby viewpoint"
+                return _VisualAcquireResult(
+                    f"{found.message} from a nearby viewpoint",
+                    navigation_failed=found.navigation_failed,
+                )
 
         logger.info("[local_search] '%s' not found within %.1fm", target_name, radius_m)
         return None
@@ -2252,6 +2296,19 @@ class NavigationSkillContainer(Module):
         stored_yaw: float | None = None,
         vlm_query: str | None = None,
     ) -> str | None:
+        result = self._try_acquire_object_in_view_result(
+            target_name,
+            stored_yaw=stored_yaw,
+            vlm_query=vlm_query,
+        )
+        return result.message if result is not None else None
+
+    def _try_acquire_object_in_view_result(
+        self,
+        target_name: str,
+        stored_yaw: float | None = None,
+        vlm_query: str | None = None,
+    ) -> _VisualAcquireResult | None:
         """Try the current view only; local search handles wider scanning."""
         if stored_yaw is not None:
             euler = self._odom_euler_tuple()
@@ -2277,16 +2334,19 @@ class NavigationSkillContainer(Module):
             )
             if result.arrived:
                 logger.info("[visual_acquire_once] ✓ '%s' found in current view", target_name)
-                return f"Visually acquired '{target_name}'"
+                return _VisualAcquireResult(f"Visually acquired '{target_name}'")
             if result.found:
                 logger.warning(
                     "[visual_acquire_once] '%s' found, but navigation failed: %s",
                     target_name,
                     result.failure_reason,
                 )
-                return (
-                    f"Visually found '{target_name}', but navigation failed after "
-                    f"repeated VLM retries: {result.failure_reason}"
+                return _VisualAcquireResult(
+                    (
+                        f"Visually found '{target_name}', but navigation failed after "
+                        f"repeated VLM retries: {result.failure_reason}"
+                    ),
+                    navigation_failed=True,
                 )
         except Exception:
             logger.exception("[visual_acquire_once] VLM acquire error for '%s'", target_name)
@@ -3336,12 +3396,13 @@ class NavigationSkillContainer(Module):
             else arrival_action
         )
 
-        return self._navigate_to_landmark(
+        result = self._navigate_to_landmark(
             target,
             arrival_action=effective_action,
             arrival_distance=arrival_distance,
             run_arrival_action=True,
         )
+        return _strip_terminal_navigation_failure(result)
 
     def _navigate_to_landmark(
         self,
@@ -3531,23 +3592,30 @@ class NavigationSkillContainer(Module):
             """Common arrival logic: visual acquire → conditionally run arrival_action."""
             tname = target.name or target.record_id
             vis_msg = ""
+            visual_nav_failed = False
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
                 tag = "Visual acquire (retry)" if retry else "Visual acquire"
                 vlm_query = self._vlm_query_for_object_record(tname, target)
-                vis_msg = (
-                    self._try_acquire_object_in_view(
-                        tname,
-                        stored_yaw,
-                        vlm_query=vlm_query,
-                    )
-                    or ""
+                visual_result = self._try_acquire_object_in_view_result(
+                    tname,
+                    stored_yaw,
+                    vlm_query=vlm_query,
                 )
+                if visual_result is not None:
+                    vis_msg = visual_result.message
+                    visual_nav_failed = visual_result.navigation_failed
                 if vis_msg:
                     logger.info("[L3] %s: %s", tag, vis_msg)
                 else:
                     logger.warning("[L3] %s: '%s' not found in view", tag, tname)
-                    vis_msg = self._local_search_for_object_near_landmark(target, tname) or ""
+                    local_result = self._local_search_for_object_near_landmark_result(
+                        target,
+                        tname,
+                    )
+                    if local_result is not None:
+                        vis_msg = local_result.message
+                        visual_nav_failed = local_result.navigation_failed
                     if vis_msg:
                         logger.info("[L3] Local search%s: %s", " (retry)" if retry else "", vis_msg)
                     else:
@@ -3557,10 +3625,9 @@ class NavigationSkillContainer(Module):
                             tname,
                         )
             if run_arrival_action:
-                visual_nav_failed = "but navigation failed" in vis_msg.lower()
                 if is_object_landmark and (not vis_msg or visual_nav_failed):
                     if vis_msg:
-                        return vis_msg
+                        return _terminal_navigation_failure(vis_msg)
                     suffix = " after drift recovery" if retry else ""
                     return (
                         f"Arrived at stored '{tname}' coordinate{suffix} but the camera "

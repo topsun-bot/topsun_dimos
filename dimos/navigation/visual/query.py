@@ -320,7 +320,7 @@ def get_object_detection_from_image(
         '  不在画面中：{"present": false}\n'
         "坐标用图像左上角为原点的左上、右下角像素坐标。"
     )
-    logger.info("[VLM bbox] prompt=%s", prompt)
+    logger.debug("[VLM bbox] prompt=%s", prompt)
 
     try:
         response = vl_model.query(image, prompt)

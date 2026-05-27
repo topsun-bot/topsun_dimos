@@ -39,7 +39,7 @@ class Config(ModuleConfig):
     min_goal_interval_s: float = 1.0
     min_goal_translation_delta_m: float = 0.25
     min_goal_yaw_delta_deg: float = 15.0
-    lock_goal_until_detection_lost: bool = True
+    lock_goal_until_detection_lost: bool = False
 
 
 class BBoxNavigationModule(Module):
@@ -71,6 +71,8 @@ class BBoxNavigationModule(Module):
 
     def _on_detection(self, det: Detection2DArray) -> None:
         if not self.config.enabled:
+            self._goal_locked = False
+            self._last_goal = None
             return
         if det.detections_length == 0 or not self.camera_intrinsics:
             if det.detections_length == 0:
