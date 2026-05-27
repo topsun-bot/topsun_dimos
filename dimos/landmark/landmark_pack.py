@@ -378,23 +378,16 @@ def status() -> LandmarkStatus:
     try:
         records = json.loads(json_path.read_text())
     except (json.JSONDecodeError, ValueError) as e:
-        return LandmarkStatus(
-            path=LANDMARK_MEMORY_DIR, exists=True, record_count=0, summary={"error": str(e)}
-        )
+        logger.warning("Invalid landmarks.json: %s", e)
+        return LandmarkStatus(path=LANDMARK_MEMORY_DIR, exists=True, record_count=0, summary={})
     if not isinstance(records, list):
-        return LandmarkStatus(
-            path=LANDMARK_MEMORY_DIR,
-            exists=True,
-            record_count=0,
-            summary={"error": f"landmarks.json must be a JSON array, got {type(records).__name__}"},
-        )
+        logger.warning("landmarks.json is not a JSON array, got %s", type(records).__name__)
+        return LandmarkStatus(path=LANDMARK_MEMORY_DIR, exists=True, record_count=0, summary={})
     for i, rec in enumerate(records):
         if not isinstance(rec, dict):
+            logger.warning("landmarks.json element %d is not a JSON object", i)
             return LandmarkStatus(
-                path=LANDMARK_MEMORY_DIR,
-                exists=True,
-                record_count=len(records),
-                summary={"error": f"Element {i} is not a JSON object"},
+                path=LANDMARK_MEMORY_DIR, exists=True, record_count=len(records), summary={}
             )
     return LandmarkStatus(
         path=LANDMARK_MEMORY_DIR,
