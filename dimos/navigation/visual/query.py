@@ -215,7 +215,9 @@ def parse_object_detection_from_vlm_response(
     - ``{"bbox": [x1,y1,x2,y2], "name": "...", "confidence": 0.9}``
     - ``[{"bbox_2d": [...], "label": "..."}, ...]`` (Qwen-style)
     """
-    candidates: list[tuple[float, float, float, tuple[float, float, float, float], dict[str, Any]]] = []
+    candidates: list[
+        tuple[float, float, float, tuple[float, float, float, float], dict[str, Any]]
+    ] = []
     rejected_debug: list[str] = []
 
     if isinstance(result, dict):
@@ -234,7 +236,9 @@ def parse_object_detection_from_vlm_response(
                 score = 1.0 if not object_description.strip() else 0.0
             area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             confidence = _detection_confidence(result)
-            candidates.append((score, confidence if confidence is not None else -1.0, area, bbox, result))
+            candidates.append(
+                (score, confidence if confidence is not None else -1.0, area, bbox, result)
+            )
             if score <= 0.0:
                 rejected_debug.append(_candidate_debug_summary(result, bbox, score))
     elif isinstance(result, list):
@@ -254,7 +258,9 @@ def parse_object_detection_from_vlm_response(
                 score = 1.0 if _label_matches_query(label, object_description) else 0.0
             area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
             confidence = _detection_confidence(item)
-            candidates.append((score, confidence if confidence is not None else -1.0, area, bbox, item))
+            candidates.append(
+                (score, confidence if confidence is not None else -1.0, area, bbox, item)
+            )
             if score <= 0.0:
                 rejected_debug.append(_candidate_debug_summary(item, bbox, score))
 

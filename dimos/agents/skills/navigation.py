@@ -116,6 +116,7 @@ def _strip_terminal_navigation_failure(message: str) -> str:
         return message[len(_NAV_TERMINAL_FAILURE_PREFIX) :]
     return message
 
+
 _VLM_OBJECT_LIST_PROMPT = (
     "列出图中所有可单独指认的物体（家具、电器、设备、装饰、人等）。\n"
     "【硬性要求】JSON 里每个 name 必须是 1–4 个汉字的中文名词。"
@@ -933,8 +934,7 @@ class NavigationSkillContainer(Module):
                 vlm_failures += 1
                 last_failure = "VLM did not find the object again after a navigation retry"
                 logger.info(
-                    "[L2]   VLM did not find %r after visual adjustment "
-                    "(failure %d/%d)",
+                    "[L2]   VLM did not find %r after visual adjustment (failure %d/%d)",
                     query,
                     vlm_failures,
                     max_attempts,
@@ -1064,8 +1064,7 @@ class NavigationSkillContainer(Module):
             vlm_failures += 1
             if vlm_failures < max_attempts:
                 logger.info(
-                    "[L2]   Retrying VLM bbox navigation for %r after failure "
-                    "(failure %d/%d): %s",
+                    "[L2]   Retrying VLM bbox navigation for %r after failure (failure %d/%d): %s",
                     query,
                     vlm_failures,
                     max_attempts,
@@ -2069,8 +2068,7 @@ class NavigationSkillContainer(Module):
                 diff_deg = math.degrees(diff)
                 if abs(diff_deg) > 5.0:
                     logger.info(
-                        "[visual_acquire_once] turning %.1f° to face '%s' "
-                        "(stored yaw=%.1f°)",
+                        "[visual_acquire_once] turning %.1f° to face '%s' (stored yaw=%.1f°)",
                         diff_deg,
                         target_name,
                         math.degrees(stored_yaw),
@@ -2485,11 +2483,7 @@ class NavigationSkillContainer(Module):
         bbox_area_ratio = (bw * bh) / float(w * h)
         bbox_height_ratio = bh / float(h)
         bbox_width_ratio = bw / float(w)
-        return (
-            bbox_area_ratio >= 0.22
-            or bbox_height_ratio >= 0.55
-            or bbox_width_ratio >= 0.50
-        )
+        return bbox_area_ratio >= 0.22 or bbox_height_ratio >= 0.55 or bbox_width_ratio >= 0.50
 
     def _bbox_visual_progress_metrics(self, bbox: BBox) -> tuple[float, float, float] | None:
         if self._latest_image is None or not hasattr(self._latest_image, "data"):
@@ -2518,7 +2512,9 @@ class NavigationSkillContainer(Module):
 
         detection = get_object_detection_from_image(self._vl_model, self._latest_image, query)
         if detection is None:
-            logger.warning("[L2]   Final VLM confirmation rejected %r: no matching detection", query)
+            logger.warning(
+                "[L2]   Final VLM confirmation rejected %r: no matching detection", query
+            )
             return False
 
         logger.info(
@@ -3334,11 +3330,14 @@ class NavigationSkillContainer(Module):
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
                 tag = "Visual acquire (retry)" if retry else "Visual acquire"
                 vlm_query = self._vlm_query_for_object_record(tname, target)
-                vis_msg = self._try_acquire_object_in_view(
-                    tname,
-                    stored_yaw,
-                    vlm_query=vlm_query,
-                ) or ""
+                vis_msg = (
+                    self._try_acquire_object_in_view(
+                        tname,
+                        stored_yaw,
+                        vlm_query=vlm_query,
+                    )
+                    or ""
+                )
                 if vis_msg:
                     logger.info("[L3] %s: %s", tag, vis_msg)
                 else:

@@ -144,9 +144,8 @@ class BBoxNavigationModule(Module):
                 math.cos(goal.yaw - self._last_goal.yaw),
             )
         )
-        if (
-            distance < self.config.min_goal_translation_delta_m
-            and yaw_diff < math.radians(self.config.min_goal_yaw_delta_deg)
+        if distance < self.config.min_goal_translation_delta_m and yaw_diff < math.radians(
+            self.config.min_goal_yaw_delta_deg
         ):
             logger.debug(
                 "Skipping bbox goal update: delta=%.2fm yaw=%.1f°",
