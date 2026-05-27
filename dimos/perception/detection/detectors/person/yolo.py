@@ -30,10 +30,15 @@ class YoloPersonDetector(Detector):
         model_path: str = "models_yolo",
         model_name: str = "yolo11n-pose.pt",
         device: str | None = None,
+        conf: float = 0.5,
     ) -> None:
+        # conf 默认 0.5（兼容旧调用）；跟随场景（YoloPersonDetector + follow_me）
+        # 通常需要降低到 0.2 上下，才能在"只看到下半身/侧身/转身"等机位低的情况
+        # 下也能稳定框出人。
         self.model = YOLO(get_data(model_path) / model_name, task="track")
 
         self.tracker = get_data(model_path) / "botsort.yaml"
+        self.conf = float(conf)
 
         if device:
             self.device = device
@@ -53,12 +58,17 @@ class YoloPersonDetector(Detector):
             image: Input image
 
         Returns:
-            ImageDetections2D containing Detection2DPerson objects with pose keypoints
+            ImageDetections2D. The concrete element type is selected by
+            ``ImageDetections2D.from_ultralytics_result`` based on the underlying
+            model: ``Detection2DPerson`` (with pose keypoints) for ``*-pose.pt``
+            weights, ``Detection2DSeg`` when masks are present, and plain
+            ``Detection2DBBox`` for regular detection models such as ``yolo11n.pt``.
+            Callers must not assume keypoints are always available.
         """
         results = self.model.track(
             source=image.to_opencv(),
             verbose=False,
-            conf=0.5,
+            conf=self.conf,
             tracker=self.tracker,
             persist=True,
             device=self.device,
