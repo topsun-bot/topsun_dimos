@@ -179,24 +179,26 @@ class ObjectTracker2D(Module):
 
         self.tracking_bbox = (x1, y1, w, h)  # type: ignore[assignment]
         self.tracking_initialized = False
+        self._last_bbox = (x1, y1, x2, y2)
+        self._stuck_count = 0
         logger.info(f"Tracking target set with bbox: {self.tracking_bbox}")
 
         frame_bgr = cv2.cvtColor(self._latest_rgb_frame, cv2.COLOR_RGB2BGR)
         try:
             self.tracker = _create_opencv_tracker()
-            init_success = self.tracker.init(frame_bgr, self.tracking_bbox)  # type: ignore[attr-defined]
+            init_result = self.tracker.init(frame_bgr, self.tracking_bbox)  # type: ignore[attr-defined]
         except cv2.error as exc:
             logger.error("Tracker init OpenCV error: %s", exc)
             self.stop_track()
             return {"status": "init_failed", "reason": str(exc)}
 
-        if init_success:
-            self.tracking_initialized = True
-            logger.info("Tracker initialized successfully.")
-        else:
+        if init_result is False:
             logger.error("Tracker initialization failed.")
             self.stop_track()
             return {"status": "init_failed"}
+
+        self.tracking_initialized = True
+        logger.info("Tracker initialized successfully.")
 
         # Start tracking thread
         self._start_tracking_thread()
@@ -263,6 +265,13 @@ class ObjectTracker2D(Module):
             bool: True if tracking is active
         """
         return self.tracking_initialized
+
+    @rpc
+    def get_latest_bbox(self) -> list[float] | None:
+        """Return the latest tracked bbox in [x1, y1, x2, y2] image coordinates."""
+        if self._last_bbox is None:
+            return None
+        return [float(v) for v in self._last_bbox]
 
     def _process_tracking(self) -> None:
         """Process current frame for tracking and publish 2D detections."""

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
 import math
 import threading
 import time
@@ -23,14 +24,14 @@ from dimos.agents.annotation import skill
 from dimos.agents.skills.speak_skill_spec import SpeakSkillSpec
 from dimos.core.core import rpc
 from dimos.core.module import Module
-from dimos.core.stream import In
+from dimos.core.stream import In, Out
 from dimos.models.qwen.bbox import BBox
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image
-from dimos.navigation.base import NavigationState
 from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector import (
     WavefrontFrontierExplorer,
 )
@@ -38,6 +39,7 @@ from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.navigation.topology import TopologyGraph
 from dimos.navigation.visual.query import (
     get_object_bbox_from_image,
+    get_object_detection_from_image,
     vlm_object_present_in_view,
 )
 from dimos.perception.object_tracking_spec import ObjectTrackingSpec
@@ -72,12 +74,56 @@ _NAV_FALLBACK_STRATEGIES = {
     "semantic": _NAV_FALLBACK_SEMANTIC,
     "room_first": _NAV_FALLBACK_ROOM_FIRST,
 }
+_NAV_TERMINAL_FAILURE_PREFIX = "NAVIGATION_FAILED:"
+_OBJECT_VISUAL_NAV_TIMEOUT_S = 120.0
+_OBJECT_LOCAL_SCAN_TIMEOUT_S = 120.0
+_OBJECT_ROOM_SWEEP_TIMEOUT_S = 120.0
+_LOCAL_SEARCH_SCAN_OFFSETS_DEG = (
+    0.0,
+    30.0,
+    60.0,
+    90.0,
+    120.0,
+    150.0,
+    180.0,
+    210.0,
+    240.0,
+    270.0,
+    300.0,
+    330.0,
+)
+
+
+@dataclass(frozen=True)
+class _ObjectNavigationResult:
+    found: bool
+    arrived: bool
+    message: str | None = None
+    failure_reason: str | None = None
+    made_progress: bool = False
+
+
+def _terminal_navigation_failure(message: str) -> str:
+    return f"{_NAV_TERMINAL_FAILURE_PREFIX}{message}"
+
+
+def _is_terminal_navigation_failure(message: str | None) -> bool:
+    return bool(message and message.startswith(_NAV_TERMINAL_FAILURE_PREFIX))
+
+
+def _strip_terminal_navigation_failure(message: str) -> str:
+    if message.startswith(_NAV_TERMINAL_FAILURE_PREFIX):
+        return message[len(_NAV_TERMINAL_FAILURE_PREFIX) :]
+    return message
 
 _VLM_OBJECT_LIST_PROMPT = (
     "列出图中所有可单独指认的物体（家具、电器、设备、装饰、人等）。\n"
     "【硬性要求】JSON 里每个 name 必须是 1–4 个汉字的中文名词。"
     "禁止英文：不要写 computer/desk/chair/monitor/table。\n"
     "正确示例：电脑、书桌、办公椅、灭火器、电视。\n"
+    "description 必须尽量包含可见的颜色、形状/轮廓、材质、结构特征，"
+    "例如：黑色长方形显示器、蓝色圆形塑料凳、白色金属置物架。"
+    "如果颜色或材质不确定，用“颜色不明显”或“材质不确定”，不要编造。\n"
     "Return ONLY a JSON array: "
     '[{"name": "<中文名>", "description": "<简短中文说明>", "bbox": [x1, y1, x2, y2]}]. '
     "bbox 为物体在画面中的边界框（像素坐标）。跳过墙面、地面、天花板、门。若无物体，返回 []."
@@ -246,6 +292,7 @@ class NavigationSkillContainer(Module):
     color_image: In[Image]
     odom: In[PoseStamped]
     global_costmap: In[OccupancyGrid]
+    tele_cmd_vel: Out[Twist]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -683,10 +730,15 @@ class NavigationSkillContainer(Module):
             run_arrival_action=is_object_landmark,
             enable_visual_drift=False,
         )
+        if "but navigation failed" in nav_landmark_msg.lower():
+            logger.warning("[landmark] ⚠ Visual navigation failed; stop fallback chain")
+            return _terminal_navigation_failure(nav_landmark_msg)
         if (
             "severe visual/odom drift" in nav_landmark_msg.lower()
             or "aborted" in nav_landmark_msg.lower()
             or "navigation skipped" in nav_landmark_msg.lower()
+            or "could not visually acquire" in nav_landmark_msg.lower()
+            or "local search failed" in nav_landmark_msg.lower()
         ):
             logger.warning("[landmark] ⚠ Navigation failed, fall through")
             return None
@@ -774,6 +826,12 @@ class NavigationSkillContainer(Module):
 
         success_msg = self._run_navigate_fallback_chain(query)
         if success_msg:
+            if _is_terminal_navigation_failure(success_msg):
+                failure_msg = _strip_terminal_navigation_failure(success_msg)
+                logger.info("=" * 50)
+                logger.info("NAVIGATE_WITH_TEXT END  query=%r  result=FAILED", query)
+                logger.info("=" * 50)
+                return failure_msg
             logger.info("=" * 50)
             logger.info("NAVIGATE_WITH_TEXT END  query=%r  result=HIT", query)
             logger.info("=" * 50)
@@ -834,85 +892,433 @@ class NavigationSkillContainer(Module):
             f"To cancel movement call the 'stop_navigation' tool."
         )
 
-    def _navigate_to_object(
-        self, query: str, *, timeout: float = 30.0, announce: bool = True
-    ) -> str | None:
+    def _navigate_to_object_result(
+        self,
+        query: str,
+        *,
+        timeout: float = 30.0,
+        max_attempts: int = 6,
+        max_motion_updates: int = 10,
+        vlm_query: str | None = None,
+    ) -> _ObjectNavigationResult:
         if self._object_tracking is None:
-            return None
+            return _ObjectNavigationResult(
+                found=False,
+                arrived=False,
+                failure_reason="object tracker is not wired",
+            )
 
-        try:
-            bbox = self._get_bbox_for_current_frame(query)
-        except Exception:
-            logger.error(f"Failed to get bbox for {query}", exc_info=True)
-            return None
+        last_failure: str | None = None
+        found_once = False
+        vlm_failures = 0
+        motion_updates = 0
+        previous_metrics: tuple[float, float, float] | None = None
+        pending_motion_validation = False
+        query_for_vlm = vlm_query or query
+        while vlm_failures < max_attempts and motion_updates < max_motion_updates:
+            try:
+                bbox = self._get_bbox_for_current_frame(query_for_vlm)
+            except Exception as exc:
+                logger.error(f"Failed to get bbox for {query}", exc_info=True)
+                return _ObjectNavigationResult(
+                    found=False,
+                    arrived=False,
+                    failure_reason=f"VLM bbox query failed: {exc}",
+                )
 
-        if bbox is None:
-            logger.info("[L2]   VLM did not find %r in current frame", query)
-            return None
+            if bbox is None:
+                if not found_once:
+                    logger.info("[L2]   VLM did not find %r in current frame", query)
+                    return _ObjectNavigationResult(found=False, arrived=False)
+                vlm_failures += 1
+                last_failure = "VLM did not find the object again after a navigation retry"
+                logger.info(
+                    "[L2]   VLM did not find %r after visual adjustment "
+                    "(failure %d/%d)",
+                    query,
+                    vlm_failures,
+                    max_attempts,
+                )
+                continue
 
-        if not self._bbox_reasonable_for_tracking(bbox):
-            logger.warning(
-                "[L2]   VLM bbox for %r too large/small for tracking (%s) — skip in_frame",
+            found_once = True
+            current_metrics = self._bbox_visual_progress_metrics(bbox)
+            if current_metrics is not None and previous_metrics is not None:
+                prev_error, prev_area, prev_height = previous_metrics
+                curr_error, curr_area, curr_height = current_metrics
+                centered_better = curr_error <= prev_error - 0.015
+                bigger_better = curr_area > prev_area * 1.05 or curr_height > prev_height + 0.02
+                if centered_better or bigger_better:
+                    logger.info(
+                        "[L2]   Visual motion made progress for %r: "
+                        "center_err %.2f→%.2f, area %.3f→%.3f, height %.2f→%.2f",
+                        query,
+                        prev_error,
+                        curr_error,
+                        prev_area,
+                        curr_area,
+                        prev_height,
+                        curr_height,
+                    )
+                    vlm_failures = 0
+                    pending_motion_validation = False
+                elif pending_motion_validation:
+                    vlm_failures += 1
+                    logger.info(
+                        "[L2]   Visual motion did not improve %r "
+                        "(failure %d/%d): center_err %.2f→%.2f, "
+                        "area %.3f→%.3f, height %.2f→%.2f",
+                        query,
+                        vlm_failures,
+                        max_attempts,
+                        prev_error,
+                        curr_error,
+                        prev_area,
+                        curr_area,
+                        prev_height,
+                        curr_height,
+                    )
+                    pending_motion_validation = False
+            if current_metrics is not None:
+                previous_metrics = current_metrics
+            if vlm_failures >= max_attempts:
+                last_failure = (
+                    f"visual motion did not improve the target after {max_attempts} failures"
+                )
+                break
+
+            if not self._bbox_reasonable_for_tracking(bbox):
+                vlm_failures += 1
+                last_failure = f"VLM bbox is not suitable for tracking: {bbox}"
+                logger.warning(
+                    "[L2]   VLM bbox for %r too large/small for tracking (%s) — skip in_frame",
+                    query,
+                    bbox,
+                )
+                continue
+
+            if self._bbox_close_enough_for_arrival(bbox):
+                logger.info(
+                    "[L2]   ✓ VLM bbox for %r is close enough; accepting arrival without "
+                    "bbox navigation (%s)",
+                    query,
+                    bbox,
+                )
+                return _ObjectNavigationResult(
+                    found=True,
+                    arrived=True,
+                    message=f"Visually confirmed '{query}' close enough",
+                )
+
+            logger.info(
+                "[L2]   ✓ VLM found %r at bbox=%s, starting object tracking "
+                "(motion update %d/%d, failures %d/%d) ...",
                 query,
                 bbox,
+                motion_updates + 1,
+                max_motion_updates,
+                vlm_failures,
+                max_attempts,
             )
-            return None
 
-        logger.info("[L2]   ✓ VLM found %r at bbox=%s, starting object tracking ...", query, bbox)
+            try:
+                track_result = self._object_tracking.track(bbox)  # type: ignore[arg-type]
+            except Exception as exc:
+                logger.exception("[L2]   Object tracking failed to start for %r", query)
+                vlm_failures += 1
+                last_failure = f"object tracking failed to start: {exc}"
+                continue
+            if isinstance(track_result, dict) and track_result.get("status") != "tracking_started":
+                logger.warning("[L2]   Tracker did not start for %r: %s", query, track_result)
+                vlm_failures += 1
+                last_failure = f"tracker did not start: {track_result}"
+                continue
 
-        try:
-            track_result = self._object_tracking.track(bbox)  # type: ignore[arg-type]
-        except Exception:
-            logger.exception("[L2]   Object tracking failed to start for %r", query)
-            return None
-        if isinstance(track_result, dict) and track_result.get("status") != "tracking_started":
-            logger.warning("[L2]   Tracker did not start for %r: %s", query, track_result)
-            return None
+            servo_result = self._visual_servo_to_tracked_object(query, timeout=timeout)
+            if servo_result.arrived:
+                if self._confirm_object_in_current_frame(query_for_vlm):
+                    return servo_result
+                last_failure = "final VLM confirmation failed after visual servo"
+                logger.warning(
+                    "[L2]   Final VLM confirmation failed for %r after visual servo success; "
+                    "retrying",
+                    query,
+                )
+                vlm_failures += 1
+                time.sleep(0.5)
+                continue
+            last_failure = servo_result.failure_reason
 
+            if servo_result.made_progress:
+                motion_updates += 1
+                pending_motion_validation = True
+                logger.info(
+                    "[L2]   Retrying VLM bbox navigation for %r after effective visual "
+                    "adjustment: %s",
+                    query,
+                    last_failure,
+                )
+                time.sleep(0.5)
+                continue
+
+            vlm_failures += 1
+            if vlm_failures < max_attempts:
+                logger.info(
+                    "[L2]   Retrying VLM bbox navigation for %r after failure "
+                    "(failure %d/%d): %s",
+                    query,
+                    vlm_failures,
+                    max_attempts,
+                    last_failure,
+                )
+                time.sleep(0.5)
+
+        if motion_updates >= max_motion_updates:
+            last_failure = (
+                f"visual adjustment did not converge after {max_motion_updates} effective moves"
+            )
+
+        return _ObjectNavigationResult(
+            found=found_once or last_failure is not None,
+            arrived=False,
+            failure_reason=last_failure or "object navigation failed",
+        )
+
+    def _navigate_to_object(
+        self,
+        query: str,
+        *,
+        timeout: float = 30.0,
+        vlm_query: str | None = None,
+        announce: bool = True,
+    ) -> str | None:
+        result = self._navigate_to_object_result(query, timeout=timeout, vlm_query=vlm_query)
+        if not result.arrived:
+            return None
+        if announce:
+            self._announce_object_found(query)
+        return result.message
+
+    def _stop_visual_servo_motion(self) -> None:
+        self.tele_cmd_vel.publish(Twist.zero())
+
+    def _publish_visual_servo_motion(
+        self,
+        *,
+        forward_mps: float,
+        yaw_radps: float,
+        duration_s: float,
+    ) -> None:
+        # The project-level Twist convention uses linear.x for forward/backward
+        # (see keyboard_teleop). Send repeated short commands so the 0.2s
+        # connection watchdog does not stop the robot mid-pulse.
+        twist = Twist(
+            linear=Vector3(forward_mps, 0.0, 0.0),
+            angular=Vector3(0.0, 0.0, yaw_radps),
+        )
+        end_time = time.monotonic() + max(0.0, duration_s)
+        while time.monotonic() < end_time:
+            self.tele_cmd_vel.publish(twist)
+            time.sleep(0.05)
+        self._stop_visual_servo_motion()
+
+    def _visual_servo_to_tracked_object(
+        self,
+        query: str,
+        *,
+        timeout: float,
+    ) -> _ObjectNavigationResult:
+        if self._object_tracking is None:
+            return _ObjectNavigationResult(
+                found=True,
+                arrived=False,
+                failure_reason="object tracker is not wired",
+            )
+        if self._latest_image is None or not hasattr(self._latest_image, "data"):
+            self._object_tracking.stop_track()
+            return _ObjectNavigationResult(
+                found=True,
+                arrived=False,
+                failure_reason="camera image is not available for visual servoing",
+            )
+
+        image_h, image_w = self._latest_image.data.shape[:2]
         start_time = time.time()
-        goal_set = False
         tracking_lost_at: float | None = None
+        last_horizontal_error = 0.0
+        waiting_bbox_logged = False
+        recovery_moves = 0
+        forward_no_progress_count = 0
+        last_forward_metrics: tuple[float, float, float] | None = None
+        last_failure = "visual servoing did not converge"
 
         while time.time() - start_time < timeout:
-            # Check if navigator finished
-            if self._navigation.get_state() == NavigationState.IDLE and goal_set:
-                logger.info("[L2]   Navigation state=IDLE, checking result ...")
-                time.sleep(1.0)
-                if not self._navigation.is_goal_reached():
-                    logger.info("[L2]   ✗ Goal cancelled, tracking '%s' failed", query)
-                    self._object_tracking.stop_track()
-                    return None
-                else:
-                    logger.info("[L2]   ✓ Reached '%s'", query)
-                    self._object_tracking.stop_track()
-                    if announce:
-                        self._announce_object_found(query)
-                    return f"Successfully arrived at '{query}'"
-
-            # Fast fallback: if tracking is consecutively lost for >5s, bail early
-            if goal_set and not self._object_tracking.is_tracking():
+            if not self._object_tracking.is_tracking():
                 if tracking_lost_at is None:
                     tracking_lost_at = time.time()
-                    logger.info("[L2]   Tracking lost for %r, starting 5s grace period ...", query)
-                elif time.time() - tracking_lost_at > 5.0:
-                    logger.warning(
-                        "[L2]   ✗ Tracking lost >5s — exiting early so fallback can activate"
+                    logger.info(
+                        "[L2]   Tracking lost for %r, starting 5s grace period ...",
+                        query,
                     )
-                    self._object_tracking.stop_track()
-                    return None
+                elif time.time() - tracking_lost_at > 5.0:
+                    if recovery_moves < 3 and abs(last_horizontal_error) > 0.05:
+                        recovery_yaw = max(-0.28, min(0.28, -last_horizontal_error * 0.35))
+                        logger.warning(
+                            "[L2]   Tracking lost >5s; recovery yaw %.2frad/s toward last "
+                            "known target side",
+                            recovery_yaw,
+                        )
+                        try:
+                            self._publish_visual_servo_motion(
+                                forward_mps=0.0,
+                                yaw_radps=recovery_yaw,
+                                duration_s=0.7,
+                            )
+                        except Exception as exc:
+                            logger.exception("[L2]   Visual recovery movement failed for %r", query)
+                            last_failure = f"visual recovery movement failed: {exc}"
+                            break
+                        recovery_moves += 1
+                        tracking_lost_at = time.time()
+                    else:
+                        last_failure = "tracking was lost for more than 5 seconds"
+                        logger.warning("[L2]   ✗ Tracking lost >5s")
+                        break
+                time.sleep(0.25)
+                continue
+
+            tracking_lost_at = None
+            recovery_moves = 0
+            try:
+                bbox = self._object_tracking.get_latest_bbox()
+            except Exception as exc:
+                logger.exception("[L2]   Failed to read tracker bbox for %r", query)
+                last_failure = f"failed to read tracker bbox: {exc}"
+                break
+            if bbox is None:
+                if not waiting_bbox_logged:
+                    logger.info("[L2]   Waiting for tracker bbox for %r ...", query)
+                    waiting_bbox_logged = True
+                time.sleep(0.25)
+                continue
+            waiting_bbox_logged = False
+
+            if self._bbox_close_enough_for_arrival(cast("BBox", bbox)):
+                logger.info("[L2]   ✓ Visual servo reached '%s' with bbox=%s", query, bbox)
+                self._object_tracking.stop_track()
+                self._stop_visual_servo_motion()
+                return _ObjectNavigationResult(
+                    found=True,
+                    arrived=True,
+                    message=f"Successfully arrived at '{query}'",
+                )
+
+            x1, _y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+            center_x = (x1 + x2) / 2.0
+            horizontal_error = (center_x - image_w / 2.0) / max(1.0, image_w / 2.0)
+            last_horizontal_error = horizontal_error
+            height_ratio = max(0.0, min(1.0, (y2 - float(bbox[1])) / float(image_h)))
+
+            if abs(horizontal_error) > 0.35:
+                forward = 0.0
+                yaw = max(-0.35, min(0.35, -horizontal_error * 0.45))
+                recenter_after_turn = True
+            elif abs(horizontal_error) > 0.18:
+                forward = 0.14 if height_ratio > 0.42 else 0.20
+                yaw = max(-0.25, min(0.25, -horizontal_error * 0.55))
+                recenter_after_turn = False
             else:
-                if tracking_lost_at is not None:
-                    logger.info("[L2]   Tracking re-acquired for %r", query)
-                tracking_lost_at = None
+                forward = 0.22 if height_ratio > 0.42 else 0.28
+                yaw = max(-0.15, min(0.15, -horizontal_error * 0.30))
+                recenter_after_turn = False
 
-            if self._object_tracking.is_tracking():
-                goal_set = True
+            if forward > 0.0:
+                metrics = self._bbox_visual_progress_metrics(cast("BBox", bbox))
+                if metrics is not None and last_forward_metrics is not None:
+                    _prev_error, prev_area, prev_height = last_forward_metrics
+                    _curr_error, curr_area, curr_height = metrics
+                    forward_made_progress = (
+                        curr_area > prev_area * 1.04 or curr_height > prev_height + 0.02
+                    )
+                    if forward_made_progress:
+                        forward_no_progress_count = 0
+                    else:
+                        forward_no_progress_count += 1
+                        logger.info(
+                            "[L2]   Forward visual servo made no visible progress for '%s' "
+                            "(%d/7): area %.3f→%.3f, height %.2f→%.2f",
+                            query,
+                            forward_no_progress_count,
+                            prev_area,
+                            curr_area,
+                            prev_height,
+                            curr_height,
+                        )
+                if metrics is not None:
+                    last_forward_metrics = metrics
+            else:
+                forward_no_progress_count = 0
+                last_forward_metrics = None
 
-            time.sleep(0.25)
+            logger.info(
+                "[L2]   Visual servo '%s': bbox=%s err=%.2f height=%.2f "
+                "cmd=(forward=%.2fm/s, yaw=%.2frad/s)",
+                query,
+                bbox,
+                horizontal_error,
+                height_ratio,
+                forward,
+                yaw,
+            )
+            try:
+                self._publish_visual_servo_motion(
+                    forward_mps=forward,
+                    yaw_radps=yaw,
+                    duration_s=0.8 if forward > 0.0 else 0.6,
+                )
+            except Exception as exc:
+                logger.exception("[L2]   Visual servo movement failed for %r", query)
+                last_failure = f"visual servo movement failed: {exc}"
+                break
+            if forward > 0.0 and forward_no_progress_count >= 7:
+                logger.info(
+                    "[L2]   ✓ Treating '%s' as reached: target is centered but repeated "
+                    "forward commands made no visible progress",
+                    query,
+                )
+                self._object_tracking.stop_track()
+                self._stop_visual_servo_motion()
+                return _ObjectNavigationResult(
+                    found=True,
+                    arrived=True,
+                    message=(
+                        f"Reached '{query}' as close as possible; forward motion made no "
+                        "visible progress"
+                    ),
+                )
+            if recenter_after_turn:
+                last_failure = "target was off-center; rotated once and will retry VLM detection"
+                logger.info(
+                    "[L2]   Recentered view for '%s' with one bounded yaw pulse; "
+                    "retrying VLM detection",
+                    query,
+                )
+                self._object_tracking.stop_track()
+                self._stop_visual_servo_motion()
+                return _ObjectNavigationResult(
+                    found=True,
+                    arrived=False,
+                    failure_reason=last_failure,
+                    made_progress=True,
+                )
+            time.sleep(0.2)
 
-        logger.warning("[L2]   ✗ Navigation to '%s' timed out after %.0fs", query, timeout)
         self._object_tracking.stop_track()
-        return None
+        self._stop_visual_servo_motion()
+        if time.time() - start_time >= timeout:
+            last_failure = f"visual servoing timed out after {timeout:.0f}s"
+            logger.warning("[L2]   ✗ Visual servo to '%s' timed out after %.0fs", query, timeout)
+        return _ObjectNavigationResult(found=True, arrived=False, failure_reason=last_failure)
 
     def _resolve_landmark_from_query(self, query: str) -> SpatialRecord | None:
         q = query.strip()
@@ -980,7 +1386,7 @@ class NavigationSkillContainer(Module):
                 if vis_msg:
                     return vis_msg
             self._rotate_scan_in_place()
-            found = self._navigate_to_object(query, timeout=8.0)
+            found = self._navigate_to_object(query, timeout=_OBJECT_ROOM_SWEEP_TIMEOUT_S)
             if found:
                 return found
         return None
@@ -1028,6 +1434,201 @@ class NavigationSkillContainer(Module):
         if math.hypot(dx, dy) < 1e-6:
             return float(self._latest_odom.orientation.to_euler().z)
         return math.atan2(dy, dx)
+
+    def _vlm_query_for_object_record(self, target_name: str, target: SpatialRecord) -> str:
+        description = (target.state or "").strip()
+        if not description:
+            return target_name
+        query = f"{target_name}，外观特征：{description}"
+        logger.info("[VLM] richer object query for '%s': %s", target_name, query)
+        return query
+
+    def _rotate_to_yaw(self, yaw: float, *, min_degrees: float = 5.0) -> bool:
+        """Rotate in place to an absolute map yaw using the current odom heading."""
+        euler = self._odom_euler_tuple()
+        if euler is None:
+            return False
+        diff = yaw - euler[2]
+        diff = math.atan2(math.sin(diff), math.cos(diff))
+        diff_deg = math.degrees(diff)
+        if abs(diff_deg) < min_degrees:
+            return True
+        return self._rotate_in_place_degrees(diff_deg)
+
+    def _scan_yaws_for_object(
+        self,
+        target_name: str,
+        *,
+        center_yaw: float,
+        offsets_deg: tuple[float, ...],
+        timeout_per_view: float = _OBJECT_LOCAL_SCAN_TIMEOUT_S,
+        stop_on_found_failure: bool = True,
+        vlm_query: str | None = None,
+    ) -> str | None:
+        """Rotate through a small yaw fan and try VLM+tracking at each view."""
+        last_found_failure: str | None = None
+        for offset_deg in offsets_deg:
+            yaw = center_yaw + math.radians(offset_deg)
+            logger.info(
+                "[local_search] scanning '%s' at yaw %.1f° (offset %.0f°)",
+                target_name,
+                math.degrees(yaw),
+                offset_deg,
+            )
+            self._rotate_to_yaw(yaw)
+            time.sleep(0.3)
+            result = self._navigate_to_object_result(
+                target_name,
+                timeout=timeout_per_view,
+                vlm_query=vlm_query,
+            )
+            if result.arrived:
+                return f"Visually acquired '{target_name}' during local scan"
+            if result.found:
+                last_found_failure = (
+                    f"Visually found '{target_name}' during local scan, "
+                    f"but navigation failed after repeated VLM retries: {result.failure_reason}"
+                )
+                logger.warning("[local_search] %s", last_found_failure)
+                if stop_on_found_failure:
+                    return last_found_failure
+                continue
+        if last_found_failure is not None:
+            logger.info(
+                "[local_search] continuing after visual failures for '%s'; "
+                "trying alternate viewpoints",
+                target_name,
+            )
+        return None
+
+    def _rank_local_search_candidates(
+        self,
+        candidates: list[tuple[float, float, float]],
+        *,
+        robot_x: float,
+        robot_y: float,
+        max_attempts: int,
+    ) -> list[tuple[float, float, float]]:
+        """Pick nearby viewpoints while spreading attempts around the landmark."""
+        ranked: list[tuple[float, float, float]] = []
+        remaining = candidates[:]
+        while remaining and len(ranked) < max_attempts:
+            if not ranked:
+                best = min(remaining, key=lambda p: math.hypot(p[0] - robot_x, p[1] - robot_y))
+            else:
+
+                def score(p: tuple[float, float, float]) -> float:
+                    distance = math.hypot(p[0] - robot_x, p[1] - robot_y)
+                    min_angle_gap = min(
+                        abs(math.atan2(math.sin(p[2] - used[2]), math.cos(p[2] - used[2])))
+                        for used in ranked
+                    )
+                    return distance - 0.7 * min_angle_gap
+
+                best = min(remaining, key=score)
+            ranked.append(best)
+            remaining.remove(best)
+        return ranked
+
+    def _local_search_for_object_near_landmark(
+        self,
+        target: SpatialRecord,
+        target_name: str,
+        *,
+        radius_m: float = 3.0,
+    ) -> str | None:
+        """Search nearby viewpoints when an object is not visible at its saved coordinate."""
+        if self._latest_odom is None:
+            return None
+
+        tx, ty, tz = target.position
+        logger.info(
+            "[local_search] searching for '%s' within %.1fm of saved landmark (%.2f, %.2f)",
+            target_name,
+            radius_m,
+            tx,
+            ty,
+        )
+
+        vlm_query = self._vlm_query_for_object_record(target_name, target)
+        stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
+        center_yaw = stored_yaw if stored_yaw is not None else self._yaw_toward_point(tx, ty)
+        found = self._scan_yaws_for_object(
+            target_name,
+            center_yaw=center_yaw,
+            offsets_deg=_LOCAL_SEARCH_SCAN_OFFSETS_DEG,
+            timeout_per_view=_OBJECT_LOCAL_SCAN_TIMEOUT_S,
+            stop_on_found_failure=False,
+            vlm_query=vlm_query,
+        )
+        if found:
+            return found
+
+        rx = float(self._latest_odom.position.x)
+        ry = float(self._latest_odom.position.y)
+        radii = (0.8, 1.5, 2.3, radius_m)
+        angles = tuple(i * math.pi / 4.0 for i in range(8))
+        candidates: list[tuple[float, float, float]] = []
+        seen_cells: set[tuple[float, float]] = set()
+        for search_radius in radii:
+            if search_radius <= 0.0 or search_radius > radius_m:
+                continue
+            for angle in angles:
+                sx = float(tx) + search_radius * math.cos(angle)
+                sy = float(ty) + search_radius * math.sin(angle)
+                key = (round(sx, 2), round(sy, 2))
+                if key in seen_cells:
+                    continue
+                seen_cells.add(key)
+                candidates.append((sx, sy, angle))
+
+        ranked_candidates = self._rank_local_search_candidates(
+            candidates,
+            robot_x=rx,
+            robot_y=ry,
+            max_attempts=10,
+        )
+        for idx, (sx, sy, _) in enumerate(ranked_candidates, start=1):
+            yaw = math.atan2(float(ty) - sy, float(tx) - sx)
+            search_pose = PoseStamped(
+                position=make_vector3(sx, sy, float(tz)),
+                orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
+                frame_id="map",
+            )
+            logger.info(
+                "[local_search] viewpoint %d/%d for '%s' at (%.2f, %.2f)",
+                idx,
+                len(ranked_candidates),
+                target_name,
+                sx,
+                sy,
+            )
+            self._navigation.set_goal(search_pose)
+            _, severe = self._wait_goal_with_relocalize(
+                search_pose,
+                [0.0],
+                time.time() + 10.0,
+                self._relocalize_interval_s,
+                destination_pose=search_pose,
+                enable_visual_drift=False,
+            )
+            self._navigation.cancel_goal()
+            if severe:
+                return None
+
+            found = self._scan_yaws_for_object(
+                target_name,
+                center_yaw=yaw,
+                offsets_deg=_LOCAL_SEARCH_SCAN_OFFSETS_DEG,
+                timeout_per_view=_OBJECT_LOCAL_SCAN_TIMEOUT_S,
+                stop_on_found_failure=False,
+                vlm_query=vlm_query,
+            )
+            if found:
+                return f"{found} from a nearby viewpoint"
+
+        logger.info("[local_search] '%s' not found within %.1fm", target_name, radius_m)
+        return None
 
     def _room_name_at_position(self, x: float, y: float, *, radius: float = 2.5) -> str | None:
         """ROOM landmark whose anchor is near (x, y)."""
@@ -1453,6 +2054,53 @@ class NavigationSkillContainer(Module):
         logger.warning("[visual_acquire] ✗ '%s' not found after full 6×60° scan", target_name)
         return None
 
+    def _try_acquire_object_in_view(
+        self,
+        target_name: str,
+        stored_yaw: float | None = None,
+        vlm_query: str | None = None,
+    ) -> str | None:
+        """Try the current view only; local search handles wider scanning."""
+        if stored_yaw is not None:
+            euler = self._odom_euler_tuple()
+            if euler is not None:
+                diff = stored_yaw - euler[2]
+                diff = math.atan2(math.sin(diff), math.cos(diff))
+                diff_deg = math.degrees(diff)
+                if abs(diff_deg) > 5.0:
+                    logger.info(
+                        "[visual_acquire_once] turning %.1f° to face '%s' "
+                        "(stored yaw=%.1f°)",
+                        diff_deg,
+                        target_name,
+                        math.degrees(stored_yaw),
+                    )
+                    self._rotate_in_place_degrees(diff_deg)
+                    time.sleep(0.5)
+
+        try:
+            result = self._navigate_to_object_result(
+                target_name,
+                timeout=_OBJECT_VISUAL_NAV_TIMEOUT_S,
+                vlm_query=vlm_query,
+            )
+            if result.arrived:
+                logger.info("[visual_acquire_once] ✓ '%s' found in current view", target_name)
+                return f"Visually acquired '{target_name}'"
+            if result.found:
+                logger.warning(
+                    "[visual_acquire_once] '%s' found, but navigation failed: %s",
+                    target_name,
+                    result.failure_reason,
+                )
+                return (
+                    f"Visually found '{target_name}', but navigation failed after "
+                    f"repeated VLM retries: {result.failure_reason}"
+                )
+        except Exception:
+            logger.exception("[visual_acquire_once] VLM acquire error for '%s'", target_name)
+        return None
+
     def _parse_vlm_object_list_response(self, response: str | None) -> list[dict[str, Any]]:
         parsed = extract_json_from_llm_response(response or "")
         if parsed is None:
@@ -1826,11 +2474,64 @@ class NavigationSkillContainer(Module):
             return False
         return True
 
+    def _bbox_close_enough_for_arrival(self, bbox: BBox) -> bool:
+        if self._latest_image is None or not hasattr(self._latest_image, "data"):
+            return False
+        h, w = self._latest_image.data.shape[:2]
+        x1, y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        bw, bh = x2 - x1, y2 - y1
+        if bw <= 0 or bh <= 0:
+            return False
+        bbox_area_ratio = (bw * bh) / float(w * h)
+        bbox_height_ratio = bh / float(h)
+        bbox_width_ratio = bw / float(w)
+        return (
+            bbox_area_ratio >= 0.22
+            or bbox_height_ratio >= 0.55
+            or bbox_width_ratio >= 0.50
+        )
+
+    def _bbox_visual_progress_metrics(self, bbox: BBox) -> tuple[float, float, float] | None:
+        if self._latest_image is None or not hasattr(self._latest_image, "data"):
+            return None
+        h, w = self._latest_image.data.shape[:2]
+        x1, y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        bw, bh = x2 - x1, y2 - y1
+        if bw <= 0 or bh <= 0:
+            return None
+        center_x = (x1 + x2) / 2.0
+        abs_center_error = abs((center_x - w / 2.0) / max(1.0, w / 2.0))
+        area_ratio = (bw * bh) / float(w * h)
+        height_ratio = bh / float(h)
+        return abs_center_error, area_ratio, height_ratio
+
     def _get_bbox_for_current_frame(self, query: str) -> BBox | None:
         if self._latest_image is None:
             return None
 
         return get_object_bbox_from_image(self._vl_model, self._latest_image, query)
+
+    def _confirm_object_in_current_frame(self, query: str) -> bool:
+        if self._latest_image is None:
+            logger.warning("[L2]   Cannot confirm %r: no current camera image", query)
+            return False
+
+        detection = get_object_detection_from_image(self._vl_model, self._latest_image, query)
+        if detection is None:
+            logger.warning("[L2]   Final VLM confirmation rejected %r: no matching detection", query)
+            return False
+
+        logger.info(
+            "[L2]   Final VLM confirmation accepted %r: name=%r description=%r "
+            "confidence=%s match=%s bbox=%s",
+            query,
+            detection.name,
+            detection.description,
+            detection.confidence,
+            detection.match,
+            detection.bbox,
+        )
+        return True
 
     def _query_memory_images_with_vlm(self, query: str) -> str | None:
         """Way 1: ask VLM to inspect stored memory images for the target object.
@@ -1976,7 +2677,7 @@ class NavigationSkillContainer(Module):
                         )
                         if vis_msg:
                             return vis_msg
-                    found = self._navigate_to_object(query, timeout=15.0)
+                    found = self._navigate_to_object(query, timeout=_OBJECT_VISUAL_NAV_TIMEOUT_S)
                     if found:
                         return found
                     return (
@@ -2568,9 +3269,8 @@ class NavigationSkillContainer(Module):
             approach_deadline = time.time() + 180.0
             _last_logged_dist = float("inf")
             dist = float("inf")
-            effective_arrival_distance = (
-                max(arrival_distance, 0.85) if is_object_landmark else arrival_distance
-            )
+            effective_arrival_distance = arrival_distance
+            accepted_safe_arrival = False
             while time.time() < approach_deadline:
                 dist = self._planar_distance_to_pose(standoff_pose)
                 if abs(dist - _last_logged_dist) > 0.15:
@@ -2612,10 +3312,11 @@ class NavigationSkillContainer(Module):
                         target.name,
                         dist,
                     )
+                    accepted_safe_arrival = True
                     break
 
             self._navigation.cancel_goal()
-            if dist > effective_arrival_distance:
+            if dist > effective_arrival_distance and not accepted_safe_arrival:
                 stale_reason = self._coordinate_frame_stale_reason(target)
                 if stale_reason:
                     return f"Navigation timed out for '{target.name}': {stale_reason}"
@@ -2631,35 +3332,38 @@ class NavigationSkillContainer(Module):
             vis_msg = ""
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = (
-                    self._visual_acquire_object(
-                        tname,
-                        stored_yaw,
-                        description=target.state or None,
-                        announce=False,
-                    )
-                    or ""
-                )
                 tag = "Visual acquire (retry)" if retry else "Visual acquire"
+                vlm_query = self._vlm_query_for_object_record(tname, target)
+                vis_msg = self._try_acquire_object_in_view(
+                    tname,
+                    stored_yaw,
+                    vlm_query=vlm_query,
+                ) or ""
                 if vis_msg:
                     logger.info("[L3] %s: %s", tag, vis_msg)
                 else:
                     logger.warning("[L3] %s: '%s' not found in view", tag, tname)
-
-            # Object landmark + camera doesn't see it: do NOT run arrival_action
-            # (pointing / waving at a non-visible object is misleading). Return a
-            # clear failure so the agent can choose its next step.
-            if is_object_landmark and not vis_msg:
-                suffix = " after drift recovery" if retry else ""
-                return (
-                    f"Arrived at stored '{tname}' coordinate{suffix} but the camera "
-                    f"could not visually acquire '{tname}'. The original landmark may "
-                    "be a VLM hallucination, the object may have moved, or the stored "
-                    "bearing may be inaccurate. Try `detect_objects_in_view` to see "
-                    "what is actually here, or move and re-scan. arrival_action skipped."
-                )
-
+                    vis_msg = self._local_search_for_object_near_landmark(target, tname) or ""
+                    if vis_msg:
+                        logger.info("[L3] Local search%s: %s", " (retry)" if retry else "", vis_msg)
+                    else:
+                        logger.warning(
+                            "[L3] Local search%s: '%s' not found nearby",
+                            " (retry)" if retry else "",
+                            tname,
+                        )
             if run_arrival_action:
+                visual_nav_failed = "but navigation failed" in vis_msg.lower()
+                if is_object_landmark and (not vis_msg or visual_nav_failed):
+                    if vis_msg:
+                        return vis_msg
+                    suffix = " after drift recovery" if retry else ""
+                    return (
+                        f"Arrived at stored '{tname}' coordinate{suffix} but the camera "
+                        f"could not visually acquire '{tname}'. The original landmark may "
+                        "be a VLM hallucination, the object may have moved, or the stored "
+                        "bearing may be inaccurate. Local search failed; arrival_action skipped."
+                    )
                 action_msg = self._run_arrival_action(arrival_action, tname)
                 if is_object_landmark:
                     self._announce_object_found(tname)
@@ -2676,6 +3380,11 @@ class NavigationSkillContainer(Module):
                 self._announce_object_found(tname)
             if vis_msg:
                 return f"{base} ({vis_msg})"
+            if is_object_landmark:
+                return (
+                    f"{base} (could not visually acquire '{tname}'; "
+                    "local search failed; arrival_action not run)."
+                )
             return f"{base} (arrival_action not run)."
 
         # First attempt

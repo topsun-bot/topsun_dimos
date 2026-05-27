@@ -22,6 +22,7 @@ from dimos.navigation.visual.query import (
     _sanitize_description,
     get_object_bbox_from_image,
     parse_object_bbox_from_vlm_response,
+    parse_object_detection_from_vlm_response,
     vlm_object_present_in_view,
 )
 
@@ -68,9 +69,67 @@ def test_parse_picks_label_match() -> None:
     assert bbox[0] == 200.0
 
 
+def test_parse_rejects_similar_chinese_furniture_label() -> None:
+    result = [
+        {"bbox_2d": [0, 0, 100, 100], "label": "沙发"},
+        {"bbox_2d": [100, 100, 200, 200], "label": "椅子"},
+    ]
+    bbox = parse_object_bbox_from_vlm_response(
+        result,
+        "凳子, 外观特征: 淡绿色塑料高脚凳, 四条腿设计",
+        _img(1000, 1000),
+    )
+    assert bbox is None
+
+
+def test_parse_accepts_stool_variant_for_chinese_query() -> None:
+    result = [
+        {"bbox_2d": [0, 0, 100, 100], "label": "沙发"},
+        {"bbox_2d": [200, 200, 300, 300], "label": "高脚凳"},
+    ]
+    bbox = parse_object_bbox_from_vlm_response(
+        result,
+        "凳子, 外观特征: 淡绿色塑料高脚凳, 四条腿设计",
+        _img(1000, 1000),
+    )
+    assert bbox is not None
+    assert bbox[0] == 200.0
+
+
+def test_parse_respects_explicit_false_match() -> None:
+    result = {
+        "name": "凳子",
+        "description": "looks like a sofa, not the requested stool",
+        "match": False,
+        "bbox": [100, 100, 200, 200],
+    }
+    bbox = parse_object_bbox_from_vlm_response(
+        result,
+        "凳子, 外观特征: 淡绿色塑料高脚凳, 四条腿设计",
+        _img(1000, 1000),
+    )
+    assert bbox is None
+
+
+def test_parse_preserves_zero_confidence() -> None:
+    result = {
+        "name": "凳子",
+        "confidence": 0.0,
+        "match": True,
+        "bbox": [100, 100, 200, 200],
+    }
+    detection = parse_object_detection_from_vlm_response(
+        result,
+        "凳子",
+        _img(1000, 1000),
+    )
+    assert detection is not None
+    assert detection.confidence == 0.0
+
+
 def test_parse_normalized_fraction() -> None:
     result = {"bbox": [0.1, 0.2, 0.5, 0.6]}
-    bbox = parse_object_bbox_from_vlm_response(result, "x", _img(200, 100))
+    bbox = parse_object_bbox_from_vlm_response(result, "", _img(200, 100))
     assert bbox == (20.0, 20.0, 100.0, 60.0)
 
 
