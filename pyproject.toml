@@ -216,6 +216,7 @@ agents = [
 
 web = [
     "fastapi>=0.115.6",
+    "python-multipart>=0.0.27",
     "sse-starlette>=2.2.1",
     "uvicorn>=0.34.0",
     "jinja2>=3.1.6",
@@ -236,7 +237,7 @@ perception = [
 
 unitree = [
     "dimos[base]",
-    "unitree-webrtc-connect-leshy>=2.0.7"
+    "unitree-webrtc-connect>=2.1.2"
 ]
 
 unitree-dds = [
@@ -407,7 +408,7 @@ tests = [
     "pygame>=2.6.1",
     "python-can>=4",
     "langchain-chroma>=1,<2",
-    "unitree-webrtc-connect-leshy>=2.0.7",
+    "unitree-webrtc-connect>=2.1.2",
 
     {include-group = "project-deps"},
 ]
@@ -495,6 +496,8 @@ ignore = [
 # Chinese VLM prompts intentionally use full-width punctuation.
 "dimos/agents/skills/navigation.py" = ["RUF001"]
 "dimos/agents/skills/follow_me.py" = ["RUF001", "RUF002"]
+"dimos/agents/system_prompt.py" = ["RUF001"]
+"dimos/navigation/visual/query.py" = ["RUF001"]
 "dimos/robot/unitree/go2/blueprints/agentic/unitree_go2_qwen_follow.py" = ["RUF001", "RUF002"]
 # Naming needs to match the actual libraries.
 "stubs/*.pyi" = ["N801", "N802", "N803", "N815", "N816", "N818"]
@@ -610,6 +613,7 @@ ignore = [
     "*/package-lock.json",
     "dimos/dashboard/dimos.rbl",
     "dimos/web/dimos_interface/themes.json",
+    "dimos/agents/skills/navigation.py",
     "dimos/manipulation/manipulation_module.py",
     "dimos/navigation/nav_stack/modules/*/main.cpp",
     "dimos/navigation/nav_stack/common/*.hpp",

@@ -575,6 +575,11 @@ class SpatialMemory(Module):
         return self.vector_db.query_by_text(text, limit)
 
     @rpc
+    def get_memory_locations(self) -> list[dict[str, float | str]]:
+        """Return stored spatial memory frame locations and timestamps."""
+        return self.vector_db.get_memory_locations()
+
+    @rpc
     def add_robot_location(self, location: RobotLocation) -> bool:
         """
         Add a named robot location to spatial memory.

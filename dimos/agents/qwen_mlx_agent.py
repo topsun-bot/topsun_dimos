@@ -17,8 +17,8 @@ import socket
 from typing import Any
 from urllib.parse import urlparse
 
-DEFAULT_QWEN_MLX_BASE_URL = "http://10.10.197.175:8080"
-DEFAULT_QWEN_MLX_MODEL = "/Users/dijia/models/Qwen3.6-27B-mlx-bf16"
+DEFAULT_QWEN_MLX_BASE_URL = "http://127.0.0.1:8080"
+DEFAULT_QWEN_MLX_MODEL = "Qwen3.6-27B-mlx-bf16"
 DEFAULT_QWEN_MLX_TIMEOUT_SECONDS = 180.0
 
 

@@ -69,6 +69,22 @@ Prints `SOURCE NAME IP MAC SERIAL` for every robot it sees over BLE and LAN. Exp
 export ROBOT_IP=<discovered_ip>
 ```
 
+4. Newer Go2/G1 firmware may require the per-device WebRTC AES-128 key for LAN
+   connections. Fetch it once from the Unitree cloud account that is bound to
+   the robot:
+
+```bash
+uv run scripts/fetch_unitree_aes_key.py <account> <password> <serial-number> --region cn
+```
+
+The script prints only the key to stdout and diagnostic details to stderr. Pass
+the key to DimOS when starting the robot:
+
+```bash
+export UNITREE_AES_KEY=<32-hex-character-key>
+dimos --robot-ip "$ROBOT_IP" --unitree-webrtc-aes-key "$UNITREE_AES_KEY" run unitree-go2
+```
+
 ### Pre-flight checks
 
 1. Robot is reachable and low latency <10ms, 0% packet loss
