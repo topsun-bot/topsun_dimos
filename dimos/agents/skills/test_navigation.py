@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +27,7 @@ from dimos.core.module import Module
 from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image
@@ -291,6 +293,14 @@ class _FakeExplorer:
     def end_exploration(self) -> str:
         self.stopped = True
         return "Stopped exploration."
+
+
+class _FakeTeleCmdVel:
+    def __init__(self) -> None:
+        self.published: list[Twist] = []
+
+    def publish(self, twist: Twist) -> None:
+        self.published.append(twist)
 
 
 def _pose(x: float, y: float, yaw: float = 0.0) -> PoseStamped:
@@ -992,6 +1002,30 @@ def test_stop_all_motion_cancels_tracking_and_recovers() -> None:
     assert nav._object_tracking.stopped is True
     assert nav._frontier_explorer.stopped is True
     assert nav._unitree_skill_container.commands == ["RecoveryStand"]
+
+
+def test_visual_servo_motion_can_be_cancelled() -> None:
+    nav = _nav_container()
+    nav.tele_cmd_vel = _FakeTeleCmdVel()
+    nav._visual_servo_cancel_event = threading.Event()
+
+    worker = threading.Thread(
+        target=nav._publish_visual_servo_motion,
+        kwargs={"forward_mps": 0.4, "yaw_radps": 0.0, "duration_s": 2.0},
+    )
+
+    started_at = time.monotonic()
+    worker.start()
+    while not nav.tele_cmd_vel.published and time.monotonic() - started_at < 0.5:
+        time.sleep(0.01)
+
+    nav._cancel_visual_servo_motion()
+    worker.join(timeout=0.5)
+
+    assert not worker.is_alive()
+    assert time.monotonic() - started_at < 1.0
+    assert nav._visual_servo_cancel_event.is_set()
+    assert nav.tele_cmd_vel.published[-1].linear.x == 0.0
 
 
 def test_coordinate_frame_stale_detected_from_visual_room_mismatch() -> None:

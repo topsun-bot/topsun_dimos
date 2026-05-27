@@ -192,7 +192,7 @@ class ObjectTracker2D(Module):
             self.stop_track()
             return {"status": "init_failed", "reason": str(exc)}
 
-        if init_result is False:
+        if init_result is not None and not bool(init_result):
             logger.error("Tracker initialization failed.")
             self.stop_track()
             return {"status": "init_failed"}

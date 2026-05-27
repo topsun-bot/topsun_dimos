@@ -22,6 +22,14 @@ class DummyTracker:
         return None
 
 
+class DummyFailedTracker:
+    def __init__(self, init_result):
+        self._init_result = init_result
+
+    def init(self, frame, bbox):
+        return self._init_result
+
+
 def test_track_accepts_none_return_from_init(monkeypatch):
     tracker = ObjectTracker2D()
     try:
@@ -38,5 +46,43 @@ def test_track_accepts_none_return_from_init(monkeypatch):
         assert result["status"] == "tracking_started"
         assert tracker.tracking_initialized is True
         assert tracker.tracking_bbox == (20, 30, 60, 60)
+    finally:
+        tracker.stop()
+
+
+def test_track_rejects_falsey_init_result(monkeypatch):
+    tracker = ObjectTracker2D()
+    try:
+        tracker._latest_rgb_frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        tracker._start_tracking_thread = lambda: None
+
+        monkeypatch.setattr(
+            "dimos.perception.object_tracker_2d._create_opencv_tracker",
+            lambda: DummyFailedTracker(0),
+        )
+
+        result = tracker.track([20, 30, 80, 90])
+
+        assert result["status"] == "init_failed"
+        assert tracker.tracking_initialized is False
+    finally:
+        tracker.stop()
+
+
+def test_track_rejects_numpy_false_init_result(monkeypatch):
+    tracker = ObjectTracker2D()
+    try:
+        tracker._latest_rgb_frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        tracker._start_tracking_thread = lambda: None
+
+        monkeypatch.setattr(
+            "dimos.perception.object_tracker_2d._create_opencv_tracker",
+            lambda: DummyFailedTracker(np.bool_(False)),
+        )
+
+        result = tracker.track([20, 30, 80, 90])
+
+        assert result["status"] == "init_failed"
+        assert tracker.tracking_initialized is False
     finally:
         tracker.stop()

@@ -33,7 +33,7 @@ logger = setup_logger(level=logging.DEBUG)
 
 
 class Config(ModuleConfig):
-    enabled: bool = False
+    enabled: bool = True
     goal_distance: float = 1.0
     world_frame: str = "world"
     min_goal_interval_s: float = 1.0

@@ -306,6 +306,7 @@ class NavigationSkillContainer(Module):
     _frontier_explorer: WavefrontFrontierExplorer | None = None
     _memory_session_id: str = ""
     _memory_blindspot_patrol_stop: bool = False
+    _visual_servo_cancel_event: threading.Event
 
     color_image: In[Image]
     odom: In[PoseStamped]
@@ -316,6 +317,7 @@ class NavigationSkillContainer(Module):
         super().__init__(**kwargs)
         self._skill_started = False
         self._memory_session_id = f"session_{int(time.time())}"
+        self._visual_servo_cancel_event = threading.Event()
 
         self._vl_model = _create_vl_model()
         _log_vlm_runtime_config(self._vl_model)
@@ -330,6 +332,7 @@ class NavigationSkillContainer(Module):
 
     @rpc
     def stop(self) -> None:
+        self._cancel_visual_servo_motion()
         super().stop()
 
     def _on_color_image(self, image: Image) -> None:
@@ -1133,7 +1136,21 @@ class NavigationSkillContainer(Module):
         return result.message
 
     def _stop_visual_servo_motion(self) -> None:
-        self.tele_cmd_vel.publish(Twist.zero())
+        try:
+            self.tele_cmd_vel.publish(Twist.zero())
+        except AttributeError:
+            logger.debug("Skipping visual servo stop: tele_cmd_vel is not wired")
+
+    def _get_visual_servo_cancel_event(self) -> threading.Event:
+        event = getattr(self, "_visual_servo_cancel_event", None)
+        if event is None:
+            event = threading.Event()
+            self._visual_servo_cancel_event = event
+        return event
+
+    def _cancel_visual_servo_motion(self) -> None:
+        self._get_visual_servo_cancel_event().set()
+        self._stop_visual_servo_motion()
 
     def _publish_visual_servo_motion(
         self,
@@ -1150,7 +1167,8 @@ class NavigationSkillContainer(Module):
             angular=Vector3(0.0, 0.0, yaw_radps),
         )
         end_time = time.monotonic() + max(0.0, duration_s)
-        while time.monotonic() < end_time:
+        cancel_event = self._get_visual_servo_cancel_event()
+        while time.monotonic() < end_time and not cancel_event.is_set():
             self.tele_cmd_vel.publish(twist)
             time.sleep(0.05)
         self._stop_visual_servo_motion()
@@ -1167,6 +1185,8 @@ class NavigationSkillContainer(Module):
                 arrived=False,
                 failure_reason="object tracker is not wired",
             )
+        cancel_event = self._get_visual_servo_cancel_event()
+        cancel_event.clear()
         if self._latest_image is None or not hasattr(self._latest_image, "data"):
             self._object_tracking.stop_track()
             return _ObjectNavigationResult(
@@ -1191,6 +1211,10 @@ class NavigationSkillContainer(Module):
         last_failure = "visual servoing did not converge"
 
         while time.time() - start_time < timeout:
+            if cancel_event.is_set():
+                last_failure = "visual servoing was cancelled"
+                logger.info("[L2]   Visual servo for '%s' cancelled", query)
+                break
             if not self._object_tracking.is_tracking():
                 if tracking_lost_at is None:
                     tracking_lost_at = time.time()
@@ -1240,9 +1264,20 @@ class NavigationSkillContainer(Module):
                 time.sleep(0.25)
                 continue
             waiting_bbox_logged = False
+            try:
+                tracked_bbox: BBox = (
+                    float(bbox[0]),
+                    float(bbox[1]),
+                    float(bbox[2]),
+                    float(bbox[3]),
+                )
+            except (IndexError, TypeError, ValueError) as exc:
+                logger.warning("[L2]   Invalid tracker bbox for %r: %s", query, bbox)
+                last_failure = f"invalid tracker bbox: {exc}"
+                break
 
-            if self._bbox_close_enough_for_arrival(cast("BBox", bbox)):
-                logger.info("[L2]   ✓ Visual servo reached '%s' with bbox=%s", query, bbox)
+            if self._bbox_close_enough_for_arrival(tracked_bbox):
+                logger.info("[L2]   ✓ Visual servo reached '%s' with bbox=%s", query, tracked_bbox)
                 self._object_tracking.stop_track()
                 self._stop_visual_servo_motion()
                 return _ObjectNavigationResult(
@@ -1252,15 +1287,15 @@ class NavigationSkillContainer(Module):
                     requires_final_confirmation=False,
                 )
 
-            x1, _y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+            x1, y1, x2, y2 = tracked_bbox
             center_x = (x1 + x2) / 2.0
             horizontal_error = (center_x - image_w / 2.0) / max(1.0, image_w / 2.0)
             last_horizontal_error = horizontal_error
-            height_ratio = max(0.0, min(1.0, (y2 - float(bbox[1])) / float(image_h)))
+            height_ratio = max(0.0, min(1.0, (y2 - y1) / float(image_h)))
             if abs(horizontal_error) <= _VISUAL_SERVO_CENTERED_ERR and height_ratio >= 0.25:
                 if centered_visible_since is None:
                     centered_visible_since = time.time()
-                centered_timeout_bbox = cast("BBox", bbox)
+                centered_timeout_bbox = tracked_bbox
                 centered_timeout_error = horizontal_error
                 centered_timeout_height = height_ratio
             else:
@@ -1290,7 +1325,7 @@ class NavigationSkillContainer(Module):
                 recenter_after_turn = False
 
             if forward > 0.0:
-                metrics = self._bbox_visual_progress_metrics(cast("BBox", bbox))
+                metrics = self._bbox_visual_progress_metrics(tracked_bbox)
                 if metrics is not None and last_forward_metrics is not None:
                     _prev_error, prev_area, prev_height = last_forward_metrics
                     _curr_error, curr_area, curr_height = metrics
@@ -3669,6 +3704,7 @@ class NavigationSkillContainer(Module):
         return "\n".join(lines)
 
     def _cancel_goal_and_stop(self) -> None:
+        self._cancel_visual_servo_motion()
         self._navigation.cancel_goal()
 
     def _get_goal_pose_from_result(self, result: dict[str, Any]) -> PoseStamped | None:
