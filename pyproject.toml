@@ -494,6 +494,8 @@ ignore = [
 "dimos/models/Detic/*" = ["ALL"]
 # Chinese VLM prompts intentionally use full-width punctuation.
 "dimos/agents/skills/navigation.py" = ["RUF001"]
+"dimos/agents/system_prompt.py" = ["RUF001"]
+"dimos/navigation/visual/query.py" = ["RUF001"]
 # Naming needs to match the actual libraries.
 "stubs/*.pyi" = ["N801", "N802", "N803", "N815", "N816", "N818"]
 

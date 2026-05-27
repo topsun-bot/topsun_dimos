@@ -35,7 +35,10 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
 )
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.navigation.topology import TopologyGraph
-from dimos.navigation.visual.query import get_object_bbox_from_image
+from dimos.navigation.visual.query import (
+    get_object_bbox_from_image,
+    vlm_object_present_in_view,
+)
 from dimos.perception.object_tracking_spec import ObjectTrackingSpec
 from dimos.perception.spatial_memory_spec import SpatialMemorySpec
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
@@ -778,11 +781,13 @@ class NavigationSkillContainer(Module):
         if not rooms:
             logger.info("[L4]   No room-type landmarks — sweep skipped")
             return None
-        # Look up stored object bearing if available
+        # Look up stored object bearing + description if available
         obj_rec = self._resolve_landmark_from_query(query)
         stored_yaw: float | None = None
+        description: str | None = None
         if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
             stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
+            description = obj_rec.state or None
         logger.info("[L4]   Sweeping %d room(s) ...", len(rooms))
         for ri, room in enumerate(rooms):
             rname = room.name or room.record_id
@@ -806,7 +811,7 @@ class NavigationSkillContainer(Module):
                 continue
             # Use stored bearing if available, then VLM acquire + track
             if stored_yaw is not None:
-                vis_msg = self._visual_acquire_object(query, stored_yaw)
+                vis_msg = self._visual_acquire_object(query, stored_yaw, description=description)
                 if vis_msg:
                     return vis_msg
             self._rotate_scan_in_place()
@@ -815,19 +820,32 @@ class NavigationSkillContainer(Module):
                 return found
         return None
 
-    def _rotate_scan_in_place(self) -> None:
+    def _rotate_scan_in_place(self, steps: int = 6, settle_s: float = 0.2) -> None:
+        """Spin in place by stepping through ``steps`` rotations of 360/steps degrees.
+
+        A single ``relative_move(degrees=360)`` call is a no-op: the planner
+        normalises yaw modulo 2π, so the goal yaw equals the start yaw and the
+        robot does not actually rotate. Stepping by 60° (default) avoids the
+        wrap-around so the robot really sweeps a full circle.
+        """
         us = self._unitree_skill_container
         if us is None:
             logger.warning("360 scan: no UnitreeSkillContainer wired; pausing briefly instead")
             time.sleep(1.0)
             return
-        try:
-            if hasattr(us, "relative_move"):
-                us.relative_move(forward=0.0, left=0.0, degrees=360.0)
-            elif hasattr(us, "move"):
-                us.move(x=0.0, y=0.0, yaw=360.0)
-        except Exception:
-            logger.exception("360 scan rotation failed")
+        step_deg = 360.0 / float(max(1, steps))
+        for _ in range(steps):
+            try:
+                if hasattr(us, "relative_move"):
+                    us.relative_move(forward=0.0, left=0.0, degrees=step_deg)
+                elif hasattr(us, "move"):
+                    us.move(x=0.0, y=0.0, yaw=step_deg)
+                else:
+                    return
+            except Exception:
+                logger.exception("360 scan rotation failed")
+                return
+            time.sleep(settle_s)
 
     def _planar_distance_to_pose(self, pose: PoseStamped) -> float:
         if self._latest_odom is None:
@@ -1144,27 +1162,83 @@ class NavigationSkillContainer(Module):
         out = us.execute_sport_command(cmd)
         return f"Reached '{target_name}', executing arrival_action={action!r}: {out}"
 
-    def _visual_acquire_object(
-        self, target_name: str, stored_yaw: float | None = None, *, announce: bool = True
-    ) -> str | None:
-        """After reaching object coordinates, visually locate and face the object.
+    def _vlm_sees_in_view(self, query: str) -> BBox | None:
+        """Bbox-returning VLM check (used by :meth:`_navigate_to_object` to
+        seed the OpenCV tracker — the bbox is required there).
 
-        If a stored bearing is available, rotate to face that direction first,
-        then use VLM detection + tracking to fine-align.
+        For yes/no presence questions where the bbox is irrelevant
+        (:meth:`_visual_acquire_object`, :meth:`verify_object_in_view`), use
+        :meth:`_vlm_object_present_in_view` instead — it is a single VLM call
+        with stricter prompting and supports a free-text disambiguation hint.
+        """
+        if self._latest_image is None:
+            return None
+        try:
+            return self._get_bbox_for_current_frame(query)
+        except Exception:
+            logger.exception("[visual_acquire] VLM bbox check failed for %r", query)
+            return None
+
+    def _vlm_object_present_in_view(self, query: str, *, description: str | None = None) -> bool:
+        """Single-call yes/no presence check on the latest camera frame.
+
+        Args:
+            query: Object name (e.g. ``"水桶"``).
+            description: Optional disambiguation hint, typically the stored
+                landmark ``state`` (``"桌上的透明矿泉水瓶"``). Helps the VLM
+                tell similar objects apart (水瓶 vs 水桶, 书桌 vs 会议桌).
+        """
+        if self._latest_image is None:
+            return False
+        try:
+            return vlm_object_present_in_view(
+                self._vl_model, self._latest_image, query, description=description
+            )
+        except Exception:
+            logger.exception("[visual_acquire] VLM presence check failed for %r", query)
+            return False
+
+    def _visual_acquire_object(
+        self,
+        target_name: str,
+        stored_yaw: float | None = None,
+        *,
+        description: str | None = None,
+        announce: bool = True,
+    ) -> str | None:
+        """After arriving at the landmark, confirm the target is in the camera.
+
+        Pure visual-confirmation flow (no walking, no tracker):
+          1. (Optional) face the stored bearing if it differs from current yaw.
+          2. VLM-check the current frame. If found → success.
+          3. Otherwise rotate 60° in place, settle, VLM-check again.
+             Repeat up to 6 times (full 360° sweep).
+          4. If all 6 steps complete without sighting → failure (return None).
+
+        Sighting is established purely from the VLM bbox detection — the
+        OpenCV tracker (used by :meth:`_navigate_to_object`) is irrelevant
+        for "does the camera see it?" and its init is fragile on low-contrast
+        bboxes, so we do not require tracker init success here.
 
         Args:
             target_name: The object name to search for.
-            stored_yaw: If known, the world-frame yaw angle (radians) to face first.
+            stored_yaw: World-frame yaw (radians) where the object was
+                originally observed, if known.
+            description: Optional disambiguation hint passed to the VLM (the
+                stored landmark ``state``, e.g. ``"桌上的透明矿泉水瓶"``).
+                Reduces same-radical confusions (水瓶 vs 水桶) at no extra
+                latency cost — it just rides along on the same VLM call.
 
         Returns:
-            Success message if object was visually acquired, None otherwise.
+            Success message if the camera sees the object, else ``None``.
         """
-        # Step 1: face the stored bearing if available
         if stored_yaw is not None:
             euler = self._odom_euler_tuple()
             if euler is not None:
-                diff = stored_yaw - euler[2]
-                diff = math.atan2(math.sin(diff), math.cos(diff))
+                diff = math.atan2(
+                    math.sin(stored_yaw - euler[2]),
+                    math.cos(stored_yaw - euler[2]),
+                )
                 diff_deg = math.degrees(diff)
                 if abs(diff_deg) > 5.0:
                     logger.info(
@@ -1176,32 +1250,42 @@ class NavigationSkillContainer(Module):
                     self._rotate_in_place_degrees(diff_deg)
                     time.sleep(0.5)
 
-        # Step 2: VLM detection + tracking in current view
-        try:
-            result = self._navigate_to_object(target_name, timeout=15.0, announce=False)
-            if result:
-                logger.info("[visual_acquire] ✓ '%s' found in current view", target_name)
+        if self._vlm_object_present_in_view(target_name, description=description):
+            logger.info("[visual_acquire] ✓ '%s' found in current view", target_name)
+            if announce:
+                self._announce_object_found(target_name)
+            return f"Visually acquired '{target_name}'"
+
+        logger.info(
+            "[visual_acquire] '%s' not in current view; starting 6×60° rotational scan",
+            target_name,
+        )
+        steps = 6
+        step_deg = 60.0
+        for i in range(steps):
+            if not self._rotate_in_place_degrees(step_deg):
+                logger.warning(
+                    "[visual_acquire] rotation step %d/%d failed for '%s'",
+                    i + 1,
+                    steps,
+                    target_name,
+                )
+                return None
+            time.sleep(0.3)  # let the camera publish a fresh frame
+            if self._vlm_object_present_in_view(target_name, description=description):
+                rotated = int(step_deg * (i + 1))
+                logger.info(
+                    "[visual_acquire] ✓ '%s' found at step %d/%d (%d° rotated)",
+                    target_name,
+                    i + 1,
+                    steps,
+                    rotated,
+                )
                 if announce:
                     self._announce_object_found(target_name)
-                return f"Visually acquired '{target_name}'"
-        except Exception:
-            logger.exception("[visual_acquire] VLM re-scan error for '%s'", target_name)
+                return f"Visually acquired '{target_name}' after {rotated}° scan"
 
-        # Step 3: 360° scan if not in current view
-        logger.info("[visual_acquire] '%s' not in view; doing 360° scan ...", target_name)
-        self._rotate_scan_in_place()
-        time.sleep(0.5)
-        try:
-            result = self._navigate_to_object(target_name, timeout=10.0, announce=False)
-            if result:
-                logger.info("[visual_acquire] ✓ '%s' found after 360° scan", target_name)
-                if announce:
-                    self._announce_object_found(target_name)
-                return f"Visually acquired '{target_name}' after 360° scan"
-        except Exception:
-            logger.exception("[visual_acquire] VLM re-scan after 360° error for '%s'", target_name)
-
-        logger.warning("[visual_acquire] ✗ '%s' not found visually", target_name)
+        logger.warning("[visual_acquire] ✗ '%s' not found after full 6×60° scan", target_name)
         return None
 
     def _parse_vlm_object_list_response(self, response: str | None) -> list[dict[str, Any]]:
@@ -1444,6 +1528,62 @@ class NavigationSkillContainer(Module):
         )
 
     @skill
+    def verify_object_in_view(self, name: str) -> str:
+        """Re-confirm a specific object is currently visible in the camera.
+
+        Asks the VLM a single yes/no question about the current frame; if it
+        misses, rotate in 6 x 60-degree steps with another yes/no after each
+        step. The stored landmark description (``state``, e.g.
+        ``"桌上的透明矿泉水瓶"``) — if any — is forwarded to the VLM as a
+        disambiguation hint, which catches same-radical confusions like
+        水瓶 ↔ 水桶 or 书桌 ↔ 会议桌 without an extra round-trip.
+
+        Call this whenever you need to verify physical presence — DO NOT rely
+        on dialogue memory. The physical world can change between requests
+        (objects can be moved by humans). For example, if you JUST navigated
+        to "展示板" but the user asks again to find "展示板", call this skill
+        to confirm it is still there — never reply "we are already there"
+        without verifying.
+
+        This skill does NOT navigate. If verification fails, follow up with
+        ``navigate_with_text`` to search elsewhere.
+
+        Args:
+            name: The object name (typically Chinese, e.g. "展示板") to look
+                for in the current camera view.
+
+        Returns:
+            str: ``"YES: ..."`` if the object is visible (with rotation amount
+            if a scan was needed), or ``"NO: ..."`` if not seen after the full
+            sweep, including a hint to search elsewhere.
+        """
+        if not self._skill_started:
+            raise ValueError(f"{self} has not been started.")
+        if self._latest_image is None:
+            return "NO: no camera image available."
+
+        logger.info("[verify_object_in_view] START name=%r", name)
+        description: str | None = None
+        try:
+            obj_rec = self._resolve_landmark_from_query(name)
+        except Exception:
+            obj_rec = None
+        if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
+            description = obj_rec.state or None
+            if description:
+                logger.info("[verify_object_in_view] using stored description=%r", description)
+
+        result = self._visual_acquire_object(name, stored_yaw=None, description=description)
+        if result is not None:
+            return f"YES: {result}. The camera currently sees '{name}'."
+        return (
+            f"NO: '{name}' is NOT visible in the camera after a full 6x60deg scan. "
+            "The object may have been moved or is no longer here. "
+            f"Use `navigate_with_text({name!r})` to search other locations, or "
+            "`detect_objects_in_view` to list what is actually here."
+        )
+
+    @skill
     def detect_objects_in_view(self) -> str:
         """Detect nameable objects in the current camera frame using VLM.
 
@@ -1644,12 +1784,16 @@ class NavigationSkillContainer(Module):
                     # Use stored bearing if object was previously tagged
                     obj_rec = self._resolve_landmark_from_query(query)
                     stored_yaw: float | None = None
+                    description: str | None = None
                     if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
                         stored_yaw = (
                             obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
                         )
+                        description = obj_rec.state or None
                     if stored_yaw is not None:
-                        vis_msg = self._visual_acquire_object(query, stored_yaw)
+                        vis_msg = self._visual_acquire_object(
+                            query, stored_yaw, description=description
+                        )
                         if vis_msg:
                             return vis_msg
                     found = self._navigate_to_object(query, timeout=15.0)
@@ -1695,7 +1839,9 @@ class NavigationSkillContainer(Module):
         obj_rec = self._resolve_landmark_from_query(query)
         if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
             stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
-            vis_msg = self._visual_acquire_object(query, stored_yaw, announce=False)
+            vis_msg = self._visual_acquire_object(
+                query, stored_yaw, description=obj_rec.state or None, announce=False
+            )
             self._announce_object_found(query)
             if vis_msg:
                 return f"{prefix} ({vis_msg})"
@@ -2057,35 +2203,63 @@ class NavigationSkillContainer(Module):
                 )
             return None  # Success
 
-        # First attempt
-        err = _try_navigate()
-        if err is None:
+        def _post_arrival_message(*, retry: bool) -> str:
+            """Common arrival logic: visual acquire → conditionally run arrival_action."""
             tname = target.name or target.record_id
             vis_msg = ""
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw, announce=False) or ""
+                vis_msg = (
+                    self._visual_acquire_object(
+                        tname,
+                        stored_yaw,
+                        description=target.state or None,
+                        announce=False,
+                    )
+                    or ""
+                )
+                tag = "Visual acquire (retry)" if retry else "Visual acquire"
                 if vis_msg:
-                    logger.info("[L3] Visual acquire: %s", vis_msg)
+                    logger.info("[L3] %s: %s", tag, vis_msg)
                 else:
-                    logger.warning("[L3] Visual acquire: '%s' not found in view", tname)
+                    logger.warning("[L3] %s: '%s' not found in view", tag, tname)
+
+            # Object landmark + camera doesn't see it: do NOT run arrival_action
+            # (pointing / waving at a non-visible object is misleading). Return a
+            # clear failure so the agent can choose its next step.
+            if is_object_landmark and not vis_msg:
+                suffix = " after drift recovery" if retry else ""
+                return (
+                    f"Arrived at stored '{tname}' coordinate{suffix} but the camera "
+                    f"could not visually acquire '{tname}'. The original landmark may "
+                    "be a VLM hallucination, the object may have moved, or the stored "
+                    "bearing may be inaccurate. Try `detect_objects_in_view` to see "
+                    "what is actually here, or move and re-scan. arrival_action skipped."
+                )
+
             if run_arrival_action:
                 action_msg = self._run_arrival_action(arrival_action, tname)
                 if is_object_landmark:
                     self._announce_object_found(tname)
                 if vis_msg:
                     return f"{action_msg} ({vis_msg})"
-                if is_object_landmark:
-                    return f"{action_msg} (could not visually acquire '{tname}')"
                 return action_msg
-            base = f"Arrived near '{tname}' standoff"
+
+            base = (
+                f"Arrived near '{tname}' standoff after drift recovery"
+                if retry
+                else f"Arrived near '{tname}' standoff"
+            )
             if is_object_landmark:
                 self._announce_object_found(tname)
             if vis_msg:
                 return f"{base} ({vis_msg})"
-            if is_object_landmark:
-                return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
             return f"{base} (arrival_action not run)."
+
+        # First attempt
+        err = _try_navigate()
+        if err is None:
+            return _post_arrival_message(retry=False)
 
         # Severe drift recovery: re-plan topology from current odom position
         logger.warning(
@@ -2096,32 +2270,7 @@ class NavigationSkillContainer(Module):
 
         err2 = _try_navigate()
         if err2 is None:
-            tname = target.name or target.record_id
-            vis_msg = ""
-            if is_object_landmark:
-                stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw, announce=False) or ""
-                if vis_msg:
-                    logger.info("[L3] Visual acquire (retry): %s", vis_msg)
-                else:
-                    logger.warning("[L3] Visual acquire (retry): '%s' not found in view", tname)
-            if run_arrival_action:
-                action_msg = self._run_arrival_action(arrival_action, tname)
-                if is_object_landmark:
-                    self._announce_object_found(tname)
-                if vis_msg:
-                    return f"{action_msg} ({vis_msg})"
-                if is_object_landmark:
-                    return f"{action_msg} (could not visually acquire '{tname}')"
-                return action_msg
-            base = f"Arrived near '{tname}' standoff after drift recovery"
-            if is_object_landmark:
-                self._announce_object_found(tname)
-            if vis_msg:
-                return f"{base} ({vis_msg})"
-            if is_object_landmark:
-                return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
-            return f"{base} (arrival_action not run)."
+            return _post_arrival_message(retry=True)
 
         return (
             "Navigation aborted: severe visual/odom drift persisted after re-plan. "

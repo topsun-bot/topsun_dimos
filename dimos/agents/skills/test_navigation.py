@@ -343,7 +343,10 @@ def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
 
     assert nav._room_anchor_sweep_for_object("toolbox") == "Successfully arrived at 'toolbox'"
     assert visited == ["office", "lab"]
-    assert nav._unitree_skill_container.rotations == [360.0, 360.0]
+    # _rotate_scan_in_place now sweeps in 6×60° steps (a single 360° request was
+    # a no-op due to yaw wrapping in the planner). Sweeping office then lab
+    # produces 12 rotation calls of 60° each.
+    assert nav._unitree_skill_container.rotations == [60.0] * 12
 
 
 def test_periodic_visual_drift_correction_soft_shifts_goal() -> None:
@@ -448,6 +451,9 @@ def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
     nav._relocalize_interval_s = 30.0
     nav._coordinate_frame_stale_reason = lambda target: None
     nav._speak_skill = _FakeSpeak()
+    # Pretend the camera sees the trash can; this test is about arrival logic,
+    # not visual acquisition.
+    nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: f"Visually acquired '{name}'"
 
     result = nav._navigate_to_landmark(
         target,
@@ -527,6 +533,198 @@ def test_object_found_announcement_failure_does_not_fail_navigation(
 
     assert result == "Successfully arrived at '水杯'"
     assert nav._speak_skill.calls == [("找到了", False)]
+
+
+def test_visual_acquire_succeeds_when_target_already_in_view() -> None:
+    """If the VLM sees the target in the current frame, do not rotate at all."""
+    nav = _nav_container()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._latest_odom = _pose(0.0, 0.0, yaw=0.0)
+    nav._vlm_object_present_in_view = lambda query, **_kw: True
+
+    result = nav._visual_acquire_object("垃圾桶", stored_yaw=None)
+
+    assert result is not None
+    assert "Visually acquired '垃圾桶'" == result
+    assert nav._unitree_skill_container.rotations == []
+
+
+def test_visual_acquire_finds_target_after_partial_rotation() -> None:
+    """VLM misses on the first frame, then hits on the 3rd 60° step (i.e. 180°)."""
+    nav = _nav_container()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._latest_odom = _pose(0.0, 0.0, yaw=0.0)
+
+    # Sequence: current view miss, step1 miss, step2 miss, step3 HIT.
+    sightings = iter([False, False, False, True])
+    nav._vlm_object_present_in_view = lambda query, **_kw: next(sightings)
+
+    result = nav._visual_acquire_object("垃圾桶", stored_yaw=None)
+
+    assert result is not None
+    assert "180° scan" in result
+    # Robot rotated 3 times of 60° before sighting.
+    assert nav._unitree_skill_container.rotations == [60.0, 60.0, 60.0]
+
+
+def test_visual_acquire_fails_after_full_six_step_sweep() -> None:
+    """Full 6x60deg sweep with no VLM hits → return None (failure)."""
+    nav = _nav_container()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._latest_odom = _pose(0.0, 0.0, yaw=0.0)
+    nav._vlm_object_present_in_view = lambda query, **_kw: False  # VLM never sees the target
+
+    result = nav._visual_acquire_object("人", stored_yaw=None)
+
+    assert result is None
+    # 6 rotation steps of 60° each (no extra rotation since stored_yaw=None).
+    assert nav._unitree_skill_container.rotations == [60.0] * 6
+
+
+def test_visual_acquire_turns_to_stored_bearing_before_first_check() -> None:
+    """When a stored bearing is given, the first action is to face it (>5° delta)."""
+    nav = _nav_container()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._latest_odom = _pose(0.0, 0.0, yaw=0.0)  # robot facing 0 rad
+    nav._vlm_object_present_in_view = lambda query, **_kw: True  # hits after turn
+
+    import math as _m
+
+    result = nav._visual_acquire_object("垃圾桶", stored_yaw=_m.radians(45.0))
+
+    assert result == "Visually acquired '垃圾桶'"
+    # Exactly one bearing-alignment rotation (~45° within rounding), then VLM hit.
+    assert len(nav._unitree_skill_container.rotations) == 1
+    assert nav._unitree_skill_container.rotations[0] == pytest.approx(45.0, abs=0.1)
+
+
+def test_visual_acquire_passes_description_to_presence_check() -> None:
+    """When ``_visual_acquire_object`` is given a description, it must reach
+    the per-frame VLM call so same-radical confusions (水瓶 ≠ 水桶) get
+    disambiguated by the model on the same single round-trip."""
+    nav = _nav_container()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._latest_odom = _pose(0.0, 0.0, yaw=0.0)
+
+    captured: list[dict[str, object]] = []
+
+    def _stub(query: str, **kwargs: object) -> bool:
+        captured.append({"query": query, **kwargs})
+        return True
+
+    nav._vlm_object_present_in_view = _stub
+
+    nav._visual_acquire_object("水瓶", stored_yaw=None, description="桌上的透明矿泉水瓶")
+
+    assert captured == [{"query": "水瓶", "description": "桌上的透明矿泉水瓶"}]
+
+
+def test_verify_object_in_view_returns_yes_when_visually_acquired() -> None:
+    """verify_object_in_view is a thin wrapper around _visual_acquire_object."""
+    nav = _nav_container()
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._landmark_memory = SimpleNamespace(resolve_by_query=lambda _q: None)
+    nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: f"Visually acquired '{name}'"
+
+    result = nav.verify_object_in_view("展示板")
+
+    assert result.startswith("YES:")
+    assert "Visually acquired '展示板'" in result
+
+
+def test_verify_object_in_view_forwards_landmark_state_as_description() -> None:
+    """Regression for 水瓶 vs 水桶: when a landmark with a stored ``state``
+    description exists, ``verify_object_in_view`` must forward that string
+    to the VLM presence check on the same round-trip — that hint is what
+    lets the model reject same-radical confusions without a second call."""
+    nav = _nav_container()
+    nav._latest_image = SimpleNamespace(data=object())
+
+    landmark = SpatialRecord(
+        name="水瓶",
+        record_type=RecordType.LANDMARK,
+        position=(0.0, 0.0, 0.0),
+        state="桌上的透明矿泉水瓶 (views [0, 5])",
+    )
+    nav._landmark_memory = SimpleNamespace(resolve_by_query=lambda _q: landmark)
+
+    captured: list[dict[str, object]] = []
+
+    def _stub_visual_acquire(name: str, stored_yaw: float | None = None, **kwargs: object) -> str:
+        captured.append({"name": name, "stored_yaw": stored_yaw, **kwargs})
+        return f"Visually acquired '{name}'"
+
+    nav._visual_acquire_object = _stub_visual_acquire
+
+    nav.verify_object_in_view("水瓶")
+
+    assert captured == [
+        {
+            "name": "水瓶",
+            "stored_yaw": None,
+            "description": "桌上的透明矿泉水瓶 (views [0, 5])",
+        }
+    ]
+
+
+def test_verify_object_in_view_returns_no_when_not_visible() -> None:
+    """When the visual acquire returns None, the skill must tell the agent
+    clearly that the object is NOT here and hint the next step."""
+    nav = _nav_container()
+    nav._latest_image = SimpleNamespace(data=object())
+    nav._landmark_memory = SimpleNamespace(resolve_by_query=lambda _q: None)
+    nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: None
+
+    result = nav.verify_object_in_view("展示板")
+
+    assert result.startswith("NO:")
+    assert "'展示板'" in result
+    assert "navigate_with_text" in result
+
+
+def test_verify_object_in_view_handles_missing_camera() -> None:
+    """No camera image → quick NO without trying to scan."""
+    nav = _nav_container()
+    nav._latest_image = None
+
+    result = nav.verify_object_in_view("展示板")
+
+    assert result.startswith("NO:")
+    assert "no camera image" in result.lower()
+
+
+def test_object_landmark_reports_failure_when_camera_cannot_see() -> None:
+    """When the camera cannot see the landmark, do NOT run the arrival_action
+    and return a clear failure so the agent can react (e.g. detect_objects_in_view)."""
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="人",
+        record_type=RecordType.LANDMARK,
+        position=(0.0, 0.0, 0.0),
+    )
+    nav._navigation = _FakeNavigation()
+    nav._latest_odom = _pose(0.8, 0.0)
+    nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
+    nav._relocalize_interval_s = 30.0
+    nav._coordinate_frame_stale_reason = lambda target: None
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: None  # camera sees nothing
+
+    result = nav._navigate_to_landmark(
+        target,
+        arrival_action="point",
+        arrival_distance=0.5,
+        run_arrival_action=True,
+    )
+
+    assert "could not visually acquire" in result
+    assert "arrival_action skipped" in result
+    assert nav._unitree_skill_container.commands == []
 
 
 def test_stop_all_motion_cancels_tracking_and_recovers() -> None:
