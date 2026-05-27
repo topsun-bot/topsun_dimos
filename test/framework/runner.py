@@ -15,10 +15,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from framework.models import (
     GateStatus,
@@ -81,9 +81,7 @@ class QualityGateRunner:
                 summary = self._run_pytest_layer(layer, plan.pytest_extra_args)
                 test_summaries.append(summary)
                 if not summary.ok:
-                    failure_reasons.append(
-                        f"{layer.value} 层测试失败 ({summary.failed} failed)"
-                    )
+                    failure_reasons.append(f"{layer.value} 层测试失败 ({summary.failed} failed)")
 
         historical: list[str] = []
         regression_risks: list[str] = []
@@ -119,9 +117,7 @@ class QualityGateRunner:
         write_report(report, out_dir)
         return report
 
-    def _run_pytest_layer(
-        self, layer: TestLayer, extra_args: tuple[str, ...]
-    ) -> TestResultSummary:
+    def _run_pytest_layer(self, layer: TestLayer, extra_args: tuple[str, ...]) -> TestResultSummary:
         layer_dir = self.test_root / layer.value
         if not layer_dir.is_dir():
             return TestResultSummary(
@@ -167,7 +163,9 @@ class QualityGateRunner:
             failed_nodeids=failed_nodeids,
         )
 
-    def _recommendations(self, confidence: RequirementConfidence, risk_level, quality_issues) -> list[str]:
+    def _recommendations(
+        self, confidence: RequirementConfidence, risk_level, quality_issues
+    ) -> list[str]:
         recs: list[str] = []
         if confidence != RequirementConfidence.HIGH:
             recs.append("在 PR 描述中补充验收标准与非目标，提高 Requirement Confidence")
@@ -193,8 +191,10 @@ def _parse_junit(path: Path) -> tuple[int, int, int, list[str]]:
     else:
         testsuite = root
 
-    passed = int(testsuite.attrib.get("tests", 0)) - int(testsuite.attrib.get("failures", 0)) - int(
-        testsuite.attrib.get("errors", 0)
+    passed = (
+        int(testsuite.attrib.get("tests", 0))
+        - int(testsuite.attrib.get("failures", 0))
+        - int(testsuite.attrib.get("errors", 0))
     )
     failed = int(testsuite.attrib.get("failures", 0)) + int(testsuite.attrib.get("errors", 0))
     skipped = int(testsuite.attrib.get("skipped", 0))
@@ -216,7 +216,9 @@ def main() -> int:
     parser.add_argument("--print-json", action="store_true")
     args = parser.parse_args()
 
-    ctx = load_pr_context(context_file=args.context_file) if args.context_file else load_pr_context()
+    ctx = (
+        load_pr_context(context_file=args.context_file) if args.context_file else load_pr_context()
+    )
     runner = QualityGateRunner()
     report = runner.run(pr_context=ctx, skip_tests=args.skip_tests, output_dir=args.output_dir)
 
@@ -226,7 +228,9 @@ def main() -> int:
     from framework.report import format_markdown
 
     print(format_markdown(report))
-    return 0 if report.status == GateStatus.PASSED else 1 if report.status == GateStatus.FAILED else 2
+    return (
+        0 if report.status == GateStatus.PASSED else 1 if report.status == GateStatus.FAILED else 2
+    )
 
 
 if __name__ == "__main__":

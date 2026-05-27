@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -22,7 +22,7 @@ _TEST_ROOT = Path(__file__).resolve().parent
 if str(_TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(_TEST_ROOT))
 
-from framework.evidence import EvidenceCollector  # noqa: E402
+from framework.evidence import EvidenceCollector
 
 
 def pytest_configure(config: pytest.Config) -> None:

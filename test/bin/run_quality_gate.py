@@ -23,15 +23,15 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
+import sys
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_ROOT = _REPO_ROOT / "test"
 if str(_TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(_TEST_ROOT))
 
-from framework.runner import main  # noqa: E402
+from framework.runner import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

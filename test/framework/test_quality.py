@@ -56,7 +56,11 @@ class TestQualityVerifier:
         issues: list[QualityIssueRecord] = []
         rel = str(path)
 
-        body_stmts = [s for s in func.body if not isinstance(s, ast.Expr) or not isinstance(s.value, ast.Constant)]
+        body_stmts = [
+            s
+            for s in func.body
+            if not isinstance(s, ast.Expr) or not isinstance(s.value, ast.Constant)
+        ]
         if not body_stmts:
             issues.append(
                 QualityIssueRecord(

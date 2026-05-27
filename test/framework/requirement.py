@@ -40,9 +40,7 @@ class RequirementConfidenceChecker:
 
         body = ctx.body.strip()
         if len(body) < self.MIN_BODY_CHARS:
-            issues.append(
-                f"PR 描述过短（<{self.MIN_BODY_CHARS} 字符），缺少验收标准或边界说明"
-            )
+            issues.append(f"PR 描述过短（<{self.MIN_BODY_CHARS} 字符），缺少验收标准或边界说明")
 
         if body and not ctx.has_acceptance_criteria:
             issues.append("未检测到验收标准（acceptance / 验收 / test plan 等关键词）")

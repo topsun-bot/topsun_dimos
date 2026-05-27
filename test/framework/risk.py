@@ -14,8 +14,8 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
+import re
 
 from framework.models import RiskLevel
 from framework.pr_context import PRContext

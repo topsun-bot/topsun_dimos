@@ -15,11 +15,10 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from framework.models import GateStatus
 from framework.pr_context import PRContext
 from framework.runner import QualityGateRunner
+import pytest
 
 
 @pytest.mark.quality_gate
@@ -29,7 +28,7 @@ def test_runner_produces_report_files(tmp_path: Path) -> None:
         body="acceptance criteria: smoke test passes",
         changed_files=("test/unit/test_framework_core.py",),
     )
-    report = QualityGateRunner().run(
+    QualityGateRunner().run(
         pr_context=ctx,
         skip_tests=True,
         output_dir=tmp_path,

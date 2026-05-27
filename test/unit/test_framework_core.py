@@ -12,21 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
-
 from framework.models import GateStatus, RiskLevel
 from framework.pr_context import PRContext
 from framework.report import format_markdown
 from framework.requirement import RequirementConfidenceChecker
 from framework.risk import RiskClassifier
+import pytest
 
 
 @pytest.mark.unit
 @pytest.mark.quality_gate
 def test_requirement_checker_blocks_empty_pr() -> None:
-    result = RequirementConfidenceChecker().check(
-        PRContext(title="", body="", changed_files=())
-    )
+    result = RequirementConfidenceChecker().check(PRContext(title="", body="", changed_files=()))
     assert result.can_proceed is False
 
 
