@@ -259,10 +259,13 @@ def patrol_memory_blindspots(
     search_radius_m: float = 8.0,
     coverage_radius_m: float = 1.0,
     stale_after_sec: float = 600.0,
-    max_goals: int | None = None,
-    max_duration_sec: float = 1800.0,
+    max_goals: int = 0,
+    max_duration_sec: float = 120.0,
     goal_timeout_sec: float = 90.0,
+    stuck_timeout_sec: float = 15.0,
+    progress_epsilon_m: float = 0.25,
     cooldown_sec: float = 2.0,
+    recognize_on_arrival: bool = True,
     include_object_summary: bool = True,
 ) -> str:
     """Explore spatial-memory-uncovered areas for an extended period."""
@@ -287,7 +290,7 @@ can recognize objects on arrival.
 2. 循环查找下一个安全的空间记忆未覆盖目标，包括 `memory_gap` 和 `memory_frontier`。
 3. 每次最多发送一个导航目标，并等待到达、超时或被取消。
 4. 到达或超时后短暂冷却，再重新计算记忆覆盖缺口。
-5. 默认按 `max_duration_sec` 长时间运行；如果传入 `max_goals`，也可按目标数停止。
+5. 默认按 `max_duration_sec=120.0` 运行；真机长时间测试可显式传入 `max_duration_sec=1800.0` 或更长时间。如果传入 `max_goals > 0`，也可按目标数停止。
 6. 超过 `max_duration_sec`、达到 `max_goals`、找不到目标、连续失败过多或收到停止命令时结束。
 7. 如果 `include_object_summary=True`，汇总本轮新探索区域识别到的物品。
 8. 返回探索摘要和新物品清单。
@@ -295,8 +298,8 @@ can recognize objects on arrival.
 返回示例：
 
 ```text
-Memory-driven exploration finished: visited 12 goal(s), timed out 1, elapsed 1800s.
-Stopped because max_duration_sec=1800 was reached.
+Memory-driven exploration finished: visited 2 goal(s), timed out 1, stuck 0, elapsed 120s.
+Stopped because max_duration_sec reached.
 New objects found in explored areas: chair x3, desk x1, monitor x2, backpack x1.
 ```
 
@@ -320,7 +323,7 @@ Stopped because no reachable memory-uncovered target remained within 8.0m.
 7. 如果是 one-shot 模式，返回“已前往补采样”的解释信息。
 8. 如果是长时间探索模式，重新计算下一个记忆未覆盖目标，持续探索直到触发停止条件。
 
-MVP 应包含长时间连续模式。默认按 `max_duration_sec` 运行较长时间，例如 15 到 60 分钟；`max_goals` 是可选保护参数，不作为默认主停止条件。每个目标仍然必须有 `goal_timeout_sec`，避免单个不可达目标卡死。
+MVP 应包含连续探索模式。默认 `max_duration_sec=120.0`，用于保持一次 agent/RPC 调用在默认超时范围内；真机长时间测试可以显式传入 15 到 60 分钟的 `max_duration_sec`。`max_goals` 是可选保护参数，`0` 表示不按目标数量停止。每个目标仍然必须有 `goal_timeout_sec`，并且实际等待会被剩余 `max_duration_sec` 截断，避免单个不可达目标让巡逻超出总时长。
 
 ### 6.6 与当前分支的关系
 
@@ -704,8 +707,8 @@ dimos agent-send "根据空间记忆覆盖情况做长时间探索，去还没�
 期望结束文案：
 
 ```text
-Memory-driven exploration finished: visited 12 goal(s), timed out 1, elapsed 1800s.
-Stopped because max_duration_sec=1800 was reached.
+Memory-driven exploration finished: visited 12 goal(s), timed out 1, stuck 0, elapsed 1800s.
+Stopped because max_duration_sec reached.
 ```
 
 #### 10.4.7 覆盖效果复测
@@ -1149,28 +1152,28 @@ uv run pytest dimos/agents/skills/test_navigation.py -q -k 'not go_to_semantic_l
 74d78404 feat: add spatial memory blindspot exploration
 ```
 
-评审结论：
+初版评审结论（已处理）：
 
-不建议直接合入。功能方向合理，已经补充空间记忆盲区探索 skill、`get_memory_locations()` RPC、测试和设计文档，但有两个运行时问题需要先修复。
+功能方向合理，已经补充空间记忆盲区探索 skill、`get_memory_locations()` RPC、测试和设计文档。初版评审指出的运行时边界问题已在当前实现中收敛，下面保留处理记录，方便后续追踪。
 
-### 15.1 长时间巡逻 skill 会超过默认 RPC 超时
+### 15.1 长时间巡逻默认值与 RPC 超时
 
-`patrol_memory_blindspots` 默认最长运行 `1800s`，但普通 RPC 默认超时是 `120s`。MCP/agent 调用大约 120 秒后会超时报错，而模块里的巡逻逻辑可能仍在继续导航。这会导致用户看到调用失败，但机器人仍在执行长时间探索。
+`patrol_memory_blindspots` 当前默认最长运行 `120s`，与普通 RPC 默认超时保持一致。真机长时间探索时可以显式传入更大的 `max_duration_sec`，例如 `1800.0`，但需要注意 MCP/agent 调用侧也要允许更长等待，或者由后续版本改为后台任务加进度汇报。
 
 相关位置：
 
-- `dimos/agents/skills/navigation.py`：`patrol_memory_blindspots(max_duration_sec=1800.0)`
+- `dimos/agents/skills/navigation.py`：`patrol_memory_blindspots(max_duration_sec=120.0)`
 - `dimos/protocol/rpc/spec.py`：`DEFAULT_RPC_TIMEOUT = 120.0`
 
-建议修复：
+当前处理：
 
-- 把长时间巡逻改成后台任务，并通过 tool progress 持续汇报状态。
+- 如果需要超过默认 RPC 超时时间的真机长时间巡逻，后续应改成后台任务，并通过 tool progress 持续汇报状态。
 - 或者为该 RPC 显式配置更长 timeout。
-- 无论采用哪种方式，都要确保超时、停止命令、异常退出时能取消正在执行的巡逻任务和导航 goal。
+- 当前实现会按剩余 `max_duration_sec` 截断单目标等待，超时、停止命令、异常退出时都会取消正在执行的导航 goal。
 
 ### 15.2 导航拒绝或超时后会重复选择同一个失败目标
 
-当前 `patrol_memory_blindspots` 只在成功到达后才把目标加入 `recent_goals`。如果最近的盲区点在 costmap 上看起来安全，但 planner 拒绝或无法到达，循环会重复选择同一个目标，连续失败 3 次后直接退出，而不是继续尝试下一个候选点。
+初版 `patrol_memory_blindspots` 只在成功到达后才把目标加入 `recent_goals`。如果最近的盲区点在 costmap 上看起来安全，但 planner 拒绝或无法到达，循环可能重复选择同一个目标，连续失败 3 次后直接退出，而不是继续尝试下一个候选点。
 
 相关位置：
 
@@ -1178,11 +1181,10 @@ uv run pytest dimos/agents/skills/test_navigation.py -q -k 'not go_to_semantic_l
 - `dimos/agents/skills/navigation.py`：`if not self._navigation.set_goal(pose):`
 - `dimos/agents/skills/navigation.py`：`if status == "timeout":`
 
-建议修复：
+当前处理：
 
-- 对 `set_goal` rejected 和 timeout 的目标建立失败黑名单。
-- 黑名单可以记录 grid cell 或 pose 坐标。
-- 后续调用 `_find_nearest_memory_blindspot()` 时排除这些失败目标，让巡逻能尝试下一个候选盲区。
+- 对 `set_goal` rejected、timeout 和 stuck 的目标记录到 `recent_goals`。
+- 后续调用 `_find_nearest_memory_blindspot()` 时通过 `exclude_recent_goals` 排除这些失败目标，让巡逻能尝试下一个候选盲区。
 
 ### 15.3 已验证项目
 
@@ -1207,9 +1209,9 @@ git diff --check
 
 结果均通过。
 
-### 15.4 合入建议
+### 15.4 后续建议
 
-先修复 RPC 生命周期和失败目标排除逻辑，再进入下一轮评审。修复完成后，建议补充以下测试：
+当前轮已修复 RPC 总时长边界和失败目标排除逻辑。后续如果继续增强长时间探索，建议补充以下测试：
 
 - `patrol_memory_blindspots` 在 `set_goal` rejected 后不会重复选择同一个目标。
 - `patrol_memory_blindspots` 在单目标 timeout 后会尝试下一个候选目标。

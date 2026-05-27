@@ -2089,8 +2089,13 @@ class NavigationSkillContainer(Module):
                     break
                 continue
 
+            remaining_sec = max(0.0, deadline - time.time())
+            if remaining_sec <= 0:
+                stop_reason = "max_duration_sec reached"
+                break
+
             status = self._wait_for_memory_blindspot_goal(
-                goal_timeout_sec,
+                min(goal_timeout_sec, remaining_sec),
                 stuck_timeout_sec,
                 progress_epsilon_m,
             )
@@ -2099,10 +2104,11 @@ class NavigationSkillContainer(Module):
                 break
             if status in {"timeout", "stuck"}:
                 self._remember_memory_blindspot_goal(recent_goals, pose)
-                timed_out += 1
                 failed += 1
                 if status == "stuck":
                     stuck += 1
+                else:
+                    timed_out += 1
             else:
                 visited += 1
                 failed = 0
@@ -2127,7 +2133,7 @@ class NavigationSkillContainer(Module):
             if failed >= max_failures:
                 stop_reason = "too many consecutive navigation failures"
                 break
-            time.sleep(max(0.0, cooldown_sec))
+            time.sleep(min(max(0.0, cooldown_sec), max(0.0, deadline - time.time())))
 
         elapsed = time.time() - started_at
         lines = [
@@ -2147,7 +2153,7 @@ class NavigationSkillContainer(Module):
 
     @skill
     def stop_navigation(self) -> str:
-        """Immediatly stop moving."""
+        """Immediately stop moving."""
 
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")

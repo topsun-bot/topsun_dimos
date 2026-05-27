@@ -390,6 +390,42 @@ def test_patrol_memory_blindspots_stops_after_max_goals(monkeypatch: pytest.Monk
     assert len(nav._navigation.goals) == 1
 
 
+def test_patrol_memory_blindspots_caps_goal_wait_to_remaining_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    target = {
+        "pose": _pose(1.0, 0.0),
+        "target_type": "memory_gap",
+        "reason": "missing",
+        "distance_m": 1.0,
+    }
+    nav._latest_odom = _pose(0.0, 0.0)
+    nav._latest_global_costmap = _free_costmap()
+    nav._navigation = _FakeNavigation()
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._memory_blindspot_patrol_stop = False
+    captured_timeouts: list[float] = []
+
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.time", lambda: 100.0)
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
+    nav._find_nearest_memory_blindspot = lambda **kwargs: target  # type: ignore[method-assign]
+
+    def fake_wait(timeout_sec: float, *args: Any, **kwargs: Any) -> str:
+        captured_timeouts.append(timeout_sec)
+        return "stopped"
+
+    nav._wait_for_memory_blindspot_goal = fake_wait  # type: ignore[method-assign]
+
+    nav.patrol_memory_blindspots(
+        max_duration_sec=5.0,
+        goal_timeout_sec=90.0,
+        recognize_on_arrival=False,
+    )
+
+    assert captured_timeouts == [5.0]
+
+
 def test_memory_blindspot_wait_reports_stuck_without_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -510,6 +546,7 @@ def test_patrol_memory_blindspots_blacklists_stuck_goal(
     )
 
     assert "visited 1 goal(s)" in result
+    assert "timed out 0" in result
     assert "stuck 1" in result
     assert [goal.position.x for goal in nav._navigation.goals] == [1.0, 2.0]
 

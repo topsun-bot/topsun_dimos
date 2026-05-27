@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -140,6 +141,20 @@ def test_global_config_reads_unitree_aes_128_key_env(monkeypatch: pytest.MonkeyP
     config = GlobalConfig()
 
     assert config.unitree_webrtc_aes_key == "abcdef0123456789abcdef0123456789"
+
+
+def test_global_config_reads_unitree_aes_128_key_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("UNITREE_AES_128_KEY", raising=False)
+    monkeypatch.delenv("UNITREE_AES_KEY", raising=False)
+    monkeypatch.delenv("DIMOS_UNITREE_WEBRTC_AES_KEY", raising=False)
+    (tmp_path / ".env").write_text(f"UNITREE_AES_128_KEY={'ab' * 16}\n")
+
+    config = GlobalConfig()
+
+    assert config.unitree_webrtc_aes_key == "ab" * 16
 
 
 def test_aes_key_omitted_when_neither_kwarg_nor_env(

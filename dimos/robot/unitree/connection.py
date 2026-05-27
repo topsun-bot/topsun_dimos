@@ -186,7 +186,6 @@ class UnitreeWebRTCConnection(Resource):
             self.task = self.loop.create_task(async_connect())
             self.loop.run_forever()
 
-        self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=start_background_loop, daemon=True)
         self.thread.start()
         if not self.connection_ready.wait(timeout=self.connect_timeout_sec):
