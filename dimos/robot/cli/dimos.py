@@ -321,6 +321,8 @@ def run(
     # Run AFTER config validation so bad args don't destroy existing memory.
     if landmark_pack:
         mem_cfg = kwargs.get("spatial-landmark-memory-module", {})
+        if not isinstance(mem_cfg, dict):
+            mem_cfg = {}
         custom_db = mem_cfg.get("db_path")
         custom_snap = mem_cfg.get("snapshots_dir")
         if custom_db or custom_snap:

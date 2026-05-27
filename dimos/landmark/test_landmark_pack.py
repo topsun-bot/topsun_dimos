@@ -21,7 +21,8 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-import yaml
+
+yaml = pytest.importorskip("yaml", reason="pyyaml is required for landmark pack tests")
 
 from dimos.landmark.landmark_pack import (
     _BUNDLED_PACKS_DIR,
