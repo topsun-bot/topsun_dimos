@@ -792,6 +792,73 @@ def apriltag(
     typer.echo(f"Wrote {len(id_list)} tag(s) to {path}")
 
 
+@main.command("export-spatial-memory")
+def export_spatial_memory_cmd(
+    db_path: str = typer.Option(
+        "",
+        "--db-path",
+        help="ChromaDB directory (default: assets/output/memory/spatial_memory/chromadb_data)",
+    ),
+    visual_memory_path: str = typer.Option(
+        "",
+        "--visual-memory-path",
+        help="visual_memory.pkl path (default: alongside db_path)",
+    ),
+    output_dir: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Export directory (default: assets/output/memory/spatial_memory_export)",
+    ),
+    no_images: bool = typer.Option(
+        False, "--no-images", help="Skip JPEG export from visual_memory.pkl"
+    ),
+    chroma_ids_only: bool = typer.Option(
+        False,
+        "--chroma-ids-only",
+        help="Only export images whose ids appear in Chroma collections",
+    ),
+) -> None:
+    """Export SpatialMemory Chroma metadata to CSV and images to JPEG for inspection."""
+    from pathlib import Path
+
+    from dimos.utils.cli.spatial_memory_export import (
+        DEFAULT_DB_PATH,
+        DEFAULT_VISUAL_MEMORY_PATH,
+        export_spatial_memory,
+    )
+
+    resolved_db = Path(db_path) if db_path else DEFAULT_DB_PATH
+    resolved_pkl = Path(visual_memory_path) if visual_memory_path else DEFAULT_VISUAL_MEMORY_PATH
+    resolved_out = Path(output_dir) if output_dir else None
+
+    try:
+        result = export_spatial_memory(
+            db_path=resolved_db,
+            visual_memory_path=resolved_pkl,
+            output_dir=resolved_out,
+            export_images=not no_images,
+            images_only_in_chroma=chroma_ids_only,
+        )
+    except FileNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Exported to {result.output_dir}")
+    typer.echo(f"  DB: {result.db_path}")
+    typer.echo(f"  visual_memory.pkl: {result.visual_memory_path}")
+    for col in result.collections:
+        typer.echo(f"  CSV {col.name}: {col.row_count} rows -> {col.csv_path}")
+    typer.echo(f"  Combined CSV: {result.combined_csv_path}")
+    if result.images_missing_pkl:
+        typer.echo("  Images: skipped (visual_memory.pkl not found)")
+    else:
+        typer.echo(
+            f"  Images: {result.images_exported} JPEG(s) -> {Path(result.output_dir) / 'images'}"
+        )
+    typer.echo(f"  Summary: {Path(result.output_dir) / 'export_summary.json'}")
+
+
 @main.command(name="rerun-bridge")
 def rerun_bridge_cmd(
     memory_limit: str = typer.Option(
