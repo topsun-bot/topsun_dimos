@@ -109,7 +109,7 @@ class ObjectTracker2D(Module):
         self.tracking_initialized = False
 
         # Stuck detection
-        self._last_bbox = None
+        self._last_bbox: tuple[int, int, int, int] | None = None
         self._stuck_count = 0
         self._max_stuck_frames = 10  # Higher threshold for stationary objects
 
