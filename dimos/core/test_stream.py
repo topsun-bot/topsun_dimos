@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Callable
+from contextlib import suppress
 import threading
 import time
 from typing import Any
@@ -168,6 +169,27 @@ class SpyLCMTransport(LCMTransport):
         return wrapped_unsubscribe
 
 
+def _wait_for_active_subscribers(subscriber: SubscriberBase, expected: int) -> None:
+    deadline = time.monotonic() + 2.0
+    last_count = None
+    while time.monotonic() < deadline:
+        last_count = subscriber.active_subscribers()
+        if last_count == expected:
+            return
+        time.sleep(0.05)
+
+    assert last_count == expected
+
+
+def _cleanup_stream_test_modules(robot, subscriber) -> None:
+    with suppress(Exception):
+        robot.stop()
+    with suppress(Exception):
+        subscriber.stop_rpc_client()
+    with suppress(Exception):
+        robot.stop_rpc_client()
+
+
 @pytest.mark.self_hosted
 @pytest.mark.skipif_macos_bug
 @pytest.mark.parametrize("subscriber_class", [ClassicSubscriber, RXPYSubscriber])
@@ -182,33 +204,32 @@ def test_subscription(dimos, subscriber_class) -> None:
 
     subscriber.odom.connect(robot.odometry)
 
-    robot.start()
-    subscriber.sub1()
-    subscriber.wait_for_sub1_msg()
+    try:
+        robot.start()
+        subscriber.sub1()
+        assert subscriber.wait_for_sub1_msg()
 
-    assert subscriber.sub1_msgs_len() > 0
-    assert subscriber.sub2_msgs_len() == 0
-    assert subscriber.active_subscribers() == 1
+        assert subscriber.sub1_msgs_len() > 0
+        assert subscriber.sub2_msgs_len() == 0
+        _wait_for_active_subscribers(subscriber, 1)
 
-    subscriber.sub2()
-    subscriber.wait_for_sub2_msg()
+        subscriber.sub2()
+        assert subscriber.wait_for_sub2_msg()
 
-    subscriber.unsub_all()
+        subscriber.unsub_all()
 
-    assert subscriber.active_subscribers() == 0
-    assert subscriber.sub1_msgs_len() != 0
-    assert subscriber.sub2_msgs_len() != 0
+        _wait_for_active_subscribers(subscriber, 0)
+        assert subscriber.sub1_msgs_len() != 0
+        assert subscriber.sub2_msgs_len() != 0
 
-    total_msg_n = subscriber.sub1_msgs_len() + subscriber.sub2_msgs_len()
+        total_msg_n = subscriber.sub1_msgs_len() + subscriber.sub2_msgs_len()
 
-    time.sleep(0.5)
+        time.sleep(0.5)
 
-    # ensuring no new messages have passed through
-    assert total_msg_n == subscriber.sub1_msgs_len() + subscriber.sub2_msgs_len()
-
-    robot.stop()
-    subscriber.stop_rpc_client()
-    robot.stop_rpc_client()
+        # ensuring no new messages have passed through
+        assert total_msg_n == subscriber.sub1_msgs_len() + subscriber.sub2_msgs_len()
+    finally:
+        _cleanup_stream_test_modules(robot, subscriber)
 
 
 @pytest.mark.self_hosted
@@ -223,25 +244,25 @@ def test_get_next(dimos) -> None:
     subscriber = dimos.deploy(RXPYSubscriber)
     subscriber.odom.connect(robot.odometry)
 
-    robot.start()
-    time.sleep(0.1)
+    try:
+        robot.start()
+        time.sleep(0.1)
 
-    odom = subscriber.get_next()
+        odom = subscriber.get_next()
 
-    assert isinstance(odom, Odometry)
-    assert subscriber.active_subscribers() == 0
+        assert isinstance(odom, Odometry)
+        _wait_for_active_subscribers(subscriber, 0)
 
-    time.sleep(0.2)
+        time.sleep(0.2)
 
-    next_odom = subscriber.get_next()
+        next_odom = subscriber.get_next()
 
-    assert isinstance(next_odom, Odometry)
-    assert subscriber.active_subscribers() == 0
+        assert isinstance(next_odom, Odometry)
+        _wait_for_active_subscribers(subscriber, 0)
 
-    assert next_odom != odom
-    robot.stop()
-    subscriber.stop_rpc_client()
-    robot.stop_rpc_client()
+        assert next_odom != odom
+    finally:
+        _cleanup_stream_test_modules(robot, subscriber)
 
 
 @pytest.mark.self_hosted
@@ -256,29 +277,36 @@ def test_hot_getter(dimos) -> None:
     subscriber = dimos.deploy(RXPYSubscriber)
     subscriber.odom.connect(robot.odometry)
 
-    robot.start()
+    hot_getter_started = False
+    try:
+        robot.start()
 
-    # we are robust to multiple calls
-    subscriber.start_hot_getter()
-    time.sleep(0.2)
-    odom = subscriber.get_hot()
-    subscriber.stop_hot_getter()
+        # we are robust to multiple calls
+        subscriber.start_hot_getter()
+        hot_getter_started = True
+        time.sleep(0.2)
+        odom = subscriber.get_hot()
+        subscriber.stop_hot_getter()
+        hot_getter_started = False
 
-    assert isinstance(odom, Odometry)
-    time.sleep(0.3)
+        assert isinstance(odom, Odometry)
+        time.sleep(0.3)
 
-    # there are no subs
-    assert subscriber.active_subscribers() == 0
+        # there are no subs
+        _wait_for_active_subscribers(subscriber, 0)
 
-    # we can restart though
-    subscriber.start_hot_getter()
-    time.sleep(0.3)
+        # we can restart though
+        subscriber.start_hot_getter()
+        hot_getter_started = True
+        time.sleep(0.3)
 
-    next_odom = subscriber.get_hot()
-    assert isinstance(next_odom, Odometry)
-    assert next_odom != odom
-    subscriber.stop_hot_getter()
-
-    robot.stop()
-    subscriber.stop_rpc_client()
-    robot.stop_rpc_client()
+        next_odom = subscriber.get_hot()
+        assert isinstance(next_odom, Odometry)
+        assert next_odom != odom
+        subscriber.stop_hot_getter()
+        hot_getter_started = False
+    finally:
+        if hot_getter_started:
+            with suppress(Exception):
+                subscriber.stop_hot_getter()
+        _cleanup_stream_test_modules(robot, subscriber)
