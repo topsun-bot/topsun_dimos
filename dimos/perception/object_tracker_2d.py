@@ -269,9 +269,10 @@ class ObjectTracker2D(Module):
     @rpc
     def get_latest_bbox(self) -> list[float] | None:
         """Return the latest tracked bbox in [x1, y1, x2, y2] image coordinates."""
-        if self._last_bbox is None:
+        latest_bbox = self._last_bbox
+        if latest_bbox is None:
             return None
-        return [float(v) for v in self._last_bbox]
+        return [float(v) for v in latest_bbox]
 
     def _process_tracking(self) -> None:
         """Process current frame for tracking and publish 2D detections."""

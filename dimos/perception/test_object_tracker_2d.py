@@ -30,6 +30,15 @@ class DummyFailedTracker:
         return self._init_result
 
 
+class _ClearingBBox:
+    def __init__(self, tracker: ObjectTracker2D):
+        self._tracker = tracker
+
+    def __iter__(self):
+        self._tracker._last_bbox = None
+        return iter((1, 2, 3, 4))
+
+
 def test_track_accepts_none_return_from_init(monkeypatch):
     tracker = ObjectTracker2D()
     try:
@@ -84,5 +93,16 @@ def test_track_rejects_numpy_false_init_result(monkeypatch):
 
         assert result["status"] == "init_failed"
         assert tracker.tracking_initialized is False
+    finally:
+        tracker.stop()
+
+
+def test_get_latest_bbox_uses_single_snapshot_when_tracker_stops():
+    tracker = ObjectTracker2D()
+    try:
+        tracker._last_bbox = _ClearingBBox(tracker)
+
+        assert tracker.get_latest_bbox() == [1.0, 2.0, 3.0, 4.0]
+        assert tracker._last_bbox is None
     finally:
         tracker.stop()

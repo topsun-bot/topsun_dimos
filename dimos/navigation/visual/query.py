@@ -84,13 +84,17 @@ def _label_matches_query(label: str, query: str) -> bool:
         return True
     if not label:
         return False
+    raw_label = label.lower().strip()
+    raw_query = query.lower().strip()
     l = _clean_label_text(label)
     q = _clean_label_text(query)
     if l == q or q in l or l in q:
         return True
     if not q.isascii():
         return any(term and (term in l or l in term) for term in _query_target_terms(query))
-    return bool(set(q.split()) & set(l.split()))
+    query_tokens = set(re.findall(r"[a-z0-9]+", raw_query))
+    label_tokens = set(re.findall(r"[a-z0-9]+", raw_label))
+    return bool(query_tokens & label_tokens)
 
 
 def _parse_bbox4(raw: Any) -> tuple[float, float, float, float] | None:

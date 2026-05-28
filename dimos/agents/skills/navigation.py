@@ -1173,7 +1173,11 @@ class NavigationSkillContainer(Module):
         end_time = time.monotonic() + max(0.0, duration_s)
         cancel_event = self._get_visual_servo_cancel_event()
         while time.monotonic() < end_time and not cancel_event.is_set():
-            self.tele_cmd_vel.publish(twist)
+            try:
+                self.tele_cmd_vel.publish(twist)
+            except AttributeError:
+                logger.debug("Skipping visual servo motion: tele_cmd_vel is not wired")
+                break
             time.sleep(0.05)
         self._stop_visual_servo_motion()
 

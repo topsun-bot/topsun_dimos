@@ -139,6 +139,8 @@ def test_label_match_substring() -> None:
     assert _label_matches_query("蓝色水桶", "水桶") is True
     assert _label_matches_query("桶", "水桶") is True
     assert _label_matches_query("office chair", "chair") is True
+    assert _label_matches_query("chair office", "office chair") is True
+    assert _label_matches_query("red-chair", "chair red") is True
 
 
 def test_label_match_rejects_chinese_character_overlap() -> None:

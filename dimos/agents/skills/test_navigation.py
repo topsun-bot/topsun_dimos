@@ -1028,6 +1028,15 @@ def test_visual_servo_motion_can_be_cancelled() -> None:
     assert nav.tele_cmd_vel.published[-1].linear.x == 0.0
 
 
+def test_visual_servo_motion_skips_when_velocity_output_unwired() -> None:
+    nav = _nav_container()
+    nav._visual_servo_cancel_event = threading.Event()
+
+    nav._publish_visual_servo_motion(forward_mps=0.4, yaw_radps=0.0, duration_s=2.0)
+
+    assert nav._visual_servo_cancel_event.is_set() is False
+
+
 def test_coordinate_frame_stale_detected_from_visual_room_mismatch() -> None:
     nav = _nav_container()
     nav._room_visual_max_distance = 0.35
