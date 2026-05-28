@@ -296,7 +296,10 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
             # Always use thread pool to execute RPC handlers (prevents deadlock)
             self._get_call_thread_pool().submit(execute_and_respond)
 
-        return self.subscribe(topic_req, receive_call)
+        unsubscribe = self.subscribe(topic_req, receive_call)
+        if isinstance(topic_req, Topic):
+            time.sleep(0.05)
+        return unsubscribe
 
 
 class LCMRPC(PubSubRPCMixin[Topic, Any], PickleLCM):
