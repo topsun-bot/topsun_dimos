@@ -25,6 +25,7 @@ from typing import (
     Generic,
     TypedDict,
     TypeVar,
+    cast,
 )
 
 from dimos.constants import LCM_MAX_CHANNEL_NAME_LENGTH
@@ -40,6 +41,10 @@ if TYPE_CHECKING:
     from types import FunctionType
 
 logger = setup_logger()
+
+_RPC_READY_PROBE_KEY = "__dimos_rpc_ready_probe__"
+_RPC_READY_PROBE_ATTEMPTS = 3
+_RPC_READY_PROBE_TIMEOUT = 0.1
 
 MsgT = TypeVar("MsgT")
 TopicT = TypeVar("TopicT")
@@ -132,6 +137,20 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
     def _decodeRPCReq(self, msg: dict[Any, Any]) -> RPCReq:
         return msg  # type: ignore[return-value]
 
+    def _confirm_lcm_subscription_ready(
+        self, topic: TopicT, probe_message: MsgT, ready_event: threading.Event
+    ) -> None:
+        """Wait until an LCM subscription has handled a self-published probe."""
+        if not isinstance(topic, Topic):
+            return
+
+        for _ in range(_RPC_READY_PROBE_ATTEMPTS):
+            self.publish(topic, probe_message)
+            if ready_event.wait(_RPC_READY_PROBE_TIMEOUT):
+                return
+
+        logger.warning("LCM RPC subscription readiness probe timed out for %s", topic)
+
     def _get_call_thread_pool(self) -> ThreadPoolExecutor:
         """Get or create the thread pool for RPC handler execution (lazy initialization)."""
         with self._call_thread_pool_lock:
@@ -202,9 +221,17 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
             if topic_res_key not in self._response_subs:
                 # Create shared handler that routes to callbacks by msg_id
                 callbacks_dict: dict[float, Callable[..., Any]] = {}
+                ready_event = threading.Event()
+                ready_token = f"{id(self)}:{time.time_ns()}:{topic_res_key}"
 
                 def shared_response_handler(msg: MsgT, _: TopicT) -> None:
                     res = self._decodeRPCRes(msg)  # type: ignore[arg-type]
+                    probe_token = cast(dict[str, Any], res).get(_RPC_READY_PROBE_KEY)
+                    if probe_token is not None:
+                        if probe_token == ready_token:
+                            ready_event.set()
+                        return
+
                     res_id = res.get("id")
                     if res_id is None:
                         return
@@ -220,8 +247,6 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
                     exc_data = res.get("exception")
                     if exc_data:
                         # Reconstruct the exception and pass it to the callback
-                        from typing import cast
-
                         from dimos.protocol.rpc.rpc_utils import SerializedException
 
                         exc = deserialize_exception(cast("SerializedException", exc_data))
@@ -233,6 +258,12 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
                 # Create single shared subscription
                 unsub = self.subscribe(topic_res, shared_response_handler)
                 self._response_subs[topic_res_key] = (unsub, callbacks_dict)
+                probe_res = cast(RPCRes, {_RPC_READY_PROBE_KEY: ready_token})
+                self._confirm_lcm_subscription_ready(
+                    topic_res,
+                    self._encodeRPCRes(probe_res),  # type: ignore[arg-type]
+                    ready_event,
+                )
 
             # Register this call's callback
             _, callbacks_dict = self._response_subs[topic_res_key]
@@ -264,6 +295,11 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
 
         def receive_call(msg: MsgT, _: TopicT) -> None:
             req = self._decodeRPCReq(msg)  # type: ignore[arg-type]
+            probe_token = cast(dict[str, Any], req).get(_RPC_READY_PROBE_KEY)
+            if probe_token is not None:
+                if probe_token == ready_token:
+                    ready_event.set()
+                return
 
             if req.get("name") != name:
                 return
@@ -296,7 +332,19 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
             # Always use thread pool to execute RPC handlers (prevents deadlock)
             self._get_call_thread_pool().submit(execute_and_respond)
 
-        return self.subscribe(topic_req, receive_call)
+        ready_event = threading.Event()
+        ready_token = f"{id(self)}:{time.time_ns()}:{str(topic_req)}"
+        unsubscribe = self.subscribe(topic_req, receive_call)
+        probe_req = cast(
+            RPCReq,
+            {"name": name, "args": ([], {}), "id": None, _RPC_READY_PROBE_KEY: ready_token},
+        )
+        self._confirm_lcm_subscription_ready(
+            topic_req,
+            self._encodeRPCReq(probe_req),  # type: ignore[arg-type]
+            ready_event,
+        )
+        return unsubscribe
 
 
 class LCMRPC(PubSubRPCMixin[Topic, Any], PickleLCM):
