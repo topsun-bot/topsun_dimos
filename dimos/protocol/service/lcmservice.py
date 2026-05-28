@@ -63,7 +63,7 @@ class LCMService(Service):
     config: LCMConfig
     l: lcm_mod.LCM | None
     _stop_event: threading.Event
-    _l_lock: threading.Lock
+    _l_lock: threading.RLock
     _thread: threading.Thread | None
     _call_thread_pool: ThreadPoolExecutor | None = None
     _call_thread_pool_lock: threading.RLock = threading.RLock()
@@ -77,7 +77,7 @@ class LCMService(Service):
         else:
             self.l = lcm_mod.LCM(self.config.url) if self.config.url else lcm_mod.LCM()
 
-        self._l_lock = threading.Lock()
+        self._l_lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -100,7 +100,7 @@ class LCMService(Service):
         self.l = None
         self._stop_event = threading.Event()
         self._thread = None
-        self._l_lock = threading.Lock()
+        self._l_lock = threading.RLock()
         self._call_thread_pool = None
         self._call_thread_pool_lock = threading.RLock()
 
