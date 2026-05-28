@@ -113,6 +113,7 @@ dependencies = [
     "textual==3.7.1",
     "terminaltexteffects==0.12.2",
     "typer>=0.19.2,<1",
+    "pyyaml>=6.0",
     "plotext==5.3.2",
     # Used for calculating the occupancy map.
     "numba>=0.60.0", # First version supporting Python 3.12
