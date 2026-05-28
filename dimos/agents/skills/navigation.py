@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
+from heapq import heappop, heappush
 import math
 import threading
 import time
 from typing import Any, cast
 
+import numpy as np
 from reactivex.disposable import Disposable
 
 from dimos.agents.annotation import skill
@@ -50,6 +53,33 @@ from dimos.utils.generic import extract_json_from_llm_response
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+
+@dataclass
+class MemoryBlindspotRegion:
+    region_id: str
+    region_fingerprint: str
+    target_type: str
+    reason: str
+    cells: list[tuple[int, int]]
+    area_m2: float
+    centroid: tuple[float, float]
+    nearest_distance_m: float
+    farthest_distance_m: float
+    frontier_cell_count: int
+    score: float
+
+
+@dataclass
+class MemoryBlindspotVisitState:
+    region_id: str
+    region_fingerprint: str
+    target_pose: tuple[float, float, float]
+    status: str
+    timestamp: float
+    cooldown_until: float
+    attempts: int = 1
+
 
 # navigate_with_text fallback step order (env: DIMOS_NAV_FALLBACK=semantic|room_first)
 _NAV_FALLBACK_SEMANTIC = (
@@ -329,6 +359,103 @@ class NavigationSkillContainer(Module):
                     return True
         return False
 
+    def _costmap_safe_neighbor_count(
+        self,
+        costmap: OccupancyGrid,
+        gx: int,
+        gy: int,
+        clearance_m: float,
+    ) -> int:
+        count = 0
+        for ny in range(max(0, gy - 1), min(costmap.height, gy + 2)):
+            for nx in range(max(0, gx - 1), min(costmap.width, gx + 2)):
+                if nx == gx and ny == gy:
+                    continue
+                if self._is_costmap_goal_cell_safe(costmap, nx, ny, clearance_m):
+                    count += 1
+        return count
+
+    def _nearest_safe_costmap_cell(
+        self,
+        costmap: OccupancyGrid,
+        center_gx: int,
+        center_gy: int,
+        search_radius_m: float,
+        clearance_m: float,
+        origin_world: Vector3 | None = None,
+    ) -> tuple[int, int] | None:
+        search_cells = max(1, math.ceil(search_radius_m / max(costmap.resolution, 1e-6)))
+        candidates: list[tuple[int, int, float]] = []
+        for gy in range(
+            max(0, center_gy - search_cells), min(costmap.height, center_gy + search_cells + 1)
+        ):
+            for gx in range(
+                max(0, center_gx - search_cells), min(costmap.width, center_gx + search_cells + 1)
+            ):
+                if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
+                    continue
+                if origin_world is None:
+                    distance = math.hypot(gx - center_gx, gy - center_gy) * costmap.resolution
+                else:
+                    world = costmap.grid_to_world((gx, gy, 0.0))
+                    distance = math.hypot(
+                        float(world.x) - float(origin_world.x),
+                        float(world.y) - float(origin_world.y),
+                    )
+                if distance <= search_radius_m:
+                    candidates.append((gx, gy, distance))
+        if not candidates:
+            return None
+        gx, gy, _ = min(candidates, key=lambda item: item[2])
+        return gx, gy
+
+    def _reachable_safe_cells(
+        self,
+        costmap: OccupancyGrid,
+        start_gx: int,
+        start_gy: int,
+        search_radius_m: float,
+        clearance_m: float,
+    ) -> dict[tuple[int, int], float]:
+        if not self._is_costmap_goal_cell_safe(costmap, start_gx, start_gy, clearance_m):
+            return {}
+
+        resolution = max(costmap.resolution, 1e-6)
+        max_distance = max(0.0, search_radius_m)
+        distances: dict[tuple[int, int], float] = {(start_gx, start_gy): 0.0}
+        queue: list[tuple[float, int, int]] = [(0.0, start_gx, start_gy)]
+        neighbors = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ]
+
+        while queue:
+            distance, gx, gy = heappop(queue)
+            if distance > distances.get((gx, gy), math.inf):
+                continue
+            for dx, dy in neighbors:
+                nx = gx + dx
+                ny = gy + dy
+                if not (0 <= nx < costmap.width and 0 <= ny < costmap.height):
+                    continue
+                step = math.hypot(dx, dy) * resolution
+                next_distance = distance + step
+                if next_distance > max_distance:
+                    continue
+                if next_distance >= distances.get((nx, ny), math.inf):
+                    continue
+                if not self._is_costmap_goal_cell_safe(costmap, nx, ny, clearance_m):
+                    continue
+                distances[(nx, ny)] = next_distance
+                heappush(queue, (next_distance, nx, ny))
+        return distances
+
     def _memory_coverage_reason(
         self,
         x: float,
@@ -357,6 +484,286 @@ class NavigationSkillContainer(Module):
             return "stale", nearest_distance
         return "missing", nearest_distance
 
+    def _build_memory_blindspot_mask(
+        self,
+        costmap: OccupancyGrid,
+        reachable_distances: dict[tuple[int, int], float],
+        memory_locations: list[dict[str, float | str]],
+        coverage_radius_m: float,
+        stale_after_sec: float,
+        now: float,
+        exclude_recent_goals: list[tuple[float, float]] | None,
+    ) -> tuple[np.ndarray, dict[tuple[int, int], tuple[str, float | None]]]:
+        mask = np.zeros((costmap.height, costmap.width), dtype=bool)
+        reasons: dict[tuple[int, int], tuple[str, float | None]] = {}
+        recent = exclude_recent_goals or []
+
+        for gx, gy in reachable_distances:
+            world = costmap.grid_to_world((gx, gy, 0.0))
+            if any(
+                math.hypot(float(world.x) - rx, float(world.y) - ry) < coverage_radius_m
+                for rx, ry in recent
+            ):
+                continue
+            reason, nearest_memory_distance = self._memory_coverage_reason(
+                float(world.x),
+                float(world.y),
+                memory_locations,
+                coverage_radius_m,
+                stale_after_sec,
+                now,
+            )
+            if reason is None:
+                continue
+            mask[gy, gx] = True
+            reasons[(gx, gy)] = (reason, nearest_memory_distance)
+        return mask, reasons
+
+    @staticmethod
+    def _connected_blindspot_regions(mask: np.ndarray) -> list[list[tuple[int, int]]]:
+        visited = np.zeros(mask.shape, dtype=bool)
+        regions: list[list[tuple[int, int]]] = []
+        height, width = mask.shape
+        neighbors = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ]
+
+        for gy in range(height):
+            for gx in range(width):
+                if not mask[gy, gx] or visited[gy, gx]:
+                    continue
+                region: list[tuple[int, int]] = []
+                stack = [(gx, gy)]
+                visited[gy, gx] = True
+                while stack:
+                    cx, cy = stack.pop()
+                    region.append((cx, cy))
+                    for dx, dy in neighbors:
+                        nx = cx + dx
+                        ny = cy + dy
+                        if not (0 <= nx < width and 0 <= ny < height):
+                            continue
+                        if visited[ny, nx] or not mask[ny, nx]:
+                            continue
+                        visited[ny, nx] = True
+                        stack.append((nx, ny))
+                regions.append(region)
+        return regions
+
+    def _region_fingerprint(
+        self,
+        costmap: OccupancyGrid,
+        cells: list[tuple[int, int]],
+        target_type: str,
+    ) -> tuple[str, tuple[float, float], tuple[int, int, int, int]]:
+        xs = [cell[0] for cell in cells]
+        ys = [cell[1] for cell in cells]
+        centroid_gx = sum(xs) / len(xs)
+        centroid_gy = sum(ys) / len(ys)
+        centroid_world = costmap.grid_to_world((centroid_gx, centroid_gy, 0.0))
+        qx = round(float(centroid_world.x) * 2.0) / 2.0
+        qy = round(float(centroid_world.y) * 2.0) / 2.0
+        bbox = (min(xs), min(ys), max(xs), max(ys))
+        bbox_m = tuple(round(v * costmap.resolution, 1) for v in bbox)
+        fingerprint = f"{target_type}:{qx:.1f}:{qy:.1f}:{bbox_m}"
+        return fingerprint, (float(centroid_world.x), float(centroid_world.y)), bbox
+
+    @staticmethod
+    def _region_failure_penalty(
+        region: MemoryBlindspotRegion,
+        failed_regions: list[MemoryBlindspotVisitState] | None,
+        now: float,
+        match_radius_m: float = 1.0,
+    ) -> float:
+        if not failed_regions:
+            return 0.0
+        penalty = 0.0
+        for state in failed_regions:
+            if state.cooldown_until <= now:
+                continue
+            if state.region_fingerprint == region.region_fingerprint:
+                penalty = max(penalty, 3.0 + state.attempts)
+                continue
+            distance = math.hypot(
+                region.centroid[0] - state.target_pose[0],
+                region.centroid[1] - state.target_pose[1],
+            )
+            if distance <= match_radius_m:
+                penalty = max(penalty, 3.0 + state.attempts)
+        return penalty
+
+    @staticmethod
+    def _region_failure_attempts(
+        region: MemoryBlindspotRegion,
+        failed_regions: list[MemoryBlindspotVisitState] | None,
+        now: float,
+        match_radius_m: float = 1.0,
+    ) -> int:
+        if not failed_regions:
+            return 0
+        attempts = 0
+        for state in failed_regions:
+            if state.cooldown_until <= now:
+                continue
+            if state.region_fingerprint == region.region_fingerprint:
+                attempts = max(attempts, state.attempts)
+                continue
+            distance = math.hypot(
+                region.centroid[0] - state.target_pose[0],
+                region.centroid[1] - state.target_pose[1],
+            )
+            if distance <= match_radius_m:
+                attempts = max(attempts, state.attempts)
+        return attempts
+
+    def _make_region_from_cells(
+        self,
+        costmap: OccupancyGrid,
+        cells: list[tuple[int, int]],
+        reachable_distances: dict[tuple[int, int], float],
+        reasons: dict[tuple[int, int], tuple[str, float | None]],
+        failed_regions: list[MemoryBlindspotVisitState] | None,
+        now: float,
+        min_region_cells: int,
+        max_area_bonus_m2: float,
+    ) -> MemoryBlindspotRegion | None:
+        if len(cells) < min_region_cells:
+            return None
+
+        frontier_count = sum(
+            1 for gx, gy in cells if self._costmap_cell_has_unknown_neighbor(costmap, gx, gy)
+        )
+        target_type = "memory_frontier" if frontier_count else "memory_gap"
+        reason = "missing" if any(reasons[cell][0] == "missing" for cell in cells) else "stale"
+        fingerprint, centroid, _bbox = self._region_fingerprint(costmap, cells, target_type)
+        distances = [reachable_distances[cell] for cell in cells if cell in reachable_distances]
+        if not distances:
+            return None
+        area_m2 = len(cells) * costmap.resolution * costmap.resolution
+        nearest_distance_m = min(distances)
+        farthest_distance_m = max(distances)
+        region = MemoryBlindspotRegion(
+            region_id=fingerprint,
+            region_fingerprint=fingerprint,
+            target_type=target_type,
+            reason=reason,
+            cells=cells,
+            area_m2=area_m2,
+            centroid=centroid,
+            nearest_distance_m=nearest_distance_m,
+            farthest_distance_m=farthest_distance_m,
+            frontier_cell_count=frontier_count,
+            score=0.0,
+        )
+        frontier_bonus = 1.0 if target_type == "memory_frontier" else 0.0
+        corridor_depth_bonus = min(farthest_distance_m, 5.0) * 0.2
+        missing_bonus = 0.25 if reason == "missing" else 0.0
+        failure_penalty = self._region_failure_penalty(region, failed_regions, now)
+        region.score = (
+            nearest_distance_m
+            - min(area_m2, max_area_bonus_m2) * 0.15
+            - frontier_bonus
+            - corridor_depth_bonus
+            - missing_bonus
+            + failure_penalty
+        )
+        return region
+
+    def _yaw_toward_cell(
+        self,
+        costmap: OccupancyGrid,
+        from_world: Vector3,
+        target_cell: tuple[int, int],
+    ) -> float:
+        target_world = costmap.grid_to_world((target_cell[0], target_cell[1], 0.0))
+        return math.atan2(
+            float(target_world.y) - float(from_world.y), float(target_world.x) - float(from_world.x)
+        )
+
+    def _select_region_goal_cell(
+        self,
+        region: MemoryBlindspotRegion,
+        costmap: OccupancyGrid,
+        reachable_distances: dict[tuple[int, int], float],
+        search_radius_m: float,
+        clearance_m: float,
+    ) -> tuple[int, int] | None:
+        candidates = [
+            cell
+            for cell in region.cells
+            if reachable_distances.get(cell, math.inf) <= search_radius_m
+            and self._is_costmap_goal_cell_safe(costmap, cell[0], cell[1], clearance_m)
+        ]
+        if not candidates:
+            return None
+
+        if region.target_type == "memory_frontier":
+            frontier_cells = [
+                cell
+                for cell in candidates
+                if self._costmap_cell_has_unknown_neighbor(costmap, cell[0], cell[1])
+            ]
+            if frontier_cells:
+                candidates = frontier_cells
+
+        return max(
+            candidates,
+            key=lambda cell: (
+                reachable_distances.get(cell, 0.0),
+                self._costmap_safe_neighbor_count(costmap, cell[0], cell[1], clearance_m),
+            ),
+        )
+
+    def _validate_memory_blindspot_goal_cell(
+        self,
+        costmap: OccupancyGrid,
+        gx: int,
+        gy: int,
+        clearance_m: float,
+    ) -> bool:
+        if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
+            return False
+        # Lightweight stand-in for planner validation: avoid isolated cells that
+        # are technically free but leave little room for the local planner.
+        return self._costmap_safe_neighbor_count(costmap, gx, gy, clearance_m) >= 1
+
+    def _goal_orientation_for_region(
+        self,
+        region: MemoryBlindspotRegion,
+        goal_cell: tuple[int, int],
+        costmap: OccupancyGrid,
+    ) -> Quaternion:
+        if region.target_type == "memory_frontier":
+            gx, gy = goal_cell
+            unknown_cells: list[tuple[int, int]] = []
+            for ny in range(max(0, gy - 2), min(costmap.height, gy + 3)):
+                for nx in range(max(0, gx - 2), min(costmap.width, gx + 3)):
+                    if int(costmap.grid[ny, nx]) == CostValues.UNKNOWN:
+                        unknown_cells.append((nx, ny))
+            if unknown_cells:
+                goal_world = costmap.grid_to_world((gx, gy, 0.0))
+                nearest_unknown = min(
+                    unknown_cells,
+                    key=lambda cell: math.hypot(cell[0] - gx, cell[1] - gy),
+                )
+                yaw = self._yaw_toward_cell(costmap, goal_world, nearest_unknown)
+                return Quaternion.from_euler(Vector3(0.0, 0.0, yaw))
+
+        goal_world = costmap.grid_to_world((goal_cell[0], goal_cell[1], 0.0))
+        yaw = math.atan2(
+            region.centroid[1] - float(goal_world.y), region.centroid[0] - float(goal_world.x)
+        )
+        if abs(yaw) < 1e-6 and self._latest_odom is not None:
+            return self._latest_odom.orientation
+        return Quaternion.from_euler(Vector3(0.0, 0.0, yaw))
+
     def _find_nearest_memory_blindspot(
         self,
         search_radius_m: float = 5.0,
@@ -364,6 +771,10 @@ class NavigationSkillContainer(Module):
         stale_after_sec: float = 600.0,
         clearance_m: float = 0.35,
         exclude_recent_goals: list[tuple[float, float]] | None = None,
+        failed_regions: list[MemoryBlindspotVisitState] | None = None,
+        min_region_cells: int = 4,
+        max_area_bonus_m2: float = 8.0,
+        max_region_attempts: int = 2,
     ) -> dict[str, Any] | None:
         if self._latest_odom is None or self._latest_global_costmap is None:
             return None
@@ -373,71 +784,138 @@ class NavigationSkillContainer(Module):
         robot_grid = costmap.world_to_grid((robot.x, robot.y, robot.z))
         center_gx = round(robot_grid.x)
         center_gy = round(robot_grid.y)
-        radius_cells = max(1, math.ceil(search_radius_m / max(costmap.resolution, 1e-6)))
-        stride = max(1, round(0.25 / max(costmap.resolution, 1e-6)))
+        if not self._is_costmap_goal_cell_safe(costmap, center_gx, center_gy, clearance_m):
+            nearby_safe_cells: list[tuple[int, int, float]] = []
+            search_cells = max(
+                1, math.ceil(min(search_radius_m, 2.0) / max(costmap.resolution, 1e-6))
+            )
+            for gy in range(
+                max(0, center_gy - search_cells), min(costmap.height, center_gy + search_cells + 1)
+            ):
+                for gx in range(
+                    max(0, center_gx - search_cells),
+                    min(costmap.width, center_gx + search_cells + 1),
+                ):
+                    if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
+                        continue
+                    world = costmap.grid_to_world((gx, gy, 0.0))
+                    distance = math.hypot(
+                        float(world.x) - float(robot.x), float(world.y) - float(robot.y)
+                    )
+                    nearby_safe_cells.append((gx, gy, distance))
+            if not nearby_safe_cells:
+                return None
+            center_gx, center_gy, _ = min(nearby_safe_cells, key=lambda item: item[2])
         now = time.time()
         memory_locations = self._memory_locations()
-        recent = exclude_recent_goals or []
 
-        best: dict[str, Any] | None = None
-        for gy in range(
-            max(0, center_gy - radius_cells),
-            min(costmap.height, center_gy + radius_cells + 1),
-            stride,
-        ):
-            for gx in range(
-                max(0, center_gx - radius_cells),
-                min(costmap.width, center_gx + radius_cells + 1),
-                stride,
-            ):
-                world = costmap.grid_to_world((gx, gy, 0.0))
-                distance_to_robot = math.hypot(world.x - float(robot.x), world.y - float(robot.y))
-                if distance_to_robot > search_radius_m:
-                    continue
-                if distance_to_robot < max(0.5, coverage_radius_m * 0.5):
-                    continue
-                if any(
-                    math.hypot(world.x - rx, world.y - ry) < coverage_radius_m for rx, ry in recent
-                ):
-                    continue
-                if not self._is_costmap_goal_cell_safe(costmap, gx, gy, clearance_m):
-                    continue
+        reachable_distances = self._reachable_safe_cells(
+            costmap,
+            center_gx,
+            center_gy,
+            search_radius_m,
+            clearance_m,
+        )
+        if not reachable_distances:
+            return None
+        min_goal_distance = max(0.5, coverage_radius_m * 0.5)
 
-                reason, nearest_memory_distance = self._memory_coverage_reason(
-                    float(world.x),
-                    float(world.y),
-                    memory_locations,
-                    coverage_radius_m,
-                    stale_after_sec,
+        mask, reasons = self._build_memory_blindspot_mask(
+            costmap,
+            reachable_distances,
+            memory_locations,
+            coverage_radius_m,
+            stale_after_sec,
+            now,
+            exclude_recent_goals,
+        )
+
+        regions: list[MemoryBlindspotRegion] = []
+        for cells in self._connected_blindspot_regions(mask):
+            region = self._make_region_from_cells(
+                costmap,
+                cells,
+                reachable_distances,
+                reasons,
+                failed_regions,
+                now,
+                min_region_cells,
+                max_area_bonus_m2,
+            )
+            if region is not None:
+                regions.append(region)
+
+        # Tiny maps or coarse masks can produce useful single-cell blindspots.
+        # Keep the region path as the default, but fall back to smaller components
+        # when no component passes the min-region threshold.
+        if not regions and min_region_cells > 1:
+            for cells in self._connected_blindspot_regions(mask):
+                region = self._make_region_from_cells(
+                    costmap,
+                    cells,
+                    reachable_distances,
+                    reasons,
+                    failed_regions,
                     now,
+                    1,
+                    max_area_bonus_m2,
                 )
-                if reason is None:
-                    continue
+                if region is not None:
+                    regions.append(region)
 
-                is_frontier = self._costmap_cell_has_unknown_neighbor(costmap, gx, gy)
-                target_type = "memory_frontier" if is_frontier else "memory_gap"
-                score = distance_to_robot
-                if is_frontier:
-                    score -= 0.75
-                if reason == "missing":
-                    score -= 0.25
-
-                candidate = {
-                    "pose": PoseStamped(
-                        position=make_vector3(float(world.x), float(world.y), float(robot.z)),
-                        orientation=self._latest_odom.orientation,
-                        frame_id=costmap.frame_id or self._latest_odom.frame_id,
-                    ),
-                    "distance_m": distance_to_robot,
-                    "grid": (gx, gy),
-                    "reason": reason,
-                    "target_type": target_type,
-                    "nearest_memory_distance_m": nearest_memory_distance,
-                    "score": score,
-                }
-                if best is None or score < float(best["score"]):
-                    best = candidate
-        return best
+        best_candidate: dict[str, Any] | None = None
+        for region in regions:
+            if (
+                max_region_attempts > 0
+                and self._region_failure_attempts(region, failed_regions, now)
+                >= max_region_attempts
+            ):
+                continue
+            goal_cell = self._select_region_goal_cell(
+                region,
+                costmap,
+                reachable_distances,
+                search_radius_m,
+                clearance_m,
+            )
+            if goal_cell is None:
+                continue
+            gx, gy = goal_cell
+            if reachable_distances.get(goal_cell, 0.0) < min_goal_distance:
+                continue
+            if not self._validate_memory_blindspot_goal_cell(
+                costmap,
+                gx,
+                gy,
+                clearance_m,
+            ):
+                continue
+            world = costmap.grid_to_world((gx, gy, 0.0))
+            reason, nearest_memory_distance = reasons.get(goal_cell, (region.reason, None))
+            path_distance = reachable_distances.get(goal_cell, region.farthest_distance_m)
+            candidate = {
+                "pose": PoseStamped(
+                    position=make_vector3(float(world.x), float(world.y), float(robot.z)),
+                    orientation=self._goal_orientation_for_region(region, goal_cell, costmap),
+                    frame_id=costmap.frame_id or self._latest_odom.frame_id,
+                ),
+                "distance_m": path_distance,
+                "path_distance_m": path_distance,
+                "grid": goal_cell,
+                "reason": reason,
+                "target_type": region.target_type,
+                "nearest_memory_distance_m": nearest_memory_distance,
+                "score": region.score,
+                "region_id": region.region_id,
+                "region_fingerprint": region.region_fingerprint,
+                "region_area_m2": region.area_m2,
+                "region_cell_count": len(region.cells),
+                "target_selection": "region_deep_point",
+                "goal_validation": "validated",
+            }
+            if best_candidate is None or region.score < float(best_candidate["score"]):
+                best_candidate = candidate
+        return best_candidate
 
     def _announce_object_found(self, target_name: str) -> None:
         speaker = self._speak_skill
@@ -2105,6 +2583,156 @@ class NavigationSkillContainer(Module):
         self._navigation.cancel_goal()
         return "timeout"
 
+    def _wait_for_new_memory_frame(
+        self,
+        after_timestamp: float,
+        previous_frame_count: int,
+        timeout_sec: float,
+    ) -> bool:
+        deadline = time.time() + max(0.0, timeout_sec)
+        while time.time() < deadline:
+            if self._memory_blindspot_patrol_stop:
+                return False
+            locations = self._memory_locations()
+            if len(locations) > previous_frame_count:
+                return True
+            for loc in locations:
+                try:
+                    timestamp = float(loc.get("timestamp", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if timestamp >= after_timestamp:
+                    return True
+            time.sleep(0.2)
+        return False
+
+    @staticmethod
+    def _remember_memory_blindspot_region_failure(
+        failed_regions: list[MemoryBlindspotVisitState],
+        target: dict[str, Any],
+        pose: PoseStamped,
+        status: str,
+        cooldown_sec: float,
+    ) -> None:
+        now = time.time()
+        fingerprint = str(
+            target.get(
+                "region_fingerprint",
+                f"point:{float(pose.position.x):.1f}:{float(pose.position.y):.1f}",
+            )
+        )
+        attempts = 1
+        for existing in failed_regions:
+            if existing.region_fingerprint == fingerprint:
+                attempts = existing.attempts + 1
+                failed_regions.remove(existing)
+                break
+        failed_regions.append(
+            MemoryBlindspotVisitState(
+                region_id=str(target.get("region_id", fingerprint)),
+                region_fingerprint=fingerprint,
+                target_pose=(
+                    float(pose.position.x),
+                    float(pose.position.y),
+                    float(pose.position.z),
+                ),
+                status=status,
+                timestamp=now,
+                cooldown_until=now + max(0.0, cooldown_sec),
+                attempts=attempts,
+            )
+        )
+        del failed_regions[:-20]
+
+    def _attempt_memory_blindspot_recovery(
+        self,
+        timeout_sec: float,
+        clearance_m: float = 0.45,
+        recovery_radius_m: float = 2.0,
+        recovery_min_move_m: float = 0.6,
+    ) -> bool:
+        if self._memory_blindspot_patrol_stop:
+            return False
+        try:
+            self._navigation.cancel_goal()
+        except Exception:
+            logger.exception("Failed to cancel goal before memory blindspot recovery")
+
+        if self._unitree_skill_container is not None:
+            try:
+                self._unitree_skill_container.execute_sport_command("RecoveryStand")
+            except Exception:
+                logger.exception("Failed to execute RecoveryStand during blindspot recovery")
+            if self._memory_blindspot_patrol_stop:
+                return False
+            if hasattr(self._unitree_skill_container, "relative_move"):
+                try:
+                    self._unitree_skill_container.relative_move(
+                        forward=-0.2,
+                        left=0.0,
+                        degrees=0.0,
+                    )
+                except Exception:
+                    logger.exception("Low-level blindspot recovery move failed")
+
+        if self._latest_odom is None or self._latest_global_costmap is None:
+            return False
+        costmap = self._latest_global_costmap
+        robot = self._latest_odom.position
+        robot_grid = costmap.world_to_grid((robot.x, robot.y, robot.z))
+        start_gx = round(robot_grid.x)
+        start_gy = round(robot_grid.y)
+        if not self._is_costmap_goal_cell_safe(costmap, start_gx, start_gy, clearance_m):
+            safe_start = self._nearest_safe_costmap_cell(
+                costmap,
+                start_gx,
+                start_gy,
+                recovery_radius_m,
+                clearance_m,
+                robot,
+            )
+            if safe_start is None:
+                return False
+            start_gx, start_gy = safe_start
+
+        reachable = self._reachable_safe_cells(
+            costmap,
+            start_gx,
+            start_gy,
+            recovery_radius_m,
+            clearance_m,
+        )
+        candidates = [
+            (cell, distance)
+            for cell, distance in reachable.items()
+            if recovery_min_move_m <= distance <= recovery_radius_m
+            and self._is_costmap_goal_cell_safe(costmap, cell[0], cell[1], clearance_m)
+            and self._costmap_safe_neighbor_count(costmap, cell[0], cell[1], clearance_m) >= 1
+        ]
+        if not candidates:
+            return False
+        goal_cell, _ = max(
+            candidates,
+            key=lambda item: (
+                self._costmap_safe_neighbor_count(costmap, item[0][0], item[0][1], clearance_m),
+                item[1],
+            ),
+        )
+        world = costmap.grid_to_world((goal_cell[0], goal_cell[1], 0.0))
+        pose = PoseStamped(
+            position=make_vector3(float(world.x), float(world.y), float(robot.z)),
+            orientation=self._latest_odom.orientation,
+            frame_id=costmap.frame_id or self._latest_odom.frame_id,
+        )
+        if not self._navigation.set_goal(pose):
+            return False
+        status = self._wait_for_memory_blindspot_goal(
+            timeout_sec=timeout_sec,
+            stuck_timeout_sec=max(1.0, timeout_sec * 0.5),
+            progress_epsilon_m=0.1,
+        )
+        return status == "reached"
+
     @skill
     def explore_memory_blindspot(
         self,
@@ -2163,6 +2791,11 @@ class NavigationSkillContainer(Module):
         cooldown_sec: float = 2.0,
         recognize_on_arrival: bool = True,
         include_object_summary: bool = True,
+        arrival_settle_sec: float = 2.0,
+        wait_for_memory_frame_sec: float = 5.0,
+        region_failure_cooldown_sec: float = 60.0,
+        max_region_attempts: int = 2,
+        recovery_goal_timeout_sec: float = 10.0,
     ) -> str:
         """Explore areas that are not yet covered by spatial memory.
 
@@ -2184,6 +2817,11 @@ class NavigationSkillContainer(Module):
             cooldown_sec: Delay between goals.
             recognize_on_arrival: Run VLM object recognition after reaching a target.
             include_object_summary: Include objects found during this patrol in the return text.
+            arrival_settle_sec: Stabilization delay after reaching a target.
+            wait_for_memory_frame_sec: Time to wait for a new spatial-memory frame on arrival.
+            region_failure_cooldown_sec: Cooldown for failed blindspot regions.
+            max_region_attempts: Maximum failed attempts for a region during its cooldown.
+            recovery_goal_timeout_sec: Timeout for recovery escape goals after stuck detection.
         """
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
@@ -2197,10 +2835,13 @@ class NavigationSkillContainer(Module):
         visited = 0
         timed_out = 0
         stuck = 0
+        recovered = 0
+        recovery_failed = 0
         failed = 0
         max_failures = 3
         stop_reason = "max_duration_sec reached"
         recent_goals: list[tuple[float, float]] = []
+        failed_regions: list[MemoryBlindspotVisitState] = []
         run_id = f"memory_blindspot_{int(started_at)}"
         objects_by_target: list[tuple[str, list[str]]] = []
         self._memory_blindspot_patrol_stop = False
@@ -2218,6 +2859,8 @@ class NavigationSkillContainer(Module):
                 coverage_radius_m=coverage_radius_m,
                 stale_after_sec=stale_after_sec,
                 exclude_recent_goals=recent_goals,
+                failed_regions=failed_regions,
+                max_region_attempts=max_region_attempts,
             )
             if target is None:
                 stop_reason = (
@@ -2229,6 +2872,13 @@ class NavigationSkillContainer(Module):
             target_label = f"{target['target_type']}@({pose.position.x:.2f},{pose.position.y:.2f})"
             if not self._navigation.set_goal(pose):
                 self._remember_memory_blindspot_goal(recent_goals, pose)
+                self._remember_memory_blindspot_region_failure(
+                    failed_regions,
+                    target,
+                    pose,
+                    "rejected",
+                    region_failure_cooldown_sec,
+                )
                 failed += 1
                 if failed >= max_failures:
                     stop_reason = "navigation rejected too many memory blindspot goals"
@@ -2250,9 +2900,23 @@ class NavigationSkillContainer(Module):
                 break
             if status in {"timeout", "stuck"}:
                 self._remember_memory_blindspot_goal(recent_goals, pose)
+                self._remember_memory_blindspot_region_failure(
+                    failed_regions,
+                    target,
+                    pose,
+                    status,
+                    region_failure_cooldown_sec,
+                )
                 failed += 1
                 if status == "stuck":
                     stuck += 1
+                    remaining_recovery_sec = max(0.0, deadline - time.time())
+                    if remaining_recovery_sec > 0 and self._attempt_memory_blindspot_recovery(
+                        timeout_sec=min(recovery_goal_timeout_sec, remaining_recovery_sec),
+                    ):
+                        recovered += 1
+                    else:
+                        recovery_failed += 1
                 else:
                     timed_out += 1
             else:
@@ -2260,10 +2924,32 @@ class NavigationSkillContainer(Module):
                 failed = 0
                 self._remember_memory_blindspot_goal(recent_goals, pose)
                 if recognize_on_arrival:
+                    arrival_time = time.time()
+                    previous_frame_count = len(self._memory_locations())
+                    if arrival_settle_sec > 0:
+                        sleep_until = time.time() + arrival_settle_sec
+                        while time.time() < sleep_until:
+                            if self._memory_blindspot_patrol_stop:
+                                stop_reason = "stop command received"
+                                break
+                            time.sleep(min(0.2, sleep_until - time.time()))
+                    if self._memory_blindspot_patrol_stop:
+                        break
+                    memory_frame_confirmed = self._wait_for_new_memory_frame(
+                        arrival_time,
+                        previous_frame_count,
+                        wait_for_memory_frame_sec,
+                    )
+                    if self._memory_blindspot_patrol_stop:
+                        stop_reason = "stop command received"
+                        break
                     stored, names, _ = self._detect_objects_in_current_view(
                         {
                             "source": "memory_blindspot_explorer",
                             "exploration_run_id": run_id,
+                            "target_region_id": str(
+                                target.get("region_id", target.get("region_fingerprint", ""))
+                            ),
                             "target_type": str(target["target_type"]),
                             "target_reason": str(target["reason"]),
                             "target_pose": [
@@ -2271,6 +2957,7 @@ class NavigationSkillContainer(Module):
                                 float(pose.position.y),
                                 float(pose.position.z),
                             ],
+                            "memory_frame_confirmed": memory_frame_confirmed,
                         }
                     )
                     if stored and names:
@@ -2285,7 +2972,8 @@ class NavigationSkillContainer(Module):
         lines = [
             "Memory-driven exploration finished: "
             f"visited {visited} goal(s), timed out {timed_out}, "
-            f"stuck {stuck}, elapsed {elapsed:.0f}s.",
+            f"stuck {stuck}, recovered {recovered}, "
+            f"recovery_failed {recovery_failed}, elapsed {elapsed:.0f}s.",
             f"Stopped because {stop_reason}.",
         ]
         if include_object_summary:

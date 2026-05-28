@@ -20,7 +20,7 @@ from langchain_core.messages import HumanMessage
 import numpy as np
 import pytest
 
-from dimos.agents.skills.navigation import NavigationSkillContainer
+from dimos.agents.skills.navigation import MemoryBlindspotVisitState, NavigationSkillContainer
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import Out
@@ -525,7 +525,7 @@ def test_patrol_memory_blindspots_blacklists_stuck_goal(
     nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
     nav._memory_blindspot_patrol_stop = False
     monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
-    wait_statuses = ["stuck", "reached"]
+    wait_statuses = ["stuck", "reached", "reached"]
 
     def fake_wait(*args: Any, **kwargs: Any) -> str:
         return wait_statuses.pop(0)
@@ -548,7 +548,11 @@ def test_patrol_memory_blindspots_blacklists_stuck_goal(
     assert "visited 1 goal(s)" in result
     assert "timed out 0" in result
     assert "stuck 1" in result
-    assert [goal.position.x for goal in nav._navigation.goals] == [1.0, 2.0]
+    assert "recovered 1" in result
+    assert [nav._navigation.goals[0].position.x, nav._navigation.goals[-1].position.x] == [
+        1.0,
+        2.0,
+    ]
 
 
 def test_blindspot_goal_rejects_occupied_cells() -> None:
@@ -564,6 +568,157 @@ def test_blindspot_goal_rejects_occupied_cells() -> None:
     assert target is not None
     gx, gy = target["grid"]
     assert int(grid[gy, gx]) != CostValues.OCCUPIED
+
+
+def test_blindspot_region_prefers_deep_corridor_goal() -> None:
+    nav = _nav_container()
+    grid = np.full((7, 21), CostValues.OCCUPIED, dtype=np.int8)
+    grid[2:5, 1:20] = CostValues.FREE
+    nav._latest_odom = _pose(1.0, 1.5)
+    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+
+    target = nav._find_nearest_memory_blindspot(
+        search_radius_m=6.0,
+        coverage_radius_m=0.5,
+        clearance_m=0.0,
+    )
+
+    assert target is not None
+    assert target["region_cell_count"] > 1
+    assert target["target_selection"] == "region_deep_point"
+    assert target["pose"].position.x >= 6.0
+
+
+def test_wait_for_new_memory_frame_uses_frame_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    calls = 0
+    now = 100.0
+
+    def fake_time() -> float:
+        return now
+
+    def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def fake_locations() -> list[dict[str, float | str]]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return [{"frame_id": "old", "pos_x": 0.0, "pos_y": 0.0, "timestamp": 90.0}]
+        return [
+            {"frame_id": "old", "pos_x": 0.0, "pos_y": 0.0, "timestamp": 90.0},
+            {"frame_id": "new", "pos_x": 1.0, "pos_y": 0.0, "timestamp": 99.0},
+        ]
+
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=fake_locations)
+    nav._memory_blindspot_patrol_stop = False
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.time", fake_time)
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", fake_sleep)
+
+    assert nav._wait_for_new_memory_frame(100.0, previous_frame_count=1, timeout_sec=1.0)
+
+
+def test_region_failure_penalty_matches_stable_fingerprint() -> None:
+    nav = _nav_container()
+    grid = np.zeros((11, 11), dtype=np.int8)
+    nav._latest_odom = _pose(0.0, 0.0)
+    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+
+    first = nav._find_nearest_memory_blindspot(search_radius_m=3.0, coverage_radius_m=0.5)
+    assert first is not None
+    failed_regions = [
+        MemoryBlindspotVisitState(
+            region_id=str(first["region_id"]),
+            region_fingerprint=str(first["region_fingerprint"]),
+            target_pose=(
+                float(first["pose"].position.x),
+                float(first["pose"].position.y),
+                float(first["pose"].position.z),
+            ),
+            status="stuck",
+            timestamp=time.time(),
+            cooldown_until=time.time() + 60.0,
+        )
+    ]
+
+    second = nav._find_nearest_memory_blindspot(
+        search_radius_m=3.0,
+        coverage_radius_m=0.5,
+        failed_regions=failed_regions,
+    )
+
+    assert second is not None
+    assert float(second["score"]) >= float(first["score"]) + 2.0
+
+
+def test_region_failure_attempt_limit_skips_cooldown_region() -> None:
+    nav = _nav_container()
+    grid = np.zeros((11, 11), dtype=np.int8)
+    nav._latest_odom = _pose(0.0, 0.0)
+    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+
+    first = nav._find_nearest_memory_blindspot(search_radius_m=3.0, coverage_radius_m=0.5)
+    assert first is not None
+    failed_regions = [
+        MemoryBlindspotVisitState(
+            region_id=str(first["region_id"]),
+            region_fingerprint=str(first["region_fingerprint"]),
+            target_pose=(
+                float(first["pose"].position.x),
+                float(first["pose"].position.y),
+                float(first["pose"].position.z),
+            ),
+            status="stuck",
+            timestamp=time.time(),
+            cooldown_until=time.time() + 60.0,
+            attempts=2,
+        )
+    ]
+
+    second = nav._find_nearest_memory_blindspot(
+        search_radius_m=3.0,
+        coverage_radius_m=0.5,
+        failed_regions=failed_regions,
+        max_region_attempts=2,
+    )
+
+    assert second is None
+
+
+def test_blindspot_recovery_snaps_from_unsafe_start_cell() -> None:
+    nav = _nav_container()
+    grid = np.zeros((7, 7), dtype=np.int8)
+    grid[3, 3] = CostValues.OCCUPIED
+    nav._latest_odom = _pose(1.5, 1.5)
+    nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
+    nav._navigation = _FakeNavigation()
+    nav._unitree_skill_container = None
+    nav._memory_blindspot_patrol_stop = False
+
+    recovered = nav._attempt_memory_blindspot_recovery(
+        timeout_sec=1.0,
+        clearance_m=0.0,
+        recovery_radius_m=2.0,
+        recovery_min_move_m=0.1,
+    )
+
+    assert recovered
+    assert nav._navigation.cancel_count == 1
+    assert nav._navigation.goals
+    goal_grid = nav._latest_global_costmap.world_to_grid(
+        (
+            nav._navigation.goals[-1].position.x,
+            nav._navigation.goals[-1].position.y,
+            nav._navigation.goals[-1].position.z,
+        )
+    )
+    assert int(grid[round(goal_grid.y), round(goal_grid.x)]) != CostValues.OCCUPIED
 
 
 def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
