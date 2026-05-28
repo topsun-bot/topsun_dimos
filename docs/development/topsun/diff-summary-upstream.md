@@ -1,8 +1,8 @@
 # Topsun 分支相对 upstream/main 切分点的差异总结
 
-> 切分点: `6e171ac4` (upstream/main)  
-> 当前 HEAD: `70b9492a` (Merge pull request #85)  
-> 统计: 97 files changed, 11549 insertions(+), 252 deletions(-)  
+> 切分点: `6e171ac4` (upstream/main)
+> 当前 HEAD: `70b9492a` (Merge pull request #85)
+> 统计: 97 files changed, 11549 insertions(+), 252 deletions(-)
 > 分析日期: 2026-05-26
 
 ---
@@ -51,7 +51,7 @@
 
 **空间记忆 spec 扩展** ([spatial_memory_spec.py](/dimos/perception/spatial_memory_spec.py)) — +9 行
 
-**时间记忆改进** ([temporal_memory.py](/dimos/perception/temporal_memory/temporal_memory.py)) — +35/-1 行
+**时间记忆改进** ([temporal_memory.py](/dimos/perception/experimental/temporal_memory/temporal_memory.py)) — +35/-1 行
 
 ### 1.3 导航层 (`dimos/navigation/`)
 

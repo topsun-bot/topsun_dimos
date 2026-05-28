@@ -1,6 +1,6 @@
 # feat/semantic-nav-robust-loop — DimOS 框架改动总结
 
-> 对比基准：`main`  
+> 对比基准：`main`
 > 范围：`dimos/` 包内模块与运行时入口；不含 CI/workflow、独立测试脚本、ai_longrun_harness 等。
 
 ## 一、功能概览
