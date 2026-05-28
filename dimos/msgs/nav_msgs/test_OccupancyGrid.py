@@ -15,6 +15,7 @@
 
 """Test the OccupancyGrid convenience class."""
 
+from pathlib import Path
 import pickle
 
 import numpy as np
@@ -129,6 +130,45 @@ def test_lcm_encode_decode() -> None:
 
     # Check that the actual grid data was preserved (don't rely on float conversions)
     assert decoded.grid[5, 10] == 50  # Value we set should be preserved in grid
+
+
+def test_persistent_directory_round_trip(tmp_path: Path) -> None:
+    """Test saving and loading a grid package with metadata."""
+    data = np.zeros((4, 5), dtype=np.int8)
+    data[1, 2] = 100
+    origin = Pose(1.5, -2.0, 0.0, 0.0, 0.0, 0.5, 0.5)
+    grid = OccupancyGrid(grid=data, resolution=0.2, origin=origin, frame_id="map_old", ts=123.4)
+
+    map_dir = tmp_path / "costmap"
+    grid.save_to_directory(map_dir)
+
+    loaded = OccupancyGrid.from_path(map_dir)
+
+    assert np.array_equal(loaded.grid, data)
+    assert loaded.resolution == 0.2
+    assert loaded.frame_id == "map_old"
+    assert loaded.ts == 123.4
+    assert loaded.origin.position.x == 1.5
+    assert loaded.origin.position.y == -2.0
+    assert loaded.origin.orientation.z == 0.5
+    assert loaded.origin.orientation.w == 0.5
+
+
+def test_persistent_npz_round_trip(tmp_path: Path) -> None:
+    """Test saving and loading a single-file compressed grid."""
+    data = np.array([[0, -1], [100, 50]], dtype=np.int8)
+    grid = OccupancyGrid(grid=data, resolution=0.1, origin=Pose(-1.0, 2.0, 0.0), frame_id="odom")
+
+    map_path = tmp_path / "costmap.npz"
+    grid.save_npz(map_path)
+
+    loaded = OccupancyGrid.from_path(map_path)
+
+    assert np.array_equal(loaded.grid, data)
+    assert loaded.resolution == 0.1
+    assert loaded.frame_id == "odom"
+    assert loaded.origin.position.x == -1.0
+    assert loaded.origin.position.y == 2.0
 
 
 def test_string_representation() -> None:

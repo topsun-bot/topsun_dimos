@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
 import math
 import os
 import threading
@@ -43,6 +44,7 @@ from dimos.navigation.visual.query import (
 from dimos.perception.object_tracking_spec import ObjectTrackingSpec
 from dimos.perception.spatial_memory_spec import SpatialMemorySpec
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
+from dimos.spec.mapping import MetricRelocalizationSpec
 from dimos.types.door_memory_spec import SpatialLandmarkMemorySpec
 from dimos.types.robot_location import RobotLocation
 from dimos.types.spatial_record import RecordType, SpatialRecord
@@ -50,6 +52,25 @@ from dimos.utils.generic import extract_json_from_llm_response
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+
+@dataclass(frozen=True)
+class PlanarFrameTransform:
+    """SE2 transform from current odom frame into the persisted map frame."""
+
+    x: float
+    y: float
+    yaw: float
+
+    def map_to_current(self, x: float, y: float) -> tuple[float, float]:
+        dx = x - self.x
+        dy = y - self.y
+        c = math.cos(-self.yaw)
+        s = math.sin(-self.yaw)
+        return (c * dx - s * dy, s * dx + c * dy)
+
+    def yaw_map_to_current(self, yaw: float) -> float:
+        return yaw - self.yaw
 
 # navigate_with_text fallback step order (env: DIMOS_NAV_FALLBACK=object_room|semantic|room_first)
 _NAV_FALLBACK_OBJECT_ROOM = (
@@ -88,7 +109,7 @@ def _rotation_step_deg() -> float:
 
 
 def _panorama_rotations() -> int:
-    """Number of in-place rotations after the initial heading (90° × 3 ≈ full coverage)."""
+    """Number of in-place rotations after the initial heading (90 deg x 3 ~= full coverage)."""
     import os
 
     override = os.getenv("DIMOS_ROOM_SCAN_ROTATIONS")
@@ -258,10 +279,12 @@ class NavigationSkillContainer(Module):
     _spatial_memory: SpatialMemorySpec
     _landmark_memory: SpatialLandmarkMemorySpec
     _navigation: NavigationInterfaceSpec
+    _metric_relocalization: MetricRelocalizationSpec | None = None
     _object_tracking: ObjectTrackingSpec | None = None
     _unitree_skill_container: UnitreeSkillContainer | None = None
     _frontier_explorer: WavefrontFrontierExplorer | None = None
     _memory_session_id: str = ""
+    _map_from_current: PlanarFrameTransform | None = None
 
     color_image: In[Image]
     odom: In[PoseStamped]
@@ -271,6 +294,7 @@ class NavigationSkillContainer(Module):
         self._skill_started = False
         self._memory_session_id = f"session_{int(time.time())}"
         self._sweep_skip_rooms: set[str] = set()
+        self._map_from_current = None
 
         self._vl_model = _create_vl_model()
         _log_vlm_runtime_config(self._vl_model)
@@ -281,6 +305,11 @@ class NavigationSkillContainer(Module):
         self.register_disposable(Disposable(self.color_image.subscribe(self._on_color_image)))
         self.register_disposable(Disposable(self.odom.subscribe(self._on_odom)))
         self._skill_started = True
+        threading.Thread(
+            target=self._auto_metric_relocalize_once,
+            daemon=True,
+            name="metric-relocalize-startup",
+        ).start()
 
     @rpc
     def stop(self) -> None:
@@ -297,6 +326,115 @@ class NavigationSkillContainer(Module):
 
     def _on_odom(self, odom: PoseStamped) -> None:
         self._latest_odom = odom
+
+    @rpc
+    def set_map_from_current_transform(self, x: float, y: float, yaw: float) -> bool:
+        """Set the transform produced by metric-map relocalization.
+
+        The transform maps current odom coordinates into the persisted map frame.
+        Persisted records are inverted through this transform before navigation.
+        """
+        self._map_from_current = PlanarFrameTransform(float(x), float(y), float(yaw))
+        logger.info(
+            "Set map_from_current transform.",
+            x=round(float(x), 3),
+            y=round(float(y), 3),
+            yaw=round(float(yaw), 3),
+        )
+        return True
+
+    @rpc
+    def clear_map_from_current_transform(self) -> bool:
+        self._map_from_current = None
+        logger.info("Cleared map_from_current transform.")
+        return True
+
+    def _auto_metric_relocalize_once(self) -> None:
+        # Give mapping a short window to load the persistent map and receive live costmaps.
+        time.sleep(float(os.getenv("DIMOS_METRIC_RELOCALIZE_STARTUP_DELAY_S", "5.0")))
+        if self._metric_relocalization is None:
+            return
+
+        try:
+            result = self.relocalize_with_metric_map(scan=False, publish_on_success=False)
+            logger.info("Startup metric relocalization result: %s", result)
+        except Exception:
+            logger.debug("Startup metric relocalization skipped or failed", exc_info=True)
+
+    @skill
+    def relocalize_with_metric_map(
+        self,
+        scan: bool = False,
+        publish_on_success: bool = False,
+        search_radius_m: float = 2.0,
+        min_confidence: float = 0.55,
+    ) -> str:
+        """Match the current live costmap against the persisted map and set navigation transform."""
+        if self._metric_relocalization is None:
+            return "Metric relocalization is not available: CostMapper is not wired."
+
+        if scan:
+            self._rotate_scan_in_place()
+            time.sleep(1.0)
+
+        result = self._metric_relocalization.relocalize_current_map(
+            search_radius_m=search_radius_m,
+            min_confidence=min_confidence,
+        )
+        success = bool(result.get("success", False))
+        confidence = float(result.get("confidence", 0.0))
+        if not success:
+            return f"Metric relocalization failed (confidence={confidence:.2f})."
+
+        tx = float(result["map_from_current_x"])
+        ty = float(result["map_from_current_y"])
+        yaw = float(result["map_from_current_yaw"])
+        self.set_map_from_current_transform(tx, ty, yaw)
+
+        if publish_on_success:
+            self._metric_relocalization.publish_persistent_map()
+
+        return (
+            "Metric relocalization succeeded: "
+            f"map_from_current=({tx:.2f}, {ty:.2f}, yaw={yaw:.2f}), "
+            f"confidence={confidence:.2f}."
+        )
+
+    def _should_transform_persisted_record(self, record: SpatialRecord) -> bool:
+        if self._map_from_current is None:
+            return False
+        return not bool(record.session_id and record.session_id == self._memory_session_id)
+
+    def _record_pose_in_navigation_frame(self, record: SpatialRecord) -> PoseStamped:
+        x, y, z = record.position
+        yaw = record.rotation[2]
+        if self._should_transform_persisted_record(record):
+            assert self._map_from_current is not None
+            x, y = self._map_from_current.map_to_current(float(x), float(y))
+            yaw = self._map_from_current.yaw_map_to_current(float(yaw))
+
+        return PoseStamped(
+            position=make_vector3(float(x), float(y), float(z)),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, float(yaw))),
+            frame_id="map",
+        )
+
+    def _pose_in_navigation_frame(self, pose: PoseStamped) -> PoseStamped:
+        if self._map_from_current is None:
+            return pose
+
+        x, y = self._map_from_current.map_to_current(
+            float(pose.position.x), float(pose.position.y)
+        )
+        yaw = self._map_from_current.yaw_map_to_current(float(pose.orientation.to_euler().z))
+        return PoseStamped(
+            position=make_vector3(x, y, float(pose.position.z)),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
+            frame_id=pose.frame_id,
+        )
+
+    def _set_navigation_goal(self, pose: PoseStamped) -> bool:
+        return self._navigation.set_goal(pose)
 
     @skill
     def tag_location(self, location_name: str, num_photos: int = -1) -> str:
@@ -962,6 +1100,9 @@ class NavigationSkillContainer(Module):
 
     def _coordinate_frame_stale_reason(self, target: SpatialRecord) -> str | None:
         """Detect persisted coordinates that no longer match the current odom frame."""
+        if self._should_transform_persisted_record(target):
+            return None
+
         if self._latest_odom is None:
             return None
 
@@ -2248,6 +2389,11 @@ class NavigationSkillContainer(Module):
             relocalize_interval if relocalize_interval is not None else self._relocalize_interval_s
         )
         is_object_landmark = target.record_type == RecordType.LANDMARK
+        target_pose = self._record_pose_in_navigation_frame(target)
+        target_x = float(target_pose.position.x)
+        target_y = float(target_pose.position.y)
+        target_z = float(target_pose.position.z)
+        target_yaw = float(target_pose.orientation.to_euler().z)
         if is_object_landmark:
             # Object coords come from VLM capture pose — do not relocalize via room CLIP.
             enable_visual_drift = False
@@ -2270,7 +2416,7 @@ class NavigationSkillContainer(Module):
             if self._latest_odom is not None:
                 pos = self._latest_odom.position
                 all_waypoints = topo.shortest_path(
-                    float(pos.x), float(pos.y), target.position[0], target.position[1]
+                    float(pos.x), float(pos.y), target_x, target_y
                 )
                 logger.info(
                     "[L3]   Topology: %d waypoints from (%.2f, %.2f) → '%s' (%.2f, %.2f)",
@@ -2278,13 +2424,13 @@ class NavigationSkillContainer(Module):
                     pos.x,
                     pos.y,
                     target.name,
-                    target.position[0],
-                    target.position[1],
+                    target_x,
+                    target_y,
                 )
 
             last_corr = [0.0]
             final_dest = PoseStamped(
-                position=make_vector3(target.position[0], target.position[1], target.position[2]),
+                position=make_vector3(target_x, target_y, target_z),
                 orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
                 frame_id="map",
             )
@@ -2303,7 +2449,7 @@ class NavigationSkillContainer(Module):
                     orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
                     frame_id="map",
                 )
-                self._navigation.set_goal(segment_goal)
+                self._set_navigation_goal(segment_goal)
                 deadline = time.time() + 120.0
                 active = segment_goal
                 while time.time() < deadline:
@@ -2326,27 +2472,27 @@ class NavigationSkillContainer(Module):
 
             if is_object_landmark:
                 # Prefer stored object yaw; fall back to approach bearing
-                obj_yaw = target.rotation[2]
+                obj_yaw = target_yaw
                 if abs(obj_yaw) < 1e-6:
-                    obj_yaw = self._yaw_toward_point(target.position[0], target.position[1])
+                    obj_yaw = self._yaw_toward_point(target_x, target_y)
                 standoff_pose = PoseStamped(
                     position=make_vector3(
-                        target.position[0],
-                        target.position[1],
-                        target.position[2],
+                        target_x,
+                        target_y,
+                        target_z,
                     ),
                     orientation=Quaternion.from_euler(Vector3(0.0, 0.0, obj_yaw)),
                     frame_id="map",
                 )
             else:
-                yaw = target.rotation[2]
+                yaw = target_yaw
                 offset_x = 1.5 * math.cos(yaw)
                 offset_y = 1.5 * math.sin(yaw)
                 standoff_pose = PoseStamped(
                     position=make_vector3(
-                        target.position[0] + offset_x,
-                        target.position[1] + offset_y,
-                        target.position[2],
+                        target_x + offset_x,
+                        target_y + offset_y,
+                        target_z,
                     ),
                     orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
                     frame_id="map",
@@ -2402,7 +2548,7 @@ class NavigationSkillContainer(Module):
                 nav_idle = self._navigation.get_state() == NavigationState.IDLE
                 since_last_replan = time.time() - _last_replan_time
                 if (goal_changed or nav_idle) and since_last_replan >= _min_replan_interval:
-                    self._navigation.set_goal(active_goal)
+                    self._set_navigation_goal(active_goal)
                     _last_active_goal_pos = cur_pos
                     _last_replan_time = time.time()
 

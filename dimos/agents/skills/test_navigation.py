@@ -217,6 +217,9 @@ def _nav_container() -> NavigationSkillContainer:
     nav = object.__new__(NavigationSkillContainer)
     nav._skill_started = True
     nav._sweep_skip_rooms = set()
+    nav._memory_session_id = "session_current"
+    nav._map_from_current = None
+    nav._metric_relocalization = None
     return nav
 
 
@@ -256,6 +259,27 @@ class _FakeUnitree:
     def execute_sport_command(self, command: str) -> str:
         self.commands.append(command)
         return "ok"
+
+
+class _FakeMetricRelocalization:
+    def __init__(self, result: dict[str, float | int | bool]) -> None:
+        self.result = result
+        self.published = False
+
+    def relocalize_current_map(
+        self,
+        search_radius_m: float = 2.0,
+        stride_m: float | None = None,
+        yaw_candidates_deg: list[float] | None = None,
+        min_compared_cells: int = 20,
+        min_occupied_cells: int = 1,
+        min_confidence: float = 0.55,
+    ) -> dict[str, float | int | bool]:
+        return self.result
+
+    def publish_persistent_map(self) -> bool:
+        self.published = True
+        return True
 
 
 def test_rotate_in_place_prefers_closed_loop_spin() -> None:
@@ -522,6 +546,93 @@ def test_coordinate_frame_stale_detected_from_visual_room_mismatch() -> None:
 
     assert reason is not None
     assert "old odom frame" in reason
+
+
+def test_relocalization_transform_maps_persisted_record_to_current_frame() -> None:
+    nav = _nav_container()
+    nav.set_map_from_current_transform(10.0, 0.0, 0.0)
+    old_record = SpatialRecord(
+        name="办公室",
+        record_type=RecordType.ROOM,
+        position=(12.0, 3.0, 0.0),
+        rotation=(0.0, 0.0, 0.5),
+        session_id="session_old",
+    )
+
+    pose = nav._record_pose_in_navigation_frame(old_record)
+
+    assert pose.position.x == pytest.approx(2.0)
+    assert pose.position.y == pytest.approx(3.0)
+    assert pose.orientation.to_euler().z == pytest.approx(0.5)
+
+
+def test_relocalization_transform_skips_current_session_record() -> None:
+    nav = _nav_container()
+    nav.set_map_from_current_transform(10.0, 0.0, 0.0)
+    current_record = SpatialRecord(
+        name="当前房间",
+        record_type=RecordType.ROOM,
+        position=(12.0, 3.0, 0.0),
+        session_id="session_current",
+    )
+
+    pose = nav._record_pose_in_navigation_frame(current_record)
+
+    assert pose.position.x == pytest.approx(12.0)
+    assert pose.position.y == pytest.approx(3.0)
+
+
+def test_relocalization_transform_suppresses_stale_coordinate_warning() -> None:
+    nav = _nav_container()
+    nav.set_map_from_current_transform(10.0, 0.0, 0.0)
+    nav._latest_odom = _pose(2.0, 0.0)
+    nav._latest_image = SimpleNamespace(data=object())
+    old_room = SpatialRecord(
+        name="办公室",
+        record_type=RecordType.ROOM,
+        position=(12.0, 0.0, 0.0),
+        session_id="session_old",
+    )
+
+    assert nav._coordinate_frame_stale_reason(old_room) is None
+
+
+def test_metric_relocalize_sets_navigation_transform() -> None:
+    nav = _nav_container()
+    relocalizer = _FakeMetricRelocalization(
+        {
+            "success": True,
+            "map_from_current_x": 10.0,
+            "map_from_current_y": -2.0,
+            "map_from_current_yaw": 0.25,
+            "confidence": 0.8,
+        }
+    )
+    nav._metric_relocalization = relocalizer
+
+    msg = nav.relocalize_with_metric_map(publish_on_success=True)
+
+    assert "succeeded" in msg
+    assert nav._map_from_current is not None
+    assert nav._map_from_current.x == pytest.approx(10.0)
+    assert nav._map_from_current.y == pytest.approx(-2.0)
+    assert nav._map_from_current.yaw == pytest.approx(0.25)
+    assert relocalizer.published is True
+
+
+def test_metric_relocalize_failure_does_not_set_transform() -> None:
+    nav = _nav_container()
+    nav._metric_relocalization = _FakeMetricRelocalization(
+        {
+            "success": False,
+            "confidence": 0.2,
+        }
+    )
+
+    msg = nav.relocalize_with_metric_map()
+
+    assert "failed" in msg
+    assert nav._map_from_current is None
 
 
 @pytest.mark.slow

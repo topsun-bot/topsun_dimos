@@ -17,6 +17,7 @@ from typing import Protocol
 from dimos.core.stream import Out
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.spec.utils import Spec
 
 
 class GlobalPointcloud(Protocol):
@@ -25,3 +26,17 @@ class GlobalPointcloud(Protocol):
 
 class GlobalCostmap(Protocol):
     global_costmap: Out[OccupancyGrid]
+
+
+class MetricRelocalizationSpec(Spec, Protocol):
+    def relocalize_current_map(
+        self,
+        search_radius_m: float = 2.0,
+        stride_m: float | None = None,
+        yaw_candidates_deg: list[float] | None = None,
+        min_compared_cells: int = 20,
+        min_occupied_cells: int = 1,
+        min_confidence: float = 0.55,
+    ) -> dict[str, float | int | bool]: ...
+
+    def publish_persistent_map(self) -> bool: ...

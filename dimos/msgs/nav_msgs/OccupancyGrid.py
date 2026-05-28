@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from enum import IntEnum
 from functools import lru_cache
+import json
+from pathlib import Path
 import time
 from typing import TYPE_CHECKING, BinaryIO
 
@@ -90,8 +92,6 @@ def _build_occupancy_lut(
 
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from numpy.typing import NDArray
     from rerun._baseclasses import Archetype
 
@@ -240,14 +240,117 @@ class OccupancyGrid(Timestamped):
 
     @classmethod
     def from_path(cls, path: Path) -> OccupancyGrid:
+        if path.is_dir():
+            return cls.from_directory(path)
+
         match path.suffix.lower():
             case ".npy":
                 return cls(grid=np.load(path))
+            case ".npz":
+                with np.load(path) as data:
+                    grid = data["grid"].astype(np.int8)
+                    metadata = json.loads(str(data["metadata"].item()))
+                return cls._from_persistent_parts(grid, metadata)
             case ".png":
                 img = Image.open(path).convert("L")
                 return cls(grid=np.array(img).astype(np.int8))
             case _:
                 raise NotImplementedError(f"Unsupported file format: {path.suffix}")
+
+    @classmethod
+    def from_directory(cls, path: Path) -> OccupancyGrid:
+        metadata_path = path / "metadata.json"
+        with metadata_path.open() as f:
+            metadata = json.load(f)
+
+        grid_file = metadata.get("grid_file", "occupancy.npy")
+        grid = np.load(path / grid_file).astype(np.int8)
+        return cls._from_persistent_parts(grid, metadata)
+
+    @classmethod
+    def _from_persistent_parts(cls, grid: NDArray[np.int8], metadata: dict[str, object]) -> OccupancyGrid:
+        origin_data = metadata.get("origin", {})
+        if not isinstance(origin_data, dict):
+            raise ValueError("Invalid occupancy grid metadata: origin must be an object")
+
+        position = origin_data.get("position", {})
+        orientation = origin_data.get("orientation", {})
+        if not isinstance(position, dict) or not isinstance(orientation, dict):
+            raise ValueError("Invalid occupancy grid metadata: origin pose is malformed")
+
+        origin = Pose(
+            [
+                float(position.get("x", 0.0)),
+                float(position.get("y", 0.0)),
+                float(position.get("z", 0.0)),
+            ],
+            [
+                float(orientation.get("x", 0.0)),
+                float(orientation.get("y", 0.0)),
+                float(orientation.get("z", 0.0)),
+                float(orientation.get("w", 1.0)),
+            ],
+        )
+
+        height, width = grid.shape
+        expected_shape = metadata.get("shape")
+        if isinstance(expected_shape, list) and expected_shape != [height, width]:
+            raise ValueError(
+                f"Grid shape {grid.shape} does not match metadata shape {expected_shape}"
+            )
+
+        return cls(
+            grid=grid,
+            resolution=float(metadata.get("resolution", 0.05)),
+            origin=origin,
+            frame_id=str(metadata.get("frame_id", "world")),
+            ts=float(metadata.get("timestamp", 0.0)),
+        )
+
+    def to_metadata(self, *, grid_file: str = "occupancy.npy") -> dict[str, object]:
+        origin = self.origin
+        return {
+            "format": "dimos.occupancy_grid",
+            "version": 1,
+            "grid_file": grid_file,
+            "dtype": str(self.grid.dtype),
+            "shape": [self.height, self.width],
+            "width": self.width,
+            "height": self.height,
+            "resolution": self.resolution,
+            "frame_id": self.frame_id,
+            "timestamp": self.ts,
+            "origin": {
+                "position": {
+                    "x": origin.position.x,
+                    "y": origin.position.y,
+                    "z": origin.position.z,
+                },
+                "orientation": {
+                    "x": origin.orientation.x,
+                    "y": origin.orientation.y,
+                    "z": origin.orientation.z,
+                    "w": origin.orientation.w,
+                },
+            },
+        }
+
+    def save_to_directory(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        grid_file = "occupancy.npy"
+        np.save(path / grid_file, self.grid.astype(np.int8, copy=False))
+
+        metadata = self.to_metadata(grid_file=grid_file)
+        with (path / "metadata.json").open("w") as f:
+            json.dump(metadata, f, indent=2, sort_keys=True)
+
+        return path
+
+    def save_npz(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = json.dumps(self.to_metadata(grid_file="grid"), sort_keys=True)
+        np.savez_compressed(path, grid=self.grid.astype(np.int8, copy=False), metadata=metadata)
+        return path
 
     def world_to_grid(self, point: VectorLike) -> Vector3:
         """Convert world coordinates to grid coordinates.
