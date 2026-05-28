@@ -21,7 +21,7 @@ from langchain_core.messages import HumanMessage
 import numpy as np
 import pytest
 
-from dimos.agents.skills.navigation import NavigationSkillContainer
+from dimos.agents.skills.navigation import NavigationSkillContainer, _VisualAcquireResult
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import Out
@@ -974,6 +974,7 @@ def test_object_landmark_reports_failure_when_camera_cannot_see() -> None:
     nav._coordinate_frame_stale_reason = lambda target: None
     nav._unitree_skill_container = _FakeUnitree()
     nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: None  # camera sees nothing
+    nav._local_search_for_object_near_landmark_result = lambda target, target_name: None
 
     result = nav._navigate_to_landmark(
         target,
@@ -985,6 +986,48 @@ def test_object_landmark_reports_failure_when_camera_cannot_see() -> None:
     assert "could not visually acquire" in result
     assert "arrival_action skipped" in result
     assert nav._unitree_skill_container.commands == []
+
+
+def test_object_landmark_tries_local_search_after_visual_servo_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="凳子",
+        record_type=RecordType.LANDMARK,
+        position=(0.0, 0.0, 0.0),
+    )
+    nav._navigation = _FakeNavigation()
+    nav._latest_odom = _pose(0.8, 0.0)
+    nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
+    nav._relocalize_interval_s = 30.0
+    nav._coordinate_frame_stale_reason = lambda target: None
+    nav._unitree_skill_container = _FakeUnitree()
+    local_attempts: list[str] = []
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
+
+    nav._try_acquire_object_in_view_result = lambda *args, **kwargs: _VisualAcquireResult(
+        "Visually found '凳子', but navigation failed after repeated VLM retries: stalled",
+        navigation_failed=True,
+    )
+
+    def local_search(target: SpatialRecord, target_name: str) -> _VisualAcquireResult:
+        local_attempts.append(target_name)
+        return _VisualAcquireResult("Visually acquired '凳子' from a nearby viewpoint")
+
+    nav._local_search_for_object_near_landmark_result = local_search
+
+    result = nav._navigate_to_landmark(
+        target,
+        arrival_action="point",
+        arrival_distance=0.5,
+        run_arrival_action=True,
+    )
+
+    assert local_attempts == ["凳子"]
+    assert "nearby viewpoint" in result
+    assert "executing arrival_action='point'" in result
+    assert nav._unitree_skill_container.commands == ["Hello", "RecoveryStand"]
 
 
 def test_stop_all_motion_cancels_tracking_and_recovers() -> None:

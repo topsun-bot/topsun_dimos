@@ -3609,8 +3609,16 @@ class NavigationSkillContainer(Module):
                     visual_nav_failed = visual_result.navigation_failed
                 if vis_msg:
                     logger.info("[L3] %s: %s", tag, vis_msg)
-                else:
-                    logger.warning("[L3] %s: '%s' not found in view", tag, tname)
+                if not vis_msg or visual_nav_failed:
+                    if visual_nav_failed:
+                        logger.warning(
+                            "[L3] %s failed to servo to '%s'; trying nearby viewpoints",
+                            tag,
+                            tname,
+                        )
+                    else:
+                        logger.warning("[L3] %s: '%s' not found in view", tag, tname)
+                    previous_vis_msg = vis_msg
                     local_result = self._local_search_for_object_near_landmark_result(
                         target,
                         tname,
@@ -3621,6 +3629,7 @@ class NavigationSkillContainer(Module):
                     if vis_msg:
                         logger.info("[L3] Local search%s: %s", " (retry)" if retry else "", vis_msg)
                     else:
+                        vis_msg = previous_vis_msg
                         logger.warning(
                             "[L3] Local search%s: '%s' not found nearby",
                             " (retry)" if retry else "",
