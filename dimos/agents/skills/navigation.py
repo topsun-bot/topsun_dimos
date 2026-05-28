@@ -89,8 +89,8 @@ _VISUAL_SERVO_ARRIVAL_AREA_RATIO = 0.16
 _VISUAL_SERVO_ARRIVAL_HEIGHT_RATIO = 0.45
 _VISUAL_SERVO_ARRIVAL_WIDTH_RATIO = 0.40
 _VISUAL_SERVO_STALL_ARRIVAL_HEIGHT_RATIO = 0.35
+_VISUAL_SERVO_CENTERED_VISIBLE_MIN_HEIGHT_RATIO = 0.25
 _VISUAL_SERVO_SLOW_FORWARD_MPS = 0.25
-_VISUAL_SERVO_MID_FORWARD_MPS = 0.45
 _VISUAL_SERVO_NEAR_FORWARD_MPS = 0.45
 _VISUAL_SERVO_FAST_FORWARD_MPS = 0.55
 _LOCAL_SEARCH_SCAN_OFFSETS_DEG = (
@@ -1300,7 +1300,10 @@ class NavigationSkillContainer(Module):
             horizontal_error = (center_x - image_w / 2.0) / max(1.0, image_w / 2.0)
             last_horizontal_error = horizontal_error
             height_ratio = max(0.0, min(1.0, (y2 - y1) / float(image_h)))
-            if abs(horizontal_error) <= _VISUAL_SERVO_CENTERED_ERR and height_ratio >= 0.25:
+            if (
+                abs(horizontal_error) <= _VISUAL_SERVO_CENTERED_ERR
+                and height_ratio >= _VISUAL_SERVO_CENTERED_VISIBLE_MIN_HEIGHT_RATIO
+            ):
                 if centered_visible_since is None:
                     centered_visible_since = time.time()
                 centered_timeout_bbox = tracked_bbox
