@@ -17,6 +17,7 @@
 import asyncio
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+import os
 import time
 from typing import Any
 
@@ -110,10 +111,15 @@ except ImportError:
 
 @contextmanager
 def lcm_context() -> Generator[LCM, None, None]:
-    lcm_pubsub = LCM()
+    """LCM pubsub for parametrized tests — matches test_lcmpubsub fixture lifecycle."""
+    url = os.environ.get("LCM_DEFAULT_URL", "udpm://239.255.76.67:7667?ttl=0")
+    lcm_pubsub = LCM(url=url)
     lcm_pubsub.start()
-    yield lcm_pubsub
-    lcm_pubsub.stop()
+    time.sleep(0.05)  # let _lcm_loop enter handle before subscribe/publish
+    try:
+        yield lcm_pubsub
+    finally:
+        lcm_pubsub.stop()
 
 
 testdata.append(
