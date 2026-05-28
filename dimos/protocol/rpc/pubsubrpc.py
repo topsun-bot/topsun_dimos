@@ -226,7 +226,7 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
 
                 def shared_response_handler(msg: MsgT, _: TopicT) -> None:
                     res = self._decodeRPCRes(msg)  # type: ignore[arg-type]
-                    probe_token = cast(dict[str, Any], res).get(_RPC_READY_PROBE_KEY)
+                    probe_token = cast("dict[str, Any]", res).get(_RPC_READY_PROBE_KEY)
                     if probe_token is not None:
                         if probe_token == ready_token:
                             ready_event.set()
@@ -258,7 +258,7 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
                 # Create single shared subscription
                 unsub = self.subscribe(topic_res, shared_response_handler)
                 self._response_subs[topic_res_key] = (unsub, callbacks_dict)
-                probe_res = cast(RPCRes, {_RPC_READY_PROBE_KEY: ready_token})
+                probe_res = cast("RPCRes", {_RPC_READY_PROBE_KEY: ready_token})
                 self._confirm_lcm_subscription_ready(
                     topic_res,
                     self._encodeRPCRes(probe_res),  # type: ignore[arg-type]
@@ -295,7 +295,7 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
 
         def receive_call(msg: MsgT, _: TopicT) -> None:
             req = self._decodeRPCReq(msg)  # type: ignore[arg-type]
-            probe_token = cast(dict[str, Any], req).get(_RPC_READY_PROBE_KEY)
+            probe_token = cast("dict[str, Any]", req).get(_RPC_READY_PROBE_KEY)
             if probe_token is not None:
                 if probe_token == ready_token:
                     ready_event.set()
@@ -333,10 +333,10 @@ class PubSubRPCMixin(RPCSpec, PubSub[TopicT, MsgT], Generic[TopicT, MsgT]):
             self._get_call_thread_pool().submit(execute_and_respond)
 
         ready_event = threading.Event()
-        ready_token = f"{id(self)}:{time.time_ns()}:{str(topic_req)}"
+        ready_token = f"{id(self)}:{time.time_ns()}:{topic_req!s}"
         unsubscribe = self.subscribe(topic_req, receive_call)
         probe_req = cast(
-            RPCReq,
+            "RPCReq",
             {"name": name, "args": ([], {}), "id": None, _RPC_READY_PROBE_KEY: ready_token},
         )
         self._confirm_lcm_subscription_ready(
