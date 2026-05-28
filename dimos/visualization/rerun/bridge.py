@@ -283,6 +283,8 @@ class RerunBridgeModule(Module):
 
     def _on_message(self, msg: Any, topic: Any) -> None:
         """Handle incoming message - log to rerun."""
+        if not getattr(self, "_rerun_active", False):
+            return
 
         entity_path: str = self._get_entity_path(topic)
 
@@ -298,12 +300,19 @@ class RerunBridgeModule(Module):
         if not rerun_data:
             return
 
-        # TFMessage for example returns list of (entity_path, archetype) tuples
-        if is_rerun_multi(rerun_data):
-            for path, archetype in rerun_data:
-                rr.log(path, archetype)
-        else:
-            rr.log(entity_path, cast("Archetype", rerun_data))
+        try:
+            # TFMessage for example returns list of (entity_path, archetype) tuples
+            if is_rerun_multi(rerun_data):
+                for path, archetype in rerun_data:
+                    rr.log(path, archetype)
+            else:
+                rr.log(entity_path, cast("Archetype", rerun_data))
+        except RuntimeError:
+            logger.warning(
+                "Rerun log failed (gRPC disconnected) — disabling Rerun bridge",
+                exc_info=True,
+            )
+            self._rerun_active = False
 
     @rpc
     def start(self) -> None:
@@ -311,11 +320,55 @@ class RerunBridgeModule(Module):
 
         logger.info("Rerun bridge starting")
 
+        self._rerun_active = False
         self._last_log = {}
         self._min_intervals: dict[str, float] = {
             entity: 1.0 / hz for entity, hz in self.config.max_hz.items() if hz > 0
         }
 
+        try:
+            self._start_rerun_recording()
+            self._rerun_active = True
+        except Exception:
+            self._rerun_active = False
+            logger.warning(
+                "Rerun bridge failed to start (viewer/SDK mismatch?). "
+                "Continuing without Rerun — use --viewer none to silence this.",
+                exc_info=True,
+            )
+
+        for pubsub in self.config.pubsubs:
+            logger.info(f"bridge listening on {pubsub.__class__.__name__}")
+            if hasattr(pubsub, "start"):
+                pubsub.start()
+            unsub = pubsub.subscribe_all(self._on_message)
+            self.register_disposable(Disposable(unsub))
+
+        for pubsub in self.config.pubsubs:
+            if hasattr(pubsub, "stop"):
+                self.register_disposable(Disposable(pubsub.stop))  # type: ignore[union-attr]
+
+        self._log_static()
+
+    def _log_static(self) -> None:
+        if not getattr(self, "_rerun_active", False):
+            return
+        try:
+            for entity_path, factory in self.config.static.items():
+                data = factory(rr)
+                if isinstance(data, list):
+                    for archetype in data:
+                        rr.log(entity_path, archetype, static=True)
+                else:
+                    rr.log(entity_path, data, static=True)
+        except RuntimeError:
+            logger.warning(
+                "Rerun static logging failed (gRPC disconnected) — disabling Rerun bridge",
+                exc_info=True,
+            )
+            self._rerun_active = False
+
+    def _start_rerun_recording(self) -> None:
         connect_url = self.config.connect_url
         if connect_url is None:
             connect_url = f"rerun+http://{self.host}:{RERUN_GRPC_PORT}/proxy"
@@ -394,19 +447,6 @@ class RerunBridgeModule(Module):
         if self.config.blueprint:
             rr.send_blueprint(_with_graph_tab(self.config.blueprint()))
 
-        for pubsub in self.config.pubsubs:
-            logger.info(f"bridge listening on {pubsub.__class__.__name__}")
-            if hasattr(pubsub, "start"):
-                pubsub.start()
-            unsub = pubsub.subscribe_all(self._on_message)
-            self.register_disposable(Disposable(unsub))
-
-        for pubsub in self.config.pubsubs:
-            if hasattr(pubsub, "stop"):
-                self.register_disposable(Disposable(pubsub.stop))  # type: ignore[union-attr]
-
-        self._log_static()
-
     def _enable_disk_sink(self) -> None:
         """Add a .rrd file sink so the recording is persisted to disk.
 
@@ -463,15 +503,6 @@ class RerunBridgeModule(Module):
         lines.append("")
 
         logger.info("\n".join(lines))
-
-    def _log_static(self) -> None:
-        for entity_path, factory in self.config.static.items():
-            data = factory(rr)
-            if isinstance(data, list):
-                for archetype in data:
-                    rr.log(entity_path, archetype, static=True)
-            else:
-                rr.log(entity_path, data, static=True)
 
     @rpc
     def log_blueprint_graph(self, dot_code: str, module_names: list[str]) -> None:

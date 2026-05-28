@@ -97,7 +97,7 @@ class McpClient(Module):
         for key in unsupported:
             del os.environ[key]
         try:
-            return httpx.Client(timeout=120.0)
+            return httpx.Client(timeout=300.0)
         finally:
             for key, val in unsupported.items():
                 os.environ[key] = val
@@ -232,6 +232,11 @@ class McpClient(Module):
     def on_system_modules(self, _modules: list[RPCClient]) -> None:
         tools = self._fetch_tools()
 
+        # Patch langchain_openai to keep empty string content when tool_calls
+        # are present — DeepSeek rejects ``null`` content (500 Internal Server
+        # Error: 'NoneType' object is not iterable).
+        self._patch_openai_message_converter()
+
         model: str | Any = self.config.model
         if self.config.model_fixture is not None:
             from dimos.agents.testing import MockModel
@@ -353,6 +358,29 @@ class McpClient(Module):
                             content="An error occurred while processing. Please try again."
                         )
                     )
+
+    @staticmethod
+    def _patch_openai_message_converter() -> None:
+        """Patch langchain_openai so tool_calls messages keep ``""`` content (not ``null``).
+
+        langchain_openai's ``_convert_message_to_dict`` explicitly converts empty
+        string content to ``None`` when tool_calls are present, to match OpenAI's
+        API spec.  DeepSeek rejects ``null`` content with a 500 —
+        ``'NoneType' object is not iterable`` — so we post-process the dict to
+        keep ``""``.
+        """
+        import langchain_openai.chat_models.base as base_module
+
+        _original = base_module._convert_message_to_dict
+
+        def _patched(message: BaseMessage, api: str = "chat/completions") -> dict[str, Any]:  # type: ignore[no-untyped-def]
+            result = _original(message, api)
+            if result.get("tool_calls") or result.get("function_call"):
+                if result.get("content") is None:
+                    result["content"] = ""
+            return result
+
+        base_module._convert_message_to_dict = _patched
 
     @staticmethod
     def _sanitize_message(msg: BaseMessage) -> BaseMessage:

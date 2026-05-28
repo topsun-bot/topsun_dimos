@@ -68,6 +68,15 @@ class MovementManager(Module):
         self._teleop_active = False
         self._last_teleop_time = 0.0
 
+        # In simulation, boost teleop speed for snappier keyboard/joystick control.
+        from dimos.core.global_config import global_config
+
+        if global_config.simulation:
+            scale = 2.5
+            self.config.tele_cmd_vel_scaling = Twist(
+                Vector3(scale, scale, scale), Vector3(scale, scale, scale)
+            )
+
     @rpc
     def start(self) -> None:
         super().start()

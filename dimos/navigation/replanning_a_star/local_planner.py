@@ -65,6 +65,7 @@ class LocalPlanner(Resource):
     _controller: Controller
 
     _speed: float = 0.7
+    _sim_speed: float = 1.2  # faster default for simulation
     _control_frequency: float = 10
     _orientation_tolerance: float = 0.35
     _navigation_costmap_interval: float = 1.0
@@ -86,11 +87,11 @@ class LocalPlanner(Resource):
         self._navigation_map = navigation_map
         self._goal_tolerance = goal_tolerance
 
-        speed = self._speed
+        speed = self._sim_speed if global_config.simulation else self._speed
         env_speed = os.getenv("DIMOS_NAV_SPEED")
         if env_speed:
             try:
-                speed = max(0.2, min(1.0, float(env_speed)))
+                speed = max(0.2, min(2.5, float(env_speed)))
             except ValueError:
                 logger.warning("Invalid DIMOS_NAV_SPEED=%r; using %.2f", env_speed, speed)
         if global_config.nerf_speed < 1.0:

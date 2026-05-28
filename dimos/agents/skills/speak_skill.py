@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import threading
 import time
 
@@ -34,13 +35,37 @@ class SpeakSkill(Module):
     _audio_lock: threading.Lock = threading.Lock()
     _bg_threads: list[threading.Thread] = []
     _bg_threads_lock: threading.Lock = threading.Lock()
+    _tts_init_attempted: bool = False
 
     @rpc
     def start(self) -> None:
         super().start()
-        self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
-        self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
-        self._audio_output.consume_audio(self._tts_node.emit_audio())
+        # TTS is lazy — never block blueprint startup on OPENAI_API_KEY.
+
+    def _ensure_tts(self) -> bool:
+        if self._tts_node is not None:
+            return True
+        if self._tts_init_attempted:
+            return False
+        self._tts_init_attempted = True
+
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        if not api_key:
+            logger.warning(
+                "SpeakSkill: OPENAI_API_KEY not set — speak() disabled "
+                "(export OPENAI_API_KEY to enable TTS)"
+            )
+            return False
+        try:
+            self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX, api_key=api_key)
+            self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
+            self._audio_output.consume_audio(self._tts_node.emit_audio())
+        except Exception:
+            logger.exception("SpeakSkill: failed to initialize TTS")
+            self._tts_node = None
+            self._audio_output = None
+            return False
+        return True
 
     @rpc
     def stop(self) -> None:
@@ -54,6 +79,7 @@ class SpeakSkill(Module):
         if self._audio_output:
             self._audio_output.stop()
             self._audio_output = None
+        self._tts_init_attempted = False
         super().stop()
 
     @skill
@@ -68,8 +94,8 @@ class SpeakSkill(Module):
 
             speak("Hello, I am your robot assistant.")
         """
-        if self._tts_node is None:
-            return "Error: TTS not initialized"
+        if not self._ensure_tts() or self._tts_node is None:
+            return "TTS not available (OPENAI_API_KEY not set)"
 
         if not blocking:
             thread = threading.Thread(
@@ -96,7 +122,7 @@ class SpeakSkill(Module):
         # Use lock to prevent simultaneous speech
         with self._audio_lock:
             if self._tts_node is None:
-                return "Error: TTS not initialized"
+                return "TTS not available (OPENAI_API_KEY not set)"
 
             text_subject: Subject[str] = Subject()
             audio_complete = threading.Event()

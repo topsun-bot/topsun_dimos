@@ -42,12 +42,18 @@ class PController:
 
     _min_linear_velocity: float = 0.2
     _min_angular_velocity: float = 0.2
+    _sim_min_linear_velocity: float = 0.5
+    _sim_min_angular_velocity: float = 0.5
     _k_angular: float = 0.5
     _max_angular_accel: float = 2.0
     _rotation_threshold: float = 90 * (math.pi / 180)
 
     def __init__(self, global_config: GlobalConfig, speed: float, control_frequency: float) -> None:
         self._global_config = global_config
+        # In simulation, boost minimum velocities for snappier movement.
+        if global_config.simulation:
+            self._min_linear_velocity = self._sim_min_linear_velocity
+            self._min_angular_velocity = self._sim_min_angular_velocity
         self._speed = speed
         self._control_frequency = control_frequency
 
@@ -104,9 +110,9 @@ class PController:
         return velocity
 
     def _angular_twist(self, angular_velocity: float) -> Twist:
-        # In simulation, we need stroger values
-        if self._global_config.simulation and abs(angular_velocity) < 0.8:
-            angular_velocity = 0.8 * np.sign(angular_velocity)
+        # In simulation, we need stronger values for snappier rotation
+        if self._global_config.simulation and abs(angular_velocity) < 1.5:
+            angular_velocity = 1.5 * np.sign(angular_velocity)
 
         return Twist(
             linear=Vector3(0.0, 0.0, 0.0),

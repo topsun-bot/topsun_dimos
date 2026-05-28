@@ -21,6 +21,9 @@ from dimos.models.qwen.bbox import BBox
 from dimos.models.vl.base import VlModel
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.utils.generic import extract_json_from_llm_response
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 def _label_matches_query(label: str, query: str) -> bool:
@@ -73,16 +76,36 @@ def _scale_bbox_to_image(
     mx = max(x1, y1, x2, y2)
 
     if mx <= 1.0:
-        return (x1 * w, y1 * h, x2 * w, y2 * h)
+        result = (x1 * w, y1 * h, x2 * w, y2 * h)
+        logger.debug("_scale_bbox: fraction %.3f → pixel (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
+                     mx, *result, w, h)
+        return result
 
     # Already pixel coordinates when the box fits inside the frame
     if 0 <= x1 < x2 <= w + 1 and 0 <= y1 < y2 <= h + 1:
+        logger.debug("_scale_bbox: pixel pass-through (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
+                     x1, y1, x2, y2, w, h)
         return (x1, y1, x2, y2)
 
-    # Qwen VL 0–1000 relative (when coords exceed image size)
-    if mx <= 1000.0 and min(x1, y1, x2, y2) >= 0.0:
-        return (x1 / 1000.0 * w, y1 / 1000.0 * h, x2 / 1000.0 * w, y2 / 1000.0 * h)
+    # Qwen VL relative coords: try 0–1000 first, then infer scale from max value
+    if min(x1, y1, x2, y2) >= 0.0 and mx > 1.0:
+        if mx <= 1000.0:
+            result = (x1 / 1000.0 * w, y1 / 1000.0 * h, x2 / 1000.0 * w, y2 / 1000.0 * h)
+            logger.debug("_scale_bbox: Qwen0-1000 (%.1f, %.1f, %.1f, %.1f) → (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
+                         x1, y1, x2, y2, *result, w, h)
+            return result
+        # VLM may use a larger normalised range (e.g. 0-1280, 0-2000).
+        # Infer the scale so the max coordinate maps to the image's larger dimension.
+        ref = float(max(w, h))
+        scale = mx / ref
+        if scale > 0:
+            result = (x1 / scale, y1 / scale, x2 / scale, y2 / scale)
+            logger.debug("_scale_bbox: inferred-scale=%.2f (mx=%.1f ref=%.1f) (%.1f, %.1f, %.1f, %.1f) → (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
+                         scale, mx, ref, x1, y1, x2, y2, *result, w, h)
+            return result
 
+    logger.debug("_scale_bbox: passthrough (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
+                 x1, y1, x2, y2, w, h)
     return (x1, y1, x2, y2)
 
 

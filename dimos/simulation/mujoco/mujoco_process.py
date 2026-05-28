@@ -220,10 +220,11 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
 
                 last_lidar_time = current_time
 
-            # Control simulation speed
-            time_until_next_step = model.opt.timestep - (time.time() - step_start)
-            if time_until_next_step > 0:
-                time.sleep(time_until_next_step)
+            # Control simulation speed (skip when real-time mode is disabled)
+            if config.mujoco_real_time:
+                time_until_next_step = model.opt.timestep - (time.time() - step_start)
+                if time_until_next_step > 0:
+                    time.sleep(time_until_next_step)
 
         person_position_controller.stop()
 

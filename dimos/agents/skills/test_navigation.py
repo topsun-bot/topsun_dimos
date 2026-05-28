@@ -216,6 +216,7 @@ class MockedSemanticNavSkill(NavigationSkillContainer):
 def _nav_container() -> NavigationSkillContainer:
     nav = object.__new__(NavigationSkillContainer)
     nav._skill_started = True
+    nav._sweep_skip_rooms = set()
     return nav
 
 
@@ -264,6 +265,27 @@ def test_rotate_in_place_prefers_closed_loop_spin() -> None:
 
     assert nav._rotate_in_place_degrees(120.0) is True
     assert fake.rotations == [120.0]
+
+
+def test_scan_room_for_object_uses_100_degree_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIMOS_ROTATION_STEP_DEG", "100")
+    nav = _nav_container()
+    fake = _FakeUnitree()
+    nav._unitree_skill_container = fake
+    nav._latest_odom = PoseStamped(
+        position=make_vector3(0.0, 0.0, 0.0),
+        orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+    )
+    nav._detect_and_servo = lambda _name: None  # type: ignore[method-assign]
+
+    assert nav._scan_room_for_object("电脑") is None
+    assert fake.rotations == [100.0, 100.0]
+
+
+def test_nav_fallback_default_is_object_room(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DIMOS_NAV_FALLBACK", raising=False)
+    nav = _nav_container()
+    assert nav._nav_fallback_strategy() == "object_room"
 
 
 class _FakeTracker:
@@ -334,17 +356,17 @@ def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
         visited.append(target.name)
         return f"Arrived near {target.name}."
 
-    def fake_object_nav(query: str, *, timeout: float = 30.0) -> str | None:
+    def fake_detect(query: str) -> str | None:
         if visited[-1] == "lab":
-            return f"Successfully arrived at '{query}'"
+            return f"Visually acquired '{query}'"
         return None
 
     nav._navigate_to_landmark = fake_landmark_nav
-    nav._navigate_to_object = fake_object_nav
+    nav._detect_and_servo = fake_detect
 
-    assert nav._room_anchor_sweep_for_object("toolbox") == "Successfully arrived at 'toolbox'"
+    assert nav._room_anchor_sweep_for_object("toolbox") == "Visually acquired 'toolbox'"
     assert visited == ["office", "lab"]
-    assert nav._unitree_skill_container.rotations == [360.0, 360.0]
+    assert nav._unitree_skill_container.rotations == [100.0, 100.0]
 
 
 def test_periodic_visual_drift_correction_soft_shifts_goal() -> None:
