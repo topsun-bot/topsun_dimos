@@ -84,12 +84,12 @@ class LCMPubSubBase(LCMService, AllPubSub[Topic, Any]):
 
     def publish(self, topic: Topic | str, message: bytes) -> None:
         """Publish a message to the specified channel."""
-        if self.l is None:
-            logger.error("Tried to publish after LCM was closed")
-            return
-
         topic_str = str(topic) if isinstance(topic, Topic) else topic
-        self.l.publish(topic_str, message)
+        with self._l_lock:
+            if self.l is None:
+                logger.error("Tried to publish after LCM was closed")
+                return
+            self.l.publish(topic_str, message)
 
     def subscribe_all(self, callback: Callable[[bytes, Topic], Any]) -> Callable[[], None]:
         return self.subscribe(Topic(re.compile(".*")), callback)
@@ -97,37 +97,41 @@ class LCMPubSubBase(LCMService, AllPubSub[Topic, Any]):
     def subscribe(
         self, topic: Topic, callback: Callable[[bytes, Topic], None]
     ) -> Callable[[], None]:
-        if self.l is None:
-            logger.error("Tried to subscribe after LCM was closed")
+        with self._l_lock:
+            if self.l is None:
+                logger.error("Tried to subscribe after LCM was closed")
 
-            def noop() -> None:
-                pass
+                def noop() -> None:
+                    pass
 
-            return noop
+                return noop
 
-        if topic.is_pattern:
+            if topic.is_pattern:
 
-            def handler(channel: str, msg: bytes) -> None:
-                if channel == "LCM_SELF_TEST":
-                    return
-                callback(msg, Topic.from_channel_str(channel, topic.lcm_type))
+                def handler(channel: str, msg: bytes) -> None:
+                    if channel == "LCM_SELF_TEST":
+                        return
+                    callback(msg, Topic.from_channel_str(channel, topic.lcm_type))
 
-            pattern_str = str(topic)
-            if not pattern_str.endswith("*"):
-                pattern_str = f"{pattern_str}(#.*)?"
+                pattern_str = str(topic)
+                if not pattern_str.endswith("*"):
+                    pattern_str = f"{pattern_str}(#.*)?"
 
-            lcm_subscription = self.l.subscribe(pattern_str, handler)
-        else:
-            topic_str = str(topic)
-            lcm_subscription = self.l.subscribe(topic_str, lambda _, msg: callback(msg, topic))
+                lcm_subscription = self.l.subscribe(pattern_str, handler)
+            else:
+                topic_str = str(topic)
+                lcm_subscription = self.l.subscribe(
+                    topic_str, lambda _, msg: callback(msg, topic)
+                )
 
         # Set queue capacity to 10000 to handle high-volume bursts
         lcm_subscription.set_queue_capacity(10000)
 
         def unsubscribe() -> None:
-            if self.l is None:
-                return
-            self.l.unsubscribe(lcm_subscription)
+            with self._l_lock:
+                if self.l is None:
+                    return
+                self.l.unsubscribe(lcm_subscription)
 
         return unsubscribe
 
