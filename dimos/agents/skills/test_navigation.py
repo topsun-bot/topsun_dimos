@@ -335,7 +335,7 @@ def test_navigate_with_text_stops_after_known_object_landmark() -> None:
     nav._query_memory_images_with_vlm = lambda query: None
     nav._navigate_using_semantic_map = lambda query: None
 
-    def fake_object_nav(query: str, *, timeout: float = 30.0) -> str | None:
+    def fake_object_nav(query: str, *, timeout: float = 30.0, **_kwargs: Any) -> str | None:
         object_attempts.append(timeout)
         return None
 
@@ -593,7 +593,7 @@ def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
         visited.append(target.name)
         return f"Arrived near {target.name}."
 
-    def fake_object_nav(query: str, *, timeout: float = 30.0) -> str | None:
+    def fake_object_nav(query: str, *, timeout: float = 30.0, **_kwargs: Any) -> str | None:
         if visited[-1] == "lab":
             return f"Successfully arrived at '{query}'"
         return None
@@ -713,7 +713,9 @@ def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
     nav._speak_skill = _FakeSpeak()
     # Pretend the camera sees the trash can; this test is about arrival logic,
     # not visual acquisition.
-    nav._visual_acquire_object = lambda name, stored_yaw=None, **_kw: f"Visually acquired '{name}'"
+    nav._try_acquire_object_in_view_result = lambda *args, **kwargs: _VisualAcquireResult(
+        "Visually acquired '垃圾桶'"
+    )
 
     result = nav._navigate_to_landmark(
         target,
@@ -764,8 +766,10 @@ def test_navigate_to_object_announces_after_visual_success(
     nav._object_tracking = SimpleNamespace(
         track=lambda bbox: {"status": "tracking_started"},
         is_tracking=lambda: True,
+        get_latest_bbox=lambda: [220.0, 120.0, 420.0, 420.0],
         stop_track=lambda: None,
     )
+    nav._latest_image = SimpleNamespace(data=np.zeros((480, 640, 3), dtype=np.uint8))
     nav._get_bbox_for_current_frame = lambda query: [0.0, 0.0, 100.0, 100.0]
     monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
 
@@ -784,8 +788,10 @@ def test_object_found_announcement_failure_does_not_fail_navigation(
     nav._object_tracking = SimpleNamespace(
         track=lambda bbox: {"status": "tracking_started"},
         is_tracking=lambda: True,
+        get_latest_bbox=lambda: [220.0, 120.0, 420.0, 420.0],
         stop_track=lambda: None,
     )
+    nav._latest_image = SimpleNamespace(data=np.zeros((480, 640, 3), dtype=np.uint8))
     nav._get_bbox_for_current_frame = lambda query: [0.0, 0.0, 100.0, 100.0]
     monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
 

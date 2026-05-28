@@ -3551,6 +3551,14 @@ class NavigationSkillContainer(Module):
                     _last_logged_dist = dist
                 if dist <= effective_arrival_distance:
                     break
+                if is_object_landmark and self._navigation.is_goal_reached() and dist <= 1.0:
+                    logger.info(
+                        "Accepting object '%s' arrival at %.2fm: planner reached safe standoff",
+                        target.name,
+                        dist,
+                    )
+                    accepted_safe_arrival = True
+                    break
                 if dist > 1.5:
                     active_goal = standoff_pose
                 else:
