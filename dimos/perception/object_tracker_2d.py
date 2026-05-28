@@ -46,6 +46,9 @@ logger = setup_logger(level=logging.INFO)
 
 def _create_opencv_tracker() -> Any:
     """Create a visual tracker (CSRT preferred; MIL/KCF fallbacks for slim OpenCV builds)."""
+    # Different OpenCV builds expose tracker constructors in different namespaces
+    # (`cv2.legacy.*`, `cv2.Tracker*.create`, or direct `cv2.Tracker*_create`).
+    # Collect all candidates and try them in priority order.
     factories: list[Any] = []
     legacy = getattr(cv2, "legacy", None)
     if legacy is not None:
@@ -111,6 +114,8 @@ class ObjectTracker2D(Module):
         # Stuck detection
         self._last_bbox = None
         self._stuck_count = 0
+        # We only consider "stuck" after consecutive identical boxes to avoid
+        # false positives from brief pauses or dropped frames.
         self._max_stuck_frames = 10  # Higher threshold for stationary objects
 
         # Frame management
@@ -173,6 +178,8 @@ class ObjectTracker2D(Module):
             return {"status": "invalid_bbox"}
 
         fh, fw = self._latest_rgb_frame.shape[:2]
+        # Very large boxes usually represent accidental full-frame selections and
+        # are unstable for single-object visual trackers, so reject early.
         if w * h > int(0.55 * fw * fh):
             logger.warning("BBox too large for tracking (%dx%d in %dx%d frame)", w, h, fw, fh)
             return {"status": "invalid_bbox", "reason": "bbox_too_large"}
@@ -219,6 +226,8 @@ class ObjectTracker2D(Module):
 
     def _reset_tracking_state(self) -> None:
         """Reset tracking state without stopping the thread."""
+        # Keep this method side-effect focused and idempotent so it can be used
+        # safely from both normal stop paths and failure paths.
         self.tracker = None
         self.tracking_bbox = None
         self.tracking_initialized = False
@@ -226,6 +235,7 @@ class ObjectTracker2D(Module):
         self._stuck_count = 0
 
         # Publish empty detection
+        # Downstream consumers can treat this as a "target lost / no track" signal.
         empty_2d = Detection2DArray(
             detections_length=0, header=Header(time.time(), self.frame_id), detections=[]
         )
@@ -292,6 +302,8 @@ class ObjectTracker2D(Module):
 
         # Check if tracker is stuck
         if self._last_bbox is not None:
+            # Exact equality is intentionally strict here: if the box does not move
+            # for too many cycles, we prefer to fail fast and wait for re-seeding.
             if (x1, y1, x2, y2) == self._last_bbox:
                 self._stuck_count += 1
                 if self._stuck_count >= self._max_stuck_frames:
@@ -338,7 +350,8 @@ class ObjectTracker2D(Module):
 
         # Create visualization
         viz_image = self._draw_visualization(frame, current_bbox_x1y1x2y2)
-        viz_copy = viz_image.copy()  # Force copy needed to prevent frame reuse
+        # Force copy so the published message does not alias mutable frame memory.
+        viz_copy = viz_image.copy()
         viz_msg = Image.from_numpy(viz_copy, format=ImageFormat.RGB)
         self.tracked_overlay.publish(viz_msg)
 
