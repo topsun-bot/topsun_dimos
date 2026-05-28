@@ -120,9 +120,7 @@ class LCMPubSubBase(LCMService, AllPubSub[Topic, Any]):
                 lcm_subscription = self.l.subscribe(pattern_str, handler)
             else:
                 topic_str = str(topic)
-                lcm_subscription = self.l.subscribe(
-                    topic_str, lambda _, msg: callback(msg, topic)
-                )
+                lcm_subscription = self.l.subscribe(topic_str, lambda _, msg: callback(msg, topic))
 
         # Set queue capacity to 10000 to handle high-volume bursts
         lcm_subscription.set_queue_capacity(10000)
