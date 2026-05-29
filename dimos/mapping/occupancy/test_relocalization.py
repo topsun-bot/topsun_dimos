@@ -103,9 +103,10 @@ def test_match_occupancy_translation_requires_same_resolution() -> None:
         match_occupancy_translation(persistent, local)
 
 
-def test_match_occupancy_se2_rejects_non_right_angle_yaw() -> None:
+def test_match_occupancy_se2_accepts_arbitrary_yaw() -> None:
     persistent = OccupancyGrid(grid=np.zeros((5, 5), dtype=np.int8), resolution=0.5)
     local = OccupancyGrid(grid=np.zeros((5, 5), dtype=np.int8), resolution=0.5)
 
-    with pytest.raises(ValueError, match="right-angle"):
-        match_occupancy_se2(persistent, local, yaw_candidates_deg=(45.0,))
+    result = match_occupancy_se2(persistent, local, yaw_candidates_deg=(45.0,))
+    # Empty maps produce no match, but the call should not raise.
+    assert not result.success

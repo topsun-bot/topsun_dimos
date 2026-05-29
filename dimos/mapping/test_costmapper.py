@@ -24,6 +24,7 @@ def _mapper(tmp_path: Path) -> CostMapper:
     mapper._latest_costmap = None
     mapper._persistent_costmap = None
     mapper.global_costmap = _PublishedCostmaps()
+    mapper.persistent_costmap = _PublishedCostmaps()
     return mapper
 
 
@@ -68,7 +69,7 @@ def test_publish_persistent_map(tmp_path: Path) -> None:
     mapper._persistent_costmap = OccupancyGrid(grid=np.zeros((2, 2), dtype=np.int8))
 
     assert mapper.publish_persistent_map()
-    assert len(mapper.global_costmap.messages) == 1
+    assert len(mapper.persistent_costmap.messages) == 1
 
 
 def test_relocalize_current_map(tmp_path: Path) -> None:

@@ -129,7 +129,7 @@ def min_cost_astar(
     goal: VectorLike,
     start: VectorLike = (0.0, 0.0),
     cost_threshold: int = 100,
-    unknown_penalty: float = 0.8,
+    unknown_penalty: float = 0.0,
     use_cpp: bool = True,
 ) -> Path | None:
     start_vector = costmap.world_to_grid(start)

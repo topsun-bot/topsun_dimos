@@ -56,20 +56,24 @@ logger = setup_logger()
 
 @dataclass(frozen=True)
 class PlanarFrameTransform:
-    """SE2 transform from current odom frame into the persisted map frame."""
+    """SE2 transform that maps persisted-map coordinates into the current odom frame.
+
+    ``(x, y, yaw)`` is the pose of the current odom origin expressed in the
+    persisted-map frame.
+    """
 
     x: float
     y: float
     yaw: float
 
-    def map_to_current(self, x: float, y: float) -> tuple[float, float]:
+    def to_current(self, x: float, y: float) -> tuple[float, float]:
         dx = x - self.x
         dy = y - self.y
         c = math.cos(-self.yaw)
         s = math.sin(-self.yaw)
         return (c * dx - s * dy, s * dx + c * dy)
 
-    def yaw_map_to_current(self, yaw: float) -> float:
+    def yaw_to_current(self, yaw: float) -> float:
         return yaw - self.yaw
 
 # navigate_with_text fallback step order (env: DIMOS_NAV_FALLBACK=object_room|semantic|room_first)
@@ -284,7 +288,7 @@ class NavigationSkillContainer(Module):
     _unitree_skill_container: UnitreeSkillContainer | None = None
     _frontier_explorer: WavefrontFrontierExplorer | None = None
     _memory_session_id: str = ""
-    _map_from_current: PlanarFrameTransform | None = None
+    _persisted_to_current: PlanarFrameTransform | None = None
 
     color_image: In[Image]
     odom: In[PoseStamped]
@@ -294,7 +298,7 @@ class NavigationSkillContainer(Module):
         self._skill_started = False
         self._memory_session_id = f"session_{int(time.time())}"
         self._sweep_skip_rooms: set[str] = set()
-        self._map_from_current = None
+        self._persisted_to_current = None
 
         self._vl_model = _create_vl_model()
         _log_vlm_runtime_config(self._vl_model)
@@ -328,13 +332,13 @@ class NavigationSkillContainer(Module):
         self._latest_odom = odom
 
     @rpc
-    def set_map_from_current_transform(self, x: float, y: float, yaw: float) -> bool:
+    def set_persisted_to_current_transform(self, x: float, y: float, yaw: float) -> bool:
         """Set the transform produced by metric-map relocalization.
 
         The transform maps current odom coordinates into the persisted map frame.
         Persisted records are inverted through this transform before navigation.
         """
-        self._map_from_current = PlanarFrameTransform(float(x), float(y), float(yaw))
+        self._persisted_to_current = PlanarFrameTransform(float(x), float(y), float(yaw))
         logger.info(
             "Set map_from_current transform.",
             x=round(float(x), 3),
@@ -344,22 +348,25 @@ class NavigationSkillContainer(Module):
         return True
 
     @rpc
-    def clear_map_from_current_transform(self) -> bool:
-        self._map_from_current = None
+    def clear_persisted_to_current_transform(self) -> bool:
+        self._persisted_to_current = None
         logger.info("Cleared map_from_current transform.")
         return True
 
     def _auto_metric_relocalize_once(self) -> None:
-        # Give mapping a short window to load the persistent map and receive live costmaps.
-        time.sleep(float(os.getenv("DIMOS_METRIC_RELOCALIZE_STARTUP_DELAY_S", "5.0")))
         if self._metric_relocalization is None:
             return
 
+        # Wait for the persistent map and first lidar frames to arrive.
+        time.sleep(float(os.getenv("DIMOS_METRIC_RELOCALIZE_STARTUP_DELAY_S", "8.0")))
+
         try:
-            result = self.relocalize_with_metric_map(scan=False, publish_on_success=False)
+            # 360° rotation first → builds a much larger local costmap with
+            # distinctive features in all directions.
+            result = self.relocalize_with_metric_map(scan=True, publish_on_success=True)
             logger.info("Startup metric relocalization result: %s", result)
         except Exception:
-            logger.debug("Startup metric relocalization skipped or failed", exc_info=True)
+            logger.warning("Startup metric relocalization failed", exc_info=True)
 
     @skill
     def relocalize_with_metric_map(
@@ -389,10 +396,22 @@ class NavigationSkillContainer(Module):
         tx = float(result["map_from_current_x"])
         ty = float(result["map_from_current_y"])
         yaw = float(result["map_from_current_yaw"])
-        self.set_map_from_current_transform(tx, ty, yaw)
+        self.set_persisted_to_current_transform(tx, ty, yaw)
 
         if publish_on_success:
-            self._metric_relocalization.publish_persistent_map()
+            if abs(math.sin(yaw)) < 0.2:
+                # Publish persistent map to A* with origin shifted to the current
+                # odometry frame.  Safe when yaw ≈ 0 or π (within ~12°).
+                self._metric_relocalization.publish_persistent_map(
+                    shift_x=-tx, shift_y=-ty,
+                )
+            else:
+                logger.warning(
+                    "Relocalization yaw=%.1f° too far from 0/π — skipping "
+                    "persistent-map publish (navigation may be limited to "
+                    "live-costmap area)",
+                    math.degrees(yaw),
+                )
 
         return (
             "Metric relocalization succeeded: "
@@ -401,7 +420,7 @@ class NavigationSkillContainer(Module):
         )
 
     def _should_transform_persisted_record(self, record: SpatialRecord) -> bool:
-        if self._map_from_current is None:
+        if self._persisted_to_current is None:
             return False
         return not bool(record.session_id and record.session_id == self._memory_session_id)
 
@@ -409,9 +428,9 @@ class NavigationSkillContainer(Module):
         x, y, z = record.position
         yaw = record.rotation[2]
         if self._should_transform_persisted_record(record):
-            assert self._map_from_current is not None
-            x, y = self._map_from_current.map_to_current(float(x), float(y))
-            yaw = self._map_from_current.yaw_map_to_current(float(yaw))
+            assert self._persisted_to_current is not None
+            x, y = self._persisted_to_current.to_current(float(x), float(y))
+            yaw = self._persisted_to_current.yaw_to_current(float(yaw))
 
         return PoseStamped(
             position=make_vector3(float(x), float(y), float(z)),
@@ -420,13 +439,13 @@ class NavigationSkillContainer(Module):
         )
 
     def _pose_in_navigation_frame(self, pose: PoseStamped) -> PoseStamped:
-        if self._map_from_current is None:
+        if self._persisted_to_current is None:
             return pose
 
-        x, y = self._map_from_current.map_to_current(
+        x, y = self._persisted_to_current.to_current(
             float(pose.position.x), float(pose.position.y)
         )
-        yaw = self._map_from_current.yaw_map_to_current(float(pose.orientation.to_euler().z))
+        yaw = self._persisted_to_current.yaw_to_current(float(pose.orientation.to_euler().z))
         return PoseStamped(
             position=make_vector3(x, y, float(pose.position.z)),
             orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
@@ -2410,6 +2429,25 @@ class NavigationSkillContainer(Module):
             all_records = self._landmark_memory.get_all()
             topo = TopologyGraph()
             for r in all_records:
+                # Transform old-session waypoints into current odom frame
+                # so the topology graph and navigation target share a frame.
+                if self._should_transform_persisted_record(r):
+                    tx, ty = self._persisted_to_current.to_current(
+                        float(r.position[0]), float(r.position[1])
+                    )
+                    r = SpatialRecord(
+                        name=r.name,
+                        record_type=r.record_type,
+                        position=(tx, ty, float(r.position[2])),
+                        rotation=(
+                            float(r.rotation[0]),
+                            float(r.rotation[1]),
+                            self._persisted_to_current.yaw_to_current(float(r.rotation[2])),
+                        ),
+                        session_id=r.session_id,
+                        metadata=r.metadata,
+                        state=r.state,
+                    )
                 topo.add_record(r)
 
             all_waypoints: list[Any] = []
@@ -2548,9 +2586,22 @@ class NavigationSkillContainer(Module):
                 nav_idle = self._navigation.get_state() == NavigationState.IDLE
                 since_last_replan = time.time() - _last_replan_time
                 if (goal_changed or nav_idle) and since_last_replan >= _min_replan_interval:
+                    logger.info(
+                        "Approach replan #%d: goal_changed=%s nav_idle=%s since_last=%.1fs",
+                        _stuck_replan_streak + 1,
+                        goal_changed,
+                        nav_idle,
+                        since_last_replan,
+                    )
                     self._set_navigation_goal(active_goal)
                     _last_active_goal_pos = cur_pos
                     _last_replan_time = time.time()
+                elif goal_changed or nav_idle:
+                    logger.debug(
+                        "Approach replan skipped: since_last=%.1fs < min=%.1fs",
+                        since_last_replan,
+                        _min_replan_interval,
+                    )
 
                 # Wait until arrival, severe drift, or the remaining approach window.
                 wait_deadline = min(time.time() + 30.0, approach_deadline)

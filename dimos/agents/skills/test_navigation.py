@@ -218,7 +218,7 @@ def _nav_container() -> NavigationSkillContainer:
     nav._skill_started = True
     nav._sweep_skip_rooms = set()
     nav._memory_session_id = "session_current"
-    nav._map_from_current = None
+    nav._persisted_to_current = None
     nav._metric_relocalization = None
     return nav
 
@@ -277,7 +277,7 @@ class _FakeMetricRelocalization:
     ) -> dict[str, float | int | bool]:
         return self.result
 
-    def publish_persistent_map(self) -> bool:
+    def publish_persistent_map(self, shift_x: float = 0.0, shift_y: float = 0.0) -> bool:
         self.published = True
         return True
 
@@ -303,7 +303,7 @@ def test_scan_room_for_object_uses_100_degree_steps(monkeypatch: pytest.MonkeyPa
     nav._detect_and_servo = lambda _name: None  # type: ignore[method-assign]
 
     assert nav._scan_room_for_object("电脑") is None
-    assert fake.rotations == [100.0, 100.0]
+    assert fake.rotations == [100.0, 100.0, 100.0]
 
 
 def test_nav_fallback_default_is_object_room(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -390,7 +390,7 @@ def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
 
     assert nav._room_anchor_sweep_for_object("toolbox") == "Visually acquired 'toolbox'"
     assert visited == ["office", "lab"]
-    assert nav._unitree_skill_container.rotations == [100.0, 100.0]
+    assert nav._unitree_skill_container.rotations == [90.0, 90.0, 90.0]
 
 
 def test_periodic_visual_drift_correction_soft_shifts_goal() -> None:
@@ -550,7 +550,7 @@ def test_coordinate_frame_stale_detected_from_visual_room_mismatch() -> None:
 
 def test_relocalization_transform_maps_persisted_record_to_current_frame() -> None:
     nav = _nav_container()
-    nav.set_map_from_current_transform(10.0, 0.0, 0.0)
+    nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
     old_record = SpatialRecord(
         name="办公室",
         record_type=RecordType.ROOM,
@@ -568,7 +568,7 @@ def test_relocalization_transform_maps_persisted_record_to_current_frame() -> No
 
 def test_relocalization_transform_skips_current_session_record() -> None:
     nav = _nav_container()
-    nav.set_map_from_current_transform(10.0, 0.0, 0.0)
+    nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
     current_record = SpatialRecord(
         name="当前房间",
         record_type=RecordType.ROOM,
@@ -584,7 +584,7 @@ def test_relocalization_transform_skips_current_session_record() -> None:
 
 def test_relocalization_transform_suppresses_stale_coordinate_warning() -> None:
     nav = _nav_container()
-    nav.set_map_from_current_transform(10.0, 0.0, 0.0)
+    nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
     nav._latest_odom = _pose(2.0, 0.0)
     nav._latest_image = SimpleNamespace(data=object())
     old_room = SpatialRecord(
@@ -604,7 +604,7 @@ def test_metric_relocalize_sets_navigation_transform() -> None:
             "success": True,
             "map_from_current_x": 10.0,
             "map_from_current_y": -2.0,
-            "map_from_current_yaw": 0.25,
+            "map_from_current_yaw": 0.0,
             "confidence": 0.8,
         }
     )
@@ -613,10 +613,10 @@ def test_metric_relocalize_sets_navigation_transform() -> None:
     msg = nav.relocalize_with_metric_map(publish_on_success=True)
 
     assert "succeeded" in msg
-    assert nav._map_from_current is not None
-    assert nav._map_from_current.x == pytest.approx(10.0)
-    assert nav._map_from_current.y == pytest.approx(-2.0)
-    assert nav._map_from_current.yaw == pytest.approx(0.25)
+    assert nav._persisted_to_current is not None
+    assert nav._persisted_to_current.x == pytest.approx(10.0)
+    assert nav._persisted_to_current.y == pytest.approx(-2.0)
+    assert nav._persisted_to_current.yaw == pytest.approx(0.0)
     assert relocalizer.published is True
 
 
@@ -632,7 +632,7 @@ def test_metric_relocalize_failure_does_not_set_transform() -> None:
     msg = nav.relocalize_with_metric_map()
 
     assert "failed" in msg
-    assert nav._map_from_current is None
+    assert nav._persisted_to_current is None
 
 
 @pytest.mark.slow

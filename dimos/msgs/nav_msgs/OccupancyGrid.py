@@ -600,7 +600,7 @@ class OccupancyGrid(Timestamped):
             return rr.Mesh3D(vertex_positions=[])
 
         # Downsample grid before LUT to avoid allocating huge RGBA array
-        max_tex = 256
+        max_tex = 1024
         grid = self.grid[::-1]  # flip for world coords (view, no copy)
         if grid.shape[0] > max_tex or grid.shape[1] > max_tex:
             step_h = max(1, grid.shape[0] // max_tex)

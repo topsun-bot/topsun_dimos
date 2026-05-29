@@ -73,6 +73,7 @@ def match_occupancy_se2(
         (local_map.origin.position.y - persistent_map.origin.position.y) / resolution
     )
 
+    best_adjusted = -math.inf
     best_score = -math.inf
     best_compared = 0
     best_occupied_compared = 0
@@ -100,11 +101,17 @@ def match_occupancy_se2(
                 )
                 if compared < min_compared_cells or occupied_compared < min_occupied_cells:
                     continue
-                if (score, occupied_compared, compared) > (
+                # Yaw prior — prefer headings closer to 0°.
+                # 0° = no penalty, 30° = 1.7 %, 90° = 5 %, 180° = 10 %.
+                # Breaks symmetry ties while letting genuinely better matches win.
+                adjusted = score * (1.0 - abs(yaw_deg) / 1800.0)
+                if (adjusted, score, occupied_compared, compared) > (
+                    best_adjusted,
                     best_score,
                     best_occupied_compared,
                     best_compared,
                 ):
+                    best_adjusted = adjusted
                     best_score = score
                     best_compared = compared
                     best_occupied_compared = occupied_compared
@@ -183,11 +190,27 @@ def _score_translation(
 
 
 def _rotate_grid_right_angle(grid: np.ndarray, yaw_deg: float) -> np.ndarray:
+    """Rotate the occupancy grid by *yaw_deg* (counter-clockwise).
+
+    Right-angle multiples use ``np.rot90`` (exact).  Arbitrary angles use
+    ``scipy.ndimage.rotate`` with nearest-neighbour interpolation so that
+    occupancy values stay exact.
+    """
+    import scipy.ndimage  # type: ignore[import-untyped]
+
     normalized = yaw_deg % 360.0
     nearest_quarter_turn = round(normalized / 90.0)
-    if not math.isclose(normalized, nearest_quarter_turn * 90.0, abs_tol=1e-6):
-        raise ValueError("Only right-angle yaw candidates are supported")
-    return np.rot90(grid, k=nearest_quarter_turn)
+    if math.isclose(normalized, nearest_quarter_turn * 90.0, abs_tol=1e-6):
+        return np.rot90(grid, k=nearest_quarter_turn)
+    # scipy rotates counter-clockwise (like np.rot90), matching our yaw convention.
+    return scipy.ndimage.rotate(
+        grid.astype(np.float32),
+        normalized,
+        axes=(1, 0),
+        order=0,
+        reshape=False,
+        prefilter=False,
+    ).astype(np.int8)
 
 
 def _overlap_slices(
