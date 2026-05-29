@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# 语音播报技能：将文本经 TTS 节点转为音频并顺序播放。
+
 import queue
 import threading
 import time
@@ -25,40 +27,40 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-# Global lock to prevent multiple simultaneous audio playbacks
+# 全局锁：同一时刻只允许一路音频占用播放设备
 _audio_device_lock = threading.RLock()
 
-# Global queue for sequential audio processing
+# 全局队列：所有 Speak 请求按入队顺序依次执行，避免并发抢设备
 _audio_queue = queue.Queue()  # type: ignore[var-annotated]
 _queue_processor_thread = None
 _queue_running = False
 
 
+# 后台线程：从队列取出任务并串行执行。
 def _process_audio_queue() -> None:
-    """Background thread to process audio requests sequentially"""
+    """Process audio requests sequentially on a background thread."""
     global _queue_running
 
     while _queue_running:
         try:
-            # Get the next queued audio task with a timeout
+            # 带超时取任务，便于在空闲时仍能响应 _queue_running 变化
             task = _audio_queue.get(timeout=1.0)
-            if task is None:  # Sentinel value to stop the thread
+            if task is None:  # 哨兵值，用于优雅停止消费线程
                 break
 
-            # Execute the task (which is a function to be called)
+            # 每个 task 是 speak_task 闭包，内部完成 TTS 与播放等待
             task()
             _audio_queue.task_done()
 
         except queue.Empty:
-            # No tasks in queue, just continue waiting
             continue
         except Exception as e:
             logger.error(f"Error in audio queue processor: {e}")
-            # Continue processing other tasks
 
 
+# 启动音频队列消费线程（模块导入时自动调用一次）。
 def start_audio_queue_processor() -> None:
-    """Start the background thread for processing audio requests"""
+    """Start the background thread for processing audio requests."""
     global _queue_processor_thread, _queue_running
 
     if _queue_processor_thread is None or not _queue_processor_thread.is_alive():
@@ -70,7 +72,7 @@ def start_audio_queue_processor() -> None:
         logger.info("Started audio queue processor thread")
 
 
-# Start the queue processor when module is imported
+# 模块加载时即启动队列线程，后续 Speak 调用只需 put 任务即可
 start_audio_queue_processor()
 
 
@@ -81,42 +83,39 @@ class Speak(AbstractSkill):
 
     def __init__(self, tts_node: Any | None = None, **data) -> None:  # type: ignore[no-untyped-def]
         super().__init__(**data)
-        self._tts_node = tts_node
-        self._audio_complete = threading.Event()
+        self._tts_node = tts_node  # 外部注入的 TTS 节点，负责文本→音频管线
+        self._audio_complete = threading.Event()  # TTS 播放结束信号
         self._subscription = None
-        self._subscriptions: list = []  # type: ignore[type-arg]  # Track all subscriptions
+        self._subscriptions: list = []  # type: ignore[type-arg]  # 保存 Rx 订阅，便于 dispose
 
     def __call__(self):  # type: ignore[no-untyped-def]
         if not self._tts_node:
             logger.error("No TTS node provided to Speak skill")
             return "Error: No TTS node available"
 
-        # Create a result queue to get the result back from the audio thread
+        # 在队列线程与调用线程之间传递执行结果（成功/失败字符串）
         result_queue = queue.Queue(1)  # type: ignore[var-annotated]
 
-        # Define the speech task to run in the audio queue
+        # 实际播报逻辑，由全局音频队列线程调用。
         def speak_task() -> None:
             try:
-                # Using a lock to ensure exclusive access to audio device
                 with _audio_device_lock:
                     text_subject = Subject()  # type: ignore[var-annotated]
                     self._audio_complete.clear()
                     self._subscriptions = []
 
-                    # This function will be called when audio processing is complete
                     def on_complete() -> None:
                         logger.info(f"TTS audio playback completed for: {self.text}")
                         self._audio_complete.set()
 
-                    # This function will be called if there's an error
                     def on_error(error) -> None:  # type: ignore[no-untyped-def]
                         logger.error(f"Error in TTS processing: {error}")
                         self._audio_complete.set()
 
-                    # Connect the Subject to the TTS node and keep the subscription
+                    # 将文本 Subject 接入 TTS 消费端
                     self._tts_node.consume_text(text_subject)  # type: ignore[union-attr]
 
-                    # Subscribe to the audio output to know when it's done
+                    # 订阅 emit 流，在 on_completed/on_error 时唤醒等待
                     self._subscription = self._tts_node.emit_text().subscribe(  # type: ignore[union-attr]
                         on_next=lambda text: logger.debug(f"TTS processing: {text}"),
                         on_completed=on_complete,
@@ -124,43 +123,37 @@ class Speak(AbstractSkill):
                     )
                     self._subscriptions.append(self._subscription)
 
-                    # Emit the text to the Subject
                     text_subject.on_next(self.text)
-                    text_subject.on_completed()  # Signal that we're done sending text
+                    text_subject.on_completed()  # 通知 TTS：文本已全部送入
 
-                    # Wait for audio playback to complete with a timeout
-                    # Using a dynamic timeout based on text length
+                    # 超时与文本长度挂钩，避免长句过早判定失败
                     timeout = max(5, len(self.text) * 0.1)
                     logger.debug(f"Waiting for TTS completion with timeout {timeout:.1f}s")
 
                     if not self._audio_complete.wait(timeout=timeout):
                         logger.warning(f"TTS timeout reached for: {self.text}")
                     else:
-                        # Add a small delay after audio completes to ensure buffers are fully flushed
+                        # 播放结束后短暂等待，确保底层音频缓冲排空
                         time.sleep(0.3)
 
-                    # Clean up all subscriptions
                     for sub in self._subscriptions:
                         if sub:
                             sub.dispose()
                     self._subscriptions = []
 
-                    # Successfully completed
                     result_queue.put(f"Spoke: {self.text} successfully")
             except Exception as e:
                 logger.error(f"Error in speak task: {e}")
                 result_queue.put(f"Error speaking text: {e!s}")
 
-        # Add our speech task to the global queue for sequential processing
         display_text = self.text[:50] + "..." if len(self.text) > 50 else self.text
         logger.info(f"Queueing speech task: '{display_text}'")
         _audio_queue.put(speak_task)
 
-        # Wait for the result with a timeout
+        # 调用方阻塞等待队列线程回传结果；超时略大于 speak_task 内部估算
         try:
-            # Use a longer timeout than the audio playback itself
-            text_len_timeout = len(self.text) * 0.15  # 150ms per character
-            max_timeout = max(10, text_len_timeout)  # At least 10 seconds
+            text_len_timeout = len(self.text) * 0.15  # 约 150ms/字
+            max_timeout = max(10, text_len_timeout)
 
             return result_queue.get(timeout=max_timeout)
         except queue.Empty:
