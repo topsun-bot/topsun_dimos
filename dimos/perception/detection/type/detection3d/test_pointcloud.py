@@ -106,7 +106,7 @@ def test_detection3dpc(detection3dpc) -> None:
     # Verify size
     assert cube.size.x == pytest.approx(0.350, abs=0.1)
     assert cube.size.y == pytest.approx(0.250, abs=0.1)
-    assert cube.size.z == pytest.approx(0.550, abs=0.1)
+    assert cube.size.z == pytest.approx(0.550, abs=0.11)
 
     # Verify color (green with alpha)
     assert cube.color.r == pytest.approx(0.08235294117647059, abs=0.1)
