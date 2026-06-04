@@ -55,7 +55,7 @@ class Mid360Config(NativeModuleConfig):
     cwd: str | None = "cpp"
     executable: str = "result/bin/mid360_native"
     build_command: str | None = "nix build .#mid360_native"
-    host_ip: str = "192.168.1.5"
+    host_ip: str = "192.168.1.104"
     lidar_ip: str = "192.168.1.155"
     frequency: float = 10.0
     enable_imu: bool = True

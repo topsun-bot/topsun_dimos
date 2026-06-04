@@ -75,7 +75,7 @@ class FastLio2Config(NativeModuleConfig):
     executable: str = "result/bin/fastlio2_native"
     build_command: str | None = "nix build .#fastlio2_native"
     # Livox SDK hardware config
-    host_ip: str = "192.168.1.5"
+    host_ip: str = "192.168.1.104"
     lidar_ip: str = "192.168.1.155"
     frequency: float = 10.0
 

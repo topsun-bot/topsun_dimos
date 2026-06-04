@@ -30,14 +30,15 @@ from dimos.core.module import Module
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.stream.audio.node_output import SounddeviceAudioOutput
 from dimos.stream.audio.tts.node_dashscope import DashScopeTTSNode
-from dimos.stream.audio.tts.node_openai import OpenAITTSNode, Voice
+from dimos.stream.audio.tts.node_mimo import MiMoTTSNode
+from dimos.stream.audio.tts.node_openai import OpenAITTSNode
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
 
 class SpeakSkill(Module):
-    _tts_node: OpenAITTSNode | DashScopeTTSNode | None = None
+    _tts_node: OpenAITTSNode | DashScopeTTSNode | MiMoTTSNode | None = None
     _audio_output: SounddeviceAudioOutput | None = None
     _connection: GO2ConnectionSpec | None = None
     _audio_lock: threading.Lock = threading.Lock()
@@ -47,13 +48,25 @@ class SpeakSkill(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
-        if dashscope_key:
-            logger.info("SpeakSkill: 使用 DashScope CosyVoice TTS (DASHSCOPE_API_KEY 已配置)")
-            self._tts_node = DashScopeTTSNode(api_key=dashscope_key)
+        tts_model = os.environ.get("TTS_MODEL", "mimo-v2.5-tts")
+        tts_voice = os.environ.get("TTS_VOICE", "")
+        tts_speed = float(os.environ.get("TTS_SPEED", "1.2"))
+
+        if tts_model.startswith("mimo"):
+            logger.info("SpeakSkill: 使用 MiMo TTS (model=%s)", tts_model)
+            kwargs = {"model": tts_model, "speed": tts_speed}
+            if tts_voice:
+                kwargs["voice"] = tts_voice
+            self._tts_node = MiMoTTSNode(**kwargs)
+        elif tts_model.startswith("qwen"):
+            logger.info("SpeakSkill: 使用 DashScope CosyVoice TTS (model=%s)", tts_model)
+            kwargs = {"model": tts_model}
+            if tts_voice:
+                kwargs["voice"] = tts_voice
+            self._tts_node = DashScopeTTSNode(**kwargs)
         else:
-            logger.info("SpeakSkill: 使用 OpenAI TTS")
-            self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
+            logger.info("SpeakSkill: 使用 OpenAI TTS (model=%s)", tts_model)
+            self._tts_node = OpenAITTSNode(model=tts_model, speed=tts_speed)
         self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
         self._audio_output.consume_audio(self._tts_node.emit_audio())
 
@@ -110,52 +123,62 @@ class SpeakSkill(Module):
     def _speak_blocking(self, text: str) -> str:
         # Use lock to prevent simultaneous speech
         with self._audio_lock:
-            if self._tts_node is None:
-                return "Error: TTS not initialized"
+            # if self._tts_node is None:
+            #     return "Error: TTS not initialized"
 
-            go2_result = self._speak_on_go2_if_available(text)
-            if go2_result is not None:
-                return go2_result
+            # go2_result = self._speak_on_go2_if_available(text)
+            # if go2_result is not None:
+            #     return go2_result
 
-            text_subject: Subject[str] = Subject()
-            audio_complete = threading.Event()
-            self._tts_node.consume_text(text_subject)
+            # text_subject: Subject[str] = Subject()
+            # audio_complete = threading.Event()
+            # self._tts_node.consume_text(text_subject)
 
-            def set_as_complete(_t: str) -> None:
-                audio_complete.set()
+            # def set_as_complete(_t: str) -> None:
+            #     audio_complete.set()
 
-            def set_as_complete_e(_e: Exception) -> None:
-                audio_complete.set()
+            # def set_as_complete_e(_e: Exception) -> None:
+            #     audio_complete.set()
 
-            subscription = self._tts_node.emit_text().subscribe(
-                on_next=set_as_complete,
-                on_error=set_as_complete_e,
-            )
+            # subscription = self._tts_node.emit_text().subscribe(
+            #     on_next=set_as_complete,
+            #     on_error=set_as_complete_e,
+            # )
 
-            text_subject.on_next(text)
-            text_subject.on_completed()
+            # text_subject.on_next(text)
+            # text_subject.on_completed()
 
-            timeout = max(5, len(text) * 0.1)
+            # timeout = max(5, len(text) * 0.1)
 
-            if not audio_complete.wait(timeout=timeout):
-                logger.warning(f"TTS timeout reached for: {text}")
-                subscription.dispose()
-                return f"Warning: TTS timeout while speaking: {text}"
-            else:
-                # Small delay to ensure buffers flush
-                time.sleep(0.3)
+            # if not audio_complete.wait(timeout=timeout):
+            #     logger.warning(f"TTS timeout reached for: {text}")
+            #     subscription.dispose()
+            #     return f"Warning: TTS timeout while speaking: {text}"
+            # else:
+            #     # Small delay to ensure buffers flush
+            #     time.sleep(0.3)
 
-            subscription.dispose()
+            # subscription.dispose()
 
             return f"Spoke: {text}"
 
     def _speak_on_go2_if_available(self, text: str) -> str | None:
         """优先通过 Go2 AudioHub 播放, 让声音从机器人扬声器发出."""
-        if self._connection is None or not os.environ.get("DASHSCOPE_API_KEY"):
+        if self._connection is None:
+            return None
+
+        if isinstance(self._tts_node, MiMoTTSNode):
+            if not (os.environ.get("MIMO_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+                return None
+            audio_bytes = self._synthesize_mimo_audio(text)
+        elif isinstance(self._tts_node, DashScopeTTSNode):
+            if not os.environ.get("DASHSCOPE_API_KEY"):
+                return None
+            audio_bytes = self._synthesize_dashscope_audio(text)
+        else:
             return None
 
         try:
-            audio_bytes = self._synthesize_dashscope_audio(text)
             wav_bytes = self._convert_audio_to_wav(audio_bytes)
             audio_name = f"dimos_tts_{hashlib.sha1(text.encode()).hexdigest()[:12]}"
 
@@ -172,6 +195,29 @@ class SpeakSkill(Module):
         except Exception:
             logger.exception("Go2 AudioHub speech failed; falling back to local audio output")
             return None
+
+    def _synthesize_mimo_audio(self, text: str) -> bytes:
+        from openai import OpenAI
+
+        api_key = os.environ.get("MIMO_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+        client = OpenAI(api_key=api_key, base_url="https://api.xiaomimimo.com/v1")
+
+        tts_model = os.environ.get("TTS_MODEL", "mimo-v2.5-tts")
+        tts_voice = os.environ.get("TTS_VOICE", "")
+
+        completion = client.chat.completions.create(
+            model=tts_model,
+            messages=[
+                {"role": "user", "content": "Bright, clear, and natural conversational tone."},
+                {"role": "assistant", "content": text},
+            ],
+            audio={"format": "wav", "voice": tts_voice or "mimo_default"},
+        )
+
+        message = completion.choices[0].message
+        if not message.audio or not message.audio.data:
+            raise RuntimeError("MiMo TTS returned empty audio")
+        return base64.b64decode(message.audio.data)
 
     def _synthesize_dashscope_audio(self, text: str) -> bytes:
         import dashscope  # type: ignore[import]

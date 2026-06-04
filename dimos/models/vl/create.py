@@ -29,3 +29,7 @@ def create(name: VlModelName) -> VlModel:
             from dimos.models.vl.moondream import MoondreamVlModel
 
             return MoondreamVlModel()
+        case "mimo":
+            from dimos.models.vl.mimo import MiMoVlModel
+
+            return MiMoVlModel()

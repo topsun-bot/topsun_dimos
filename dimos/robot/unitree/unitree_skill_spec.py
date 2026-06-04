@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Literal
+from typing import Protocol
 
-VlModelName = Literal["qwen", "moondream", "mimo"]
+from dimos.spec.utils import Spec
+
+
+class UnitreeSkillSpec(Spec, Protocol):
+    def execute_sport_command(self, command_name: str) -> str: ...
