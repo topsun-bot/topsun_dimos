@@ -121,10 +121,18 @@ def tell_robot(
         write(f"Sending: {message[:200]}")
         write("---")
 
+    # Drop stale agent_idle events so we wait for *this* command's busy→idle cycle.
+    while True:
+        try:
+            response_queue.get_nowait()
+        except queue.Empty:
+            break
+
     human.publish(message)
 
     deadline = time.monotonic() + timeout
     response_count = 0
+    saw_busy = False
     try:
         while not done.is_set():
             try:
@@ -138,8 +146,13 @@ def tell_robot(
                 continue
 
             if msg_type == "idle":
-                done.set()
-                break
+                if msg:
+                    if saw_busy:
+                        done.set()
+                        break
+                else:
+                    saw_busy = True
+                continue
             if msg_type == "agent":
                 _print_langchain_msg(msg, quiet, write)
                 response_count += 1

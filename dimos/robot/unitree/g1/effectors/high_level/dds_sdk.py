@@ -25,6 +25,9 @@ from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type
     MotionSwitcherClient,
 )
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # type: ignore[import-not-found]
+from unitree_sdk2py.g1.arm.g1_arm_action_client import (  # type: ignore[import-not-found]
+    G1ArmActionClient,
+)
 from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
     ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
     ROBOT_API_ID_LOCO_GET_FSM_ID,
@@ -43,6 +46,9 @@ from dimos.robot.unitree.g1.effectors.high_level.commands import (
     ARM_API_ID,
     ARM_COMMANDS,
     ARM_COMMANDS_DOC,
+    ARM_EXECUTE_CUSTOM_ACTION_API_ID,
+    ARM_GET_ACTION_LIST_API_ID,
+    ARM_STOP_CUSTOM_ACTION_API_ID,
     ARM_TOPIC,
     MODE_API_ID,
     MODE_COMMANDS,
@@ -78,6 +84,7 @@ class G1HighLevelDdsSdkConfig(ModuleConfig):
     ai_standup: bool = True
     motion_switcher_timeout: float = 5.0
     loco_client_timeout: float = 10.0
+    arm_action_timeout: float = 5.0
     cmd_vel_timeout: float = 0.2
 
 
@@ -96,6 +103,7 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         self._mode_selected = False
         self.motion_switcher: Any = None
         self.loco_client: Any = None
+        self.arm_action_client: Any = None
 
     @rpc
     def start(self) -> None:
@@ -121,6 +129,18 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         self.loco_client._RegistApi(_LOCO_API_IDS["GET_FSM_ID"], 0)
         self.loco_client._RegistApi(_LOCO_API_IDS["GET_FSM_MODE"], 0)
         self.loco_client._RegistApi(_LOCO_API_IDS["GET_BALANCE_MODE"], 0)
+
+        # Arm action client — exposes preset gestures + UniStore/teach actions over
+        # the arm request service (``rt/api/arm/request``). Needed so greeter skills
+        # (greet_guest / execute_arm_command / perform_dance) work over DDS, not just
+        # WebRTC. The stock python client only registers 7106/7107, so register the
+        # custom-action APIs (7108 execute, 7113 stop) explicitly.
+        self.arm_action_client = G1ArmActionClient()
+        self.arm_action_client.SetTimeout(self.config.arm_action_timeout)
+        self.arm_action_client.Init()
+        self.arm_action_client._RegistApi(ARM_EXECUTE_CUSTOM_ACTION_API_ID, 0)
+        self.arm_action_client._RegistApi(ARM_STOP_CUSTOM_ACTION_API_ID, 0)
+        logger.info("G1 arm action client initialized")
 
         self._select_motion_mode()
         self._running = True
@@ -200,10 +220,15 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
     @rpc
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[str, Any]:
         logger.info(f"Publishing request to topic: {topic} with data: {data}")
-        assert self.loco_client is not None
 
         api_id = data.get("api_id")
         parameter = data.get("parameter", {})
+
+        # Arm gestures / UniStore actions are served by a dedicated DDS service.
+        if topic == ARM_TOPIC:
+            return self._handle_arm_request(api_id, parameter)
+
+        assert self.loco_client is not None
 
         try:
             API_SET_FSM_ID = 7101
@@ -222,6 +247,26 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
                 return {"code": -1, "error": "unsupported_api"}
         except Exception as e:
             logger.error(f"publish_request failed: {e}")
+            return {"code": -1, "error": str(e)}
+
+    def _handle_arm_request(self, api_id: int | None, parameter: dict[str, Any]) -> dict[str, Any]:
+        """Dispatch arm-service requests to the ``G1ArmActionClient``."""
+        if self.arm_action_client is None:
+            return {"code": -1, "error": "arm_action_client_not_initialized"}
+        try:
+            if api_id == ARM_API_ID:  # 7106: execute preset action by id
+                action_id = int(parameter.get("data", 0))
+                return {"code": self.arm_action_client.ExecuteAction(action_id)}
+            if api_id == ARM_GET_ACTION_LIST_API_ID:  # 7107
+                code, action_data = self.arm_action_client.GetActionList()
+                return {"code": code, "data": action_data}
+            if api_id in (ARM_EXECUTE_CUSTOM_ACTION_API_ID, ARM_STOP_CUSTOM_ACTION_API_ID):
+                code, _ = self.arm_action_client._Call(api_id, json.dumps(parameter))
+                return {"code": code}
+            logger.warning(f"Unsupported arm API ID: {api_id}")
+            return {"code": -1, "error": "unsupported_arm_api"}
+        except Exception as e:
+            logger.error(f"arm request failed: {e}")
             return {"code": -1, "error": str(e)}
 
     @rpc

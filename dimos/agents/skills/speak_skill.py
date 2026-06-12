@@ -19,6 +19,7 @@ import json
 import os
 import threading
 import time
+from typing import Any
 
 import numpy as np
 from reactivex import Subject
@@ -35,6 +36,8 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+_SPEECH_SAMPLE_RATE = 24000
+
 
 class SpeakSkill(Module):
     _tts_node: OpenAITTSNode | DashScopeTTSNode | None = None
@@ -43,10 +46,12 @@ class SpeakSkill(Module):
     _audio_lock: threading.Lock = threading.Lock()
     _bg_threads: list[threading.Thread] = []
     _bg_threads_lock: threading.Lock = threading.Lock()
+    _speech_cache: dict[str, np.ndarray]
 
     @rpc
     def start(self) -> None:
         super().start()
+        self._speech_cache = {}
         dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
         if dashscope_key:
             logger.info("SpeakSkill: 使用 DashScope CosyVoice TTS (DASHSCOPE_API_KEY 已配置)")
@@ -56,6 +61,24 @@ class SpeakSkill(Module):
             self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
         self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
         self._audio_output.consume_audio(self._tts_node.emit_audio())
+
+    @rpc
+    def prewarm_texts(self, texts: list[str]) -> None:
+        """后台预合成固定台词, 后续 speak 直接播缓存(跳过云端 TTS 延迟)."""
+        unique = list(dict.fromkeys(t.strip() for t in texts if t.strip()))
+
+        def _warm() -> None:
+            for text in unique:
+                if text in self._speech_cache:
+                    continue
+                try:
+                    self._speech_cache[text] = self._synthesize_to_array(text)
+                    logger.info("SpeakSkill 预缓存完成: %s", text[:40])
+                except Exception:
+                    logger.exception("SpeakSkill 预缓存失败: %s", text[:40])
+            logger.info("SpeakSkill 预缓存结束 (%d/%d 条)", len(self._speech_cache), len(unique))
+
+        threading.Thread(target=_warm, daemon=True, name="SpeakSkill-prewarm").start()
 
     @rpc
     def stop(self) -> None:
@@ -108,6 +131,7 @@ class SpeakSkill(Module):
                 ]
 
     def _speak_blocking(self, text: str) -> str:
+        t0 = time.monotonic()
         # Use lock to prevent simultaneous speech
         with self._audio_lock:
             if self._tts_node is None:
@@ -116,6 +140,10 @@ class SpeakSkill(Module):
             go2_result = self._speak_on_go2_if_available(text)
             if go2_result is not None:
                 return go2_result
+
+            cached = self._speech_cache.get(text)
+            if cached is not None:
+                return self._play_cached_audio(cached, text, t0)
 
             text_subject: Subject[str] = Subject()
             audio_complete = threading.Event()
@@ -147,7 +175,51 @@ class SpeakSkill(Module):
 
             subscription.dispose()
 
+            logger.info("SpeakSkill 完成,耗时 %.1fs, text=%s", time.monotonic() - t0, text[:40])
             return f"Spoke: {text}"
+
+    def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
+        import sounddevice as sd  # type: ignore[import-untyped]
+
+        sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
+        # Block until playback actually finishes — sd.play() is non-blocking, so a
+        # fixed sleep would return mid-utterance and let a follow-up gesture/speak
+        # overlap the audio (and breaks the _audio_lock's serialization guarantee).
+        sd.wait()
+        logger.info("SpeakSkill 缓存播放,耗时 %.1fs, text=%s", time.monotonic() - t0, text[:40])
+        return f"Spoke (cached): {text}"
+
+    def _audio_bytes_to_array(self, audio_bytes: bytes) -> np.ndarray:
+        import soundfile as sf  # type: ignore[import-untyped]
+
+        with sf.SoundFile(io.BytesIO(audio_bytes), "r") as sound_file:
+            actual_sr = int(sound_file.samplerate)
+            audio_array: np.ndarray[Any, Any] = sound_file.read(dtype="float32")
+        if audio_array.ndim > 1:
+            audio_array = audio_array.mean(axis=1)
+        if actual_sr != _SPEECH_SAMPLE_RATE:
+            duration = len(audio_array) / float(actual_sr)
+            src_t = np.linspace(0.0, duration, num=len(audio_array), endpoint=False)
+            dst_len = max(1, int(duration * _SPEECH_SAMPLE_RATE))
+            dst_t = np.linspace(0.0, duration, num=dst_len, endpoint=False)
+            audio_array = np.interp(dst_t, src_t, audio_array)
+        return audio_array.astype(np.float32)
+
+    def _synthesize_to_array(self, text: str) -> np.ndarray:
+        if self._tts_node is None:
+            raise RuntimeError("TTS not initialized")
+        if isinstance(self._tts_node, DashScopeTTSNode):
+            return self._audio_bytes_to_array(self._synthesize_dashscope_audio(text))
+        from openai import OpenAI
+
+        client = OpenAI()
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice="onyx",
+            input=text,
+            speed=1.2,
+        )
+        return self._audio_bytes_to_array(response.content)
 
     def _speak_on_go2_if_available(self, text: str) -> str | None:
         """优先通过 Go2 AudioHub 播放, 让声音从机器人扬声器发出."""

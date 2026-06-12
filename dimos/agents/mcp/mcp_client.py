@@ -224,7 +224,11 @@ class McpClient(Module):
         super().start()
 
         def _on_human_input(string: str) -> None:
-            self._message_queue.put(HumanMessage(content=string))
+            cleaned = string.strip()
+            if not cleaned:
+                return
+            logger.info("McpClient received human_input: %s", cleaned[:200])
+            self._message_queue.put(HumanMessage(content=cleaned))
 
         self.register_disposable(Disposable(self.human_input.subscribe(_on_human_input)))
 
@@ -261,6 +265,9 @@ class McpClient(Module):
             )
             if not self._thread.is_alive():
                 self._thread.start()
+
+        # Explicit idle=True so voice-input modules know the mic may open immediately.
+        self.agent_idle.publish(True)
 
     @rpc
     def stop(self) -> None:
@@ -345,10 +352,15 @@ class McpClient(Module):
             except Empty:
                 continue
 
-            with self._lock:
-                if not self._state_graph:
-                    raise ValueError("No state graph initialized")
-                self._process_message(self._state_graph, message)
+            try:
+                with self._lock:
+                    if not self._state_graph:
+                        raise ValueError("No state graph initialized")
+                    self._process_message(self._state_graph, message)
+            except Exception:
+                logger.exception("McpClient failed to process message")
+                if self._message_queue.empty():
+                    self.agent_idle.publish(True)
 
     def _process_message(
         self, state_graph: CompiledStateGraph[Any, Any, Any, Any], message: BaseMessage

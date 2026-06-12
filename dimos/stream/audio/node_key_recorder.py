@@ -13,10 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 import select
 import sys
 import threading
 import time
+from typing import Any
 
 import numpy as np
 from reactivex import Observable
@@ -39,6 +41,7 @@ class KeyRecorder(AbstractAudioTransform):
         self,
         max_recording_time: float = 120.0,
         always_subscribe: bool = False,
+        ptt_topic: str | None = None,
     ) -> None:
         """
         Initialize KeyRecorder.
@@ -48,9 +51,15 @@ class KeyRecorder(AbstractAudioTransform):
             always_subscribe: If True, subscribe to audio source continuously,
                               If False, only subscribe when recording (more efficient
                               but some audio devices may need time to initialize)
+            ptt_topic: If set, toggle recording on LCM messages on this topic
+                       (for worker processes that cannot read the terminal stdin).
+                       The main ``dimos run`` process forwards Enter key presses.
         """
         self.max_recording_time = max_recording_time
         self.always_subscribe = always_subscribe
+        self._ptt_topic = ptt_topic
+        self._ptt_transport: Any = None
+        self._ptt_unsubscribe: Callable[[], None] | None = None
 
         self._audio_buffer = []  # type: ignore[var-annotated]
         self._is_recording = False
@@ -63,12 +72,10 @@ class KeyRecorder(AbstractAudioTransform):
         self._output_subject = Subject()  # type: ignore[var-annotated]  # For record-time passthrough
         self._recording_subject = ReplaySubject(1)  # type: ignore[var-annotated]  # For full completed recordings
 
-        # Start a thread to monitor for input
-        self._running = True
-        self._input_thread = threading.Thread(target=self._input_monitor, daemon=True)
-        self._input_thread.start()
+        self._running = False
+        self._input_thread: threading.Thread | None = None
 
-        logger.info("Started audio recorder (press any key to start/stop recording)")
+        logger.info("KeyRecorder created (waiting for audio source)")
 
     def consume_audio(self, audio_observable: Observable) -> "KeyRecorder":  # type: ignore[type-arg]
         """
@@ -83,6 +90,7 @@ class KeyRecorder(AbstractAudioTransform):
             Self for method chaining
         """
         self._audio_observable = audio_observable  # type: ignore[assignment]
+        self._ensure_input_monitor()
 
         # If configured to always subscribe, do it now
         if self.always_subscribe and not self._subscription:
@@ -94,6 +102,45 @@ class KeyRecorder(AbstractAudioTransform):
             logger.debug("Subscribed to audio source (always_subscribe=True)")
 
         return self
+
+    def _ensure_input_monitor(self) -> None:
+        """Start PTT monitor only after the audio pipeline is wired."""
+        if self._ptt_topic:
+            if self._ptt_unsubscribe is not None:
+                return
+            from dimos.core.transport import pLCMTransport
+
+            self._ptt_transport = pLCMTransport[str](self._ptt_topic)
+            self._ptt_transport.start()
+
+            def _on_ptt(_msg: str) -> None:
+                if self._is_recording:
+                    self._stop_recording()
+                else:
+                    self._start_recording()
+
+            self._ptt_unsubscribe = self._ptt_transport.subscribe(_on_ptt)
+            logger.info(
+                "按 Enter 开始录音,说完后再按 Enter 结束(每次录音建议 2~5 秒)"
+            )
+            return
+
+        if self._input_thread is not None and self._input_thread.is_alive():
+            return
+
+        if not sys.stdin.isatty():
+            logger.error(
+                "KeyRecorder 无法读取终端键盘(模块在 worker 子进程运行)。"
+                "请使用带 ptt_topic 的蓝图,或改用免提版 greeter-hands-free。"
+            )
+            return
+
+        self._running = True
+        self._input_thread = threading.Thread(target=self._input_monitor, daemon=True)
+        self._input_thread.start()
+        logger.info(
+            "按 Enter 开始录音,说完后再按 Enter 结束(每次录音建议 2~5 秒)"
+        )
 
     def emit_audio(self) -> Observable:  # type: ignore[type-arg]
         """
@@ -126,9 +173,16 @@ class KeyRecorder(AbstractAudioTransform):
             self._subscription.dispose()
             self._subscription = None
 
+        if self._ptt_unsubscribe is not None:
+            self._ptt_unsubscribe()
+            self._ptt_unsubscribe = None
+        if self._ptt_transport is not None:
+            self._ptt_transport.stop()
+            self._ptt_transport = None
+
         # Stop input monitoring thread
         self._running = False
-        if self._input_thread.is_alive():
+        if self._input_thread is not None and self._input_thread.is_alive():
             self._input_thread.join(DEFAULT_THREAD_JOIN_TIMEOUT)
 
     def _input_monitor(self) -> None:
@@ -138,7 +192,9 @@ class KeyRecorder(AbstractAudioTransform):
         while self._running:
             # Check if there's input available
             if select.select([sys.stdin], [], [], 0.1)[0]:
-                sys.stdin.readline()
+                line = sys.stdin.readline()
+                if not line:
+                    continue
 
                 if self._is_recording:
                     self._stop_recording()
@@ -180,6 +236,11 @@ class KeyRecorder(AbstractAudioTransform):
             logger.debug("Unsubscribed from audio source after recording")
 
         logger.info(f"Recording stopped after {recording_duration:.2f} seconds")
+        if recording_duration < 0.5:
+            logger.warning(
+                "录音过短(%.2fs):请按 Enter 开始,说话 2~5 秒,再按 Enter 结束",
+                recording_duration,
+            )
 
         # Combine all audio events into one
         if len(self._audio_buffer) > 0:

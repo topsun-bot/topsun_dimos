@@ -39,7 +39,7 @@ unitree_g1_agentic_deepseek = autoconnect(
         system_prompt=G1_SYSTEM_PROMPT,
         model="deepseek-v4-pro",
         model_provider="openai",
-        model_kwargs={"extra_body": {"thinking": {"type": "none"}}},
+        model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
     ),
     NavigationSkillContainer.blueprint(),
     SpeakSkill.blueprint(),
