@@ -1,4 +1,4 @@
-ARG FROM_IMAGE=ghcr.io/dimensionalos/ros:dev
+ARG FROM_IMAGE=ghcr.io/topsun-bot/ros:dev
 FROM ${FROM_IMAGE}
 
 # Install basic requirements

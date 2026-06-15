@@ -1,0 +1,22 @@
+name: demo_office
+version: 1
+description: "办公室演示：厨房、走廊、电脑"
+created_at: "2026-05-26"
+author: topsun
+
+scene:
+  robot: unitree-go2
+  mode: replay
+  replay_db: go2_short
+  simulation: ""
+
+origin_note: "Replay 起始位姿需与录包时一致"
+
+counts:
+  rooms: 2
+  landmarks: 1
+
+demo_queries:
+  - "去厨房"
+  - "去找电脑"
+  - "列出所有地标"

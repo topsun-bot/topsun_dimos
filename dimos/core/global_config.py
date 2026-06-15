@@ -12,14 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import platform
 import re
-from typing import Literal, TypeAlias
+from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from dimos.constants import DEFAULT_BUILD_NATIVE
 from dimos.models.vl.types import VlModelName
+from dimos.visualization.rerun.constants import (
+    RERUN_ENABLE_WEB,
+    RERUN_OPEN_DEFAULT,
+    RerunOpenOption,
+    ViewerBackend,
+)
 
-ViewerBackend: TypeAlias = Literal["rerun", "rerun-web", "rerun-connect", "foxglove", "none"]
+TransportBackend = Literal["lcm", "shm"]
+_DEFAULT_TRANSPORT: TransportBackend = "shm" if platform.system() == "Darwin" else "lcm"
 
 
 def _get_all_numbers(s: str) -> list[float]:
@@ -32,11 +42,17 @@ class GlobalConfig(BaseSettings):
     xarm7_ip: str | None = None
     xarm6_ip: str | None = None
     can_port: str | None = None
-    simulation: bool = False
+    simulation: str = ""
     replay: bool = False
     replay_db: str = "go2_short"
     new_memory: bool = False
     viewer: ViewerBackend = "rerun"
+    rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT
+    rerun_web: bool = RERUN_ENABLE_WEB
+    rerun_host: str | None = None
+    rerun_websocket_server_port: int = 3030
+    rerun_save: bool = False
+    rerun_save_dir: str = "~/.local/share/dimos/rrd"
     n_workers: int = 2
     memory_limit: str = "auto"
     mujoco_camera_position: str | None = None
@@ -52,15 +68,31 @@ class GlobalConfig(BaseSettings):
     nerf_speed: float = 1.0
     planner_robot_speed: float | None = None
     mcp_port: int = 9990
+    build_native: bool = DEFAULT_BUILD_NATIVE
     dtop: bool = False
     obstacle_avoidance: bool = True
     detection_model: VlModelName = "moondream"
     listen_host: str = "127.0.0.1"
+    dimsim_scene: str = "apt"
+    dimsim_port: int = 8090
+    default_transport: TransportBackend = _DEFAULT_TRANSPORT
+    unitree_webrtc_aes_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "unitree_webrtc_aes_key",
+            "UNITREE_AES_128_KEY",
+            "UNITREE_AES_KEY",
+            "DIMOS_UNITREE_WEBRTC_AES_KEY",
+        ),
+    )
+    unitree_cloud_region: Literal["cn", "global"] = "global"
+    unitree_webrtc_connect_timeout_sec: float = 30.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     def update(self, **kwargs: object) -> None:
@@ -75,7 +107,7 @@ class GlobalConfig(BaseSettings):
         if self.replay:
             return "replay"
         if self.simulation:
-            return "mujoco"
+            return self.simulation
         return "webrtc"
 
     @property

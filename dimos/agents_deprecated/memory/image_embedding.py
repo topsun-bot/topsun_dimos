@@ -26,7 +26,10 @@ import sys
 
 import cv2
 import numpy as np
+import onnxruntime as ort
 from PIL import Image
+from transformers.modeling_utils import PreTrainedModel
+from transformers.processing_utils import ProcessorMixin
 
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
@@ -47,14 +50,14 @@ class ImageEmbeddingProvider:
         Initialize the image embedding provider.
 
         Args:
-            model_name: Name of the embedding model to use ("clip", "resnet", etc.)
+            model_name: Name of the embedding model to use ("clip", "resnet").
             dimensions: Dimensions of the embedding vectors
         """
         self.model_name = model_name
         self.dimensions = dimensions
-        self.model = None
-        self.processor = None
-        self.model_path = None
+        self.model: ort.InferenceSession | PreTrainedModel | None = None
+        self.processor: ProcessorMixin | None = None
+        self.model_path: str | None = None
 
         self._initialize_model()  # type: ignore[no-untyped-call]
 
@@ -72,7 +75,8 @@ class ImageEmbeddingProvider:
             )
 
             if self.model_name == "clip":
-                model_id = get_data("models_clip") / "model.onnx"
+                clip_data_dir = get_data("models_clip")
+                model_id = clip_data_dir / "model.onnx"
                 self.model_path = str(model_id)  # type: ignore[assignment]  # Store for pickling
                 processor_id = "openai/clip-vit-base-patch32"
 
@@ -87,7 +91,15 @@ class ImageEmbeddingProvider:
                 self.model = ort.InferenceSession(str(model_id), providers=providers)
 
                 actual_providers = self.model.get_providers()  # type: ignore[attr-defined]
-                self.processor = CLIPProcessor.from_pretrained(processor_id)
+                # Prefer bundled tokenizer/processor (avoids HF hub + SOCKS proxy issues).
+                if (clip_data_dir / "preprocessor_config.json").exists():
+                    self.processor = CLIPProcessor.from_pretrained(
+                        str(clip_data_dir), local_files_only=True
+                    )
+                    logger.info("Loaded CLIP processor from local %s", clip_data_dir)
+                else:
+                    self.processor = CLIPProcessor.from_pretrained(processor_id)
+                    logger.info("Loaded CLIP processor from HuggingFace %s", processor_id)
                 logger.info(f"Loaded CLIP model: {model_id} with providers: {actual_providers}")
             elif self.model_name == "resnet":
                 model_id = "microsoft/resnet-50"  # type: ignore[assignment]
@@ -121,10 +133,12 @@ class ImageEmbeddingProvider:
 
         pil_image = self._prepare_image(image)
 
+        embedding: np.ndarray
         try:
             import torch
 
             if self.model_name == "clip":
+                assert isinstance(self.model, ort.InferenceSession)
                 inputs = self.processor(images=pil_image, return_tensors="np")
 
                 with torch.no_grad():
@@ -156,6 +170,7 @@ class ImageEmbeddingProvider:
                 embedding = embedding[0]
 
             elif self.model_name == "resnet":
+                assert isinstance(self.model, PreTrainedModel)
                 inputs = self.processor(images=pil_image, return_tensors="pt")
 
                 with torch.no_grad():
@@ -200,6 +215,7 @@ class ImageEmbeddingProvider:
         try:
             import torch
 
+            assert isinstance(self.model, ort.InferenceSession)
             inputs = self.processor(text=[text], return_tensors="np", padding=True)
 
             with torch.no_grad():
@@ -225,7 +241,7 @@ class ImageEmbeddingProvider:
                 # Determine correct output (usually 'last_hidden_state' or 'text_embeds')
                 output_names = [o.name for o in self.model.get_outputs()]
                 if "text_embeds" in output_names:
-                    text_embedding = ort_outputs[output_names.index("text_embeds")]
+                    text_embedding: np.ndarray = ort_outputs[output_names.index("text_embeds")]
                 else:
                     text_embedding = ort_outputs[0]  # fallback to first output
 

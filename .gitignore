@@ -2,6 +2,9 @@
 **/*.ignore
 **/*.ignore.*
 
+# Default output of `dimos apriltag`
+/apriltags.pdf
+
 .vscode/
 
 # Ignore Python cache files
@@ -38,6 +41,8 @@ __pycache__
 node_modules
 package.json
 package-lock.json
+!docs/package.json
+!docs/package-lock.json
 
 # Ignore build artifacts
 dist/
@@ -65,7 +70,7 @@ yolo11n.pt
 
 *mobileclip*
 /results
-/result
+results/
 **/cpp/result
 
 CLAUDE.MD
@@ -81,3 +86,7 @@ htmlcov/
 
 # Memory2 autorecord
 recording*.db
+
+# 个人/工具目录, 非业务模块, 不纳入版本管理
+.cursor/
+jiangtao/

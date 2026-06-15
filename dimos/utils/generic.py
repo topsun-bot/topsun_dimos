@@ -16,9 +16,26 @@ from collections.abc import Callable
 import hashlib
 import json
 import os
+import socket
 import string
 from typing import Any, Generic, TypeVar, overload
 import uuid
+
+import psutil
+
+
+def get_local_ips() -> list[tuple[str, str]]:
+    """Return ``(ip, interface_name)`` for every non-loopback IPv4 address.
+
+    Picks up physical, virtual, and VPN interfaces (including Tailscale).
+    """
+    results: list[tuple[str, str]] = []
+    for iface, addrs in psutil.net_if_addrs().items():
+        for addr in addrs:
+            if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                results.append((addr.address, iface))
+    return results
+
 
 _T = TypeVar("_T")
 
@@ -43,14 +60,40 @@ def truncate_display_string(arg: Any, max: int | None = None) -> str:
 
 
 def extract_json_from_llm_response(response: str) -> Any:
-    start_idx = response.find("{")
-    end_idx = response.rfind("}") + 1
+    """Parse JSON object or array from an LLM text response."""
+    if not response:
+        return None
 
-    if start_idx >= 0 and end_idx > start_idx:
-        json_str = response[start_idx:end_idx]
+    text = response.strip()
+    if text.lower() in ("none", "null"):
+        return None
+
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:])
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3].rstrip()
+        text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start_obj = text.find("{")
+    end_obj = text.rfind("}") + 1
+    if start_obj >= 0 and end_obj > start_obj:
         try:
-            return json.loads(json_str)
-        except Exception:
+            return json.loads(text[start_obj:end_obj])
+        except json.JSONDecodeError:
+            pass
+
+    start_arr = text.find("[")
+    end_arr = text.rfind("]") + 1
+    if start_arr >= 0 and end_arr > start_arr:
+        try:
+            return json.loads(text[start_arr:end_arr])
+        except json.JSONDecodeError:
             pass
 
     return None

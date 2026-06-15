@@ -14,7 +14,6 @@
 
 import logging
 
-from dimos_lcm.sensor_msgs import CameraInfo
 from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
@@ -23,6 +22,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.vision_msgs.Detection2DArray import Detection2DArray
 from dimos.utils.logging_config import setup_logger
 

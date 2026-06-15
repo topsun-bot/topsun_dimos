@@ -146,6 +146,12 @@ class GlobalPlanner(Resource):
         self._reset_safe_goal_clearance()
 
     def cancel_goal(self, *, but_will_try_again: bool = False, arrived: bool = False) -> None:
+        # return silently so we don't flood the logs.
+        with self._lock:
+            no_goal = self._current_goal is None
+        if no_goal and self._local_planner.get_state() == NavigationState.IDLE:
+            return
+
         logger.info("Cancelling goal.", but_will_try_again=but_will_try_again, arrived=arrived)
 
         with self._lock:
@@ -283,8 +289,10 @@ class GlobalPlanner(Resource):
 
         logger.info("Replanning.", attempt=self._replan_limiter.get_attempt())
 
-        assert current_odom is not None
-        assert current_goal is not None
+        if current_odom is None or current_goal is None:
+            logger.warning("Skipping replan: odom or goal disappeared")
+            self.cancel_goal()
+            return
 
         if current_goal.position.distance(current_odom.position) < self._replan_goal_tolerance:
             self.cancel_goal(arrived=True)

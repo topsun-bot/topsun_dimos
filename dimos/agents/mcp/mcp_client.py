@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Callable
+import os
 from queue import Empty, Queue
 from threading import Event, RLock, Thread
 import time
@@ -35,6 +36,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.rpc_client import RPCClient
 from dimos.core.stream import In, Out
+from dimos.core.transport import pLCMTransport
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.sequential_ids import SequentialIds
 
@@ -44,8 +46,11 @@ logger = setup_logger()
 class McpClientConfig(ModuleConfig):
     system_prompt: str | None = SYSTEM_PROMPT
     model: str = "gpt-4o"
+    model_provider: str | None = None
+    model_kwargs: dict[str, Any] | None = None
     model_fixture: str | None = None
     mcp_server_url: str = "http://localhost:9990/mcp"
+    supports_vision: bool = True  # Set False for text-only models (e.g. DeepSeek)
 
 
 class McpClient(Module):
@@ -53,6 +58,12 @@ class McpClient(Module):
     agent: Out[BaseMessage]
     human_input: In[str]
     agent_idle: Out[bool]
+
+    _stream_transport_pins = {
+        "human_input": pLCMTransport,
+        "agent": pLCMTransport,
+        "agent_idle": pLCMTransport,
+    }
 
     _lock: RLock
     _state_graph: CompiledStateGraph[Any, Any, Any, Any] | None
@@ -78,9 +89,25 @@ class McpClient(Module):
             daemon=True,
         )
         self._stop_event = Event()
-        self._http_client = httpx.Client(timeout=120.0)
+        self._http_client = self._make_http_client()
         self._seq_ids = SequentialIds()
         self._tool_stream_cleanup = None
+
+    @staticmethod
+    def _make_http_client() -> httpx.Client:
+        """Create an httpx client, ignoring unsupported proxy schemes like socks://."""
+        unsupported = {}
+        for key in ("all_proxy", "ALL_PROXY"):
+            val = os.environ.get(key, "")
+            if val.startswith("socks://"):
+                unsupported[key] = val
+        for key in unsupported:
+            del os.environ[key]
+        try:
+            return httpx.Client(timeout=120.0)
+        finally:
+            for key, val in unsupported.items():
+                os.environ[key] = val
 
     def __reduce__(self) -> Any:
         return (self.__class__, (), {})
@@ -217,6 +244,14 @@ class McpClient(Module):
             from dimos.agents.testing import MockModel
 
             model = MockModel(json_path=self.config.model_fixture)
+        elif self.config.model_provider is not None:
+            from langchain.chat_models import init_chat_model
+
+            model = init_chat_model(
+                self.config.model,
+                model_provider=self.config.model_provider,
+                **(self.config.model_kwargs or {}),
+            )
 
         with self._lock:
             self._state_graph = create_agent(
@@ -337,6 +372,9 @@ class McpClient(Module):
 def _append_image_to_history(
     mcp_client: McpClient, func_name: str, uuid_: str, result: Any
 ) -> None:
+    if not mcp_client.config.supports_vision:
+        # Text-only models can't process images — skip the artefact message.
+        return
     mcp_client.add_message(
         HumanMessage(
             content=[

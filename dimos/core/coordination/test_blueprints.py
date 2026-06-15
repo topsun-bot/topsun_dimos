@@ -35,7 +35,7 @@ from dimos.core.coordination.blueprints import (
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
-from dimos.core.transport import LCMTransport
+from dimos.core.transport import LCMTransport, PubSubTransport, pLCMTransport, pSHMTransport
 from dimos.spec.utils import Spec
 
 
@@ -232,3 +232,155 @@ def test_active_blueprints_filters_disabled() -> None:
     active_modules = {bp.module for bp in blueprint.active_blueprints}
     assert ModuleA not in active_modules
     assert ModuleB in active_modules
+
+
+def test_transport_factory_sets_field() -> None:
+    def my_factory(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
+        return pSHMTransport(topic)
+
+    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).transport_factory(my_factory)
+    assert bp._transport_factory is my_factory
+
+
+def test_transport_factory_merged_via_autoconnect() -> None:
+    """autoconnect takes the last non-None factory."""
+
+    def factory_a(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
+        return pSHMTransport(topic)
+
+    def factory_b(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
+        return pLCMTransport(topic)
+
+    bp_with_factory = ModuleA.blueprint().transport_factory(factory_a)
+    bp_plain = ModuleB.blueprint()
+    bp_with_factory_b = Blueprint.create(ModuleA).transport_factory(factory_b)
+
+    merged = autoconnect(bp_with_factory, bp_plain)
+    assert merged._transport_factory is factory_a
+
+    merged2 = autoconnect(bp_with_factory, bp_with_factory_b)
+    assert merged2._transport_factory is factory_b
+
+
+def test_transport_factory_priority_over_global_config() -> None:
+    """Blueprint-level factory takes precedence over GlobalConfig default_transport."""
+    from unittest.mock import patch
+
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    def custom_factory(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
+        return pSHMTransport(topic)
+
+    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).transport_factory(custom_factory)
+
+    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
+        mock_gc.default_transport = "lcm"
+        transport = _get_transport_for(bp, "data1", Data1)
+
+    assert isinstance(transport, pSHMTransport)
+
+
+def test_explicit_transport_highest_priority() -> None:
+    """Explicit .transports() overrides both factory and global config."""
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    explicit_transport = LCMTransport("/explicit", Data1)
+
+    def custom_factory(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
+        return pSHMTransport(topic)
+
+    bp = (
+        autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
+        .transports({("data1", Data1): explicit_transport})
+        .transport_factory(custom_factory)
+    )
+
+    transport = _get_transport_for(bp, "data1", Data1)
+    assert transport is explicit_transport
+
+
+def test_global_config_default_transport_shm() -> None:
+    """GlobalConfig default_transport=shm produces pSHMTransport."""
+    from unittest.mock import patch
+
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
+
+    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
+        mock_gc.default_transport = "shm"
+        transport = _get_transport_for(bp, "data1", Data1)
+
+    assert isinstance(transport, pSHMTransport)
+
+
+def test_global_config_default_transport_lcm() -> None:
+    """GlobalConfig default_transport=lcm produces LCM-based transport."""
+    from unittest.mock import patch
+
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
+
+    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
+        mock_gc.default_transport = "lcm"
+        transport = _get_transport_for(bp, "data1", Data1)
+
+    assert isinstance(transport, pLCMTransport)
+
+
+class PinnedModule(Module):
+    """Module that declares transport pins for its streams."""
+
+    data1: In[Data1]
+    data2: Out[Data2]
+
+    _stream_transport_pins = {
+        "data1": pLCMTransport,
+    }
+
+
+def test_stream_transport_pins_override_global_shm() -> None:
+    """Module-level _stream_transport_pins force LCM even under shm mode."""
+    from unittest.mock import patch
+
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    bp = autoconnect(PinnedModule.blueprint(), ModuleA.blueprint())
+
+    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
+        mock_gc.default_transport = "shm"
+        t_pinned = _get_transport_for(bp, "data1", Data1)
+        t_unpinned = _get_transport_for(bp, "data2", Data2)
+
+    assert isinstance(t_pinned, pLCMTransport)
+    assert isinstance(t_unpinned, pSHMTransport)
+
+
+def test_shm_factory_uses_large_capacity_for_image() -> None:
+    """SHM factory allocates proper capacity for Image streams."""
+    from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
+    from dimos.core.coordination.module_coordinator import _shm_factory
+    from dimos.msgs.sensor_msgs.Image import Image
+
+    transport = _shm_factory("/color_image", Image)
+
+    assert isinstance(transport, pSHMTransport)
+    assert transport.shm.config.default_capacity == DEFAULT_CAPACITY_COLOR_IMAGE
+
+
+def test_stream_transport_pins_survive_remapping() -> None:
+    """Pinned streams remain pinned even after .remappings() renames them."""
+    from unittest.mock import patch
+
+    from dimos.core.coordination.module_coordinator import _get_transport_for
+
+    bp = autoconnect(PinnedModule.blueprint(), ModuleA.blueprint()).remappings(
+        [(PinnedModule, "data1", "renamed_data1")]
+    )
+
+    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
+        mock_gc.default_transport = "shm"
+        t_renamed_pinned = _get_transport_for(bp, "renamed_data1", Data1)
+
+    assert isinstance(t_renamed_pinned, pLCMTransport)

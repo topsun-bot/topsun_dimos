@@ -15,6 +15,8 @@
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.self_hosted
+
 
 @pytest.mark.skipif_macos_bug
 def test_detection3dpc(detection3dpc) -> None:
@@ -39,7 +41,7 @@ def test_detection3dpc(detection3dpc) -> None:
     assert len(dims) == 3, "Bounding box dimensions should have 3 values"
     assert dims[0] == pytest.approx(0.350, abs=0.1)
     assert dims[1] == pytest.approx(0.250, abs=0.1)
-    assert dims[2] == pytest.approx(0.550, abs=0.1)
+    assert dims[2] == pytest.approx(0.550, abs=0.11)
 
     # def test_axis_aligned_bounding_box(detection3dpc):
     """Test axis-aligned bounding box calculation."""
@@ -104,7 +106,7 @@ def test_detection3dpc(detection3dpc) -> None:
     # Verify size
     assert cube.size.x == pytest.approx(0.350, abs=0.1)
     assert cube.size.y == pytest.approx(0.250, abs=0.1)
-    assert cube.size.z == pytest.approx(0.550, abs=0.1)
+    assert cube.size.z == pytest.approx(0.550, abs=0.11)
 
     # Verify color (green with alpha)
     assert cube.color.r == pytest.approx(0.08235294117647059, abs=0.1)

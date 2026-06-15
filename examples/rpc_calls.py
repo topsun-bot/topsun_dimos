@@ -25,7 +25,7 @@ from dimos.spec.utils import Spec
 class Calculator(Module):
     @rpc
     def compute1(self, a: int, b: int) -> int:
-        return a + b
+        return a + b  # Return the integer sum for the RPC example.
 
     @rpc
     def compute2(self, a: float, b: float) -> float:

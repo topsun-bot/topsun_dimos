@@ -44,6 +44,50 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger(level=logging.INFO)
 
 
+def _create_opencv_tracker() -> Any:
+    """Create a visual tracker (CSRT preferred; MIL/KCF fallbacks for slim OpenCV builds)."""
+    # Different OpenCV builds expose tracker constructors in different namespaces
+    # (`cv2.legacy.*`, `cv2.Tracker*.create`, or direct `cv2.Tracker*_create`).
+    # Collect all candidates and try them in priority order.
+    factories: list[Any] = []
+    legacy = getattr(cv2, "legacy", None)
+    if legacy is not None:
+        for name in ("TrackerCSRT_create", "TrackerKCF_create", "TrackerMOSSE_create"):
+            fn = getattr(legacy, name, None)
+            if fn is not None:
+                factories.append(fn)
+
+    for cls_name, create_name in (
+        ("TrackerCSRT", "TrackerCSRT_create"),
+        ("TrackerKCF", "TrackerKCF_create"),
+        ("TrackerMIL", "TrackerMIL_create"),
+        ("TrackerMOSSE", "TrackerMOSSE_create"),
+        ("TrackerNano", "TrackerNano_create"),
+    ):
+        cls = getattr(cv2, cls_name, None)
+        if cls is not None and hasattr(cls, "create"):
+            factories.append(cls.create)
+        create_fn = getattr(cv2, create_name, None)
+        if create_fn is not None:
+            factories.append(create_fn)
+
+    last_err: Exception | None = None
+    for factory in factories:
+        try:
+            tracker = factory()
+            if tracker is not None:
+                logger.info("Using OpenCV tracker: %s", getattr(factory, "__name__", factory))
+                return tracker
+        except Exception as exc:
+            last_err = exc
+            logger.debug("Tracker factory %s failed: %s", factory, exc)
+
+    raise RuntimeError(
+        "No OpenCV visual tracker available in this build. "
+        "Install opencv-contrib-python or use the perception extra."
+    ) from last_err
+
+
 class ObjectTracker2DConfig(ModuleConfig):
     frame_id: str = "camera_link"
 
@@ -70,6 +114,8 @@ class ObjectTracker2D(Module):
         # Stuck detection
         self._last_bbox = None
         self._stuck_count = 0
+        # We only consider "stuck" after consecutive identical boxes to avoid
+        # false positives from brief pauses or dropped frames.
         self._max_stuck_frames = 10  # Higher threshold for stationary objects
 
         # Frame management
@@ -131,14 +177,26 @@ class ObjectTracker2D(Module):
             logger.warning(f"Invalid initial bbox provided: {bbox}. Tracking not started.")
             return {"status": "invalid_bbox"}
 
+        fh, fw = self._latest_rgb_frame.shape[:2]
+        # Very large boxes usually represent accidental full-frame selections and
+        # are unstable for single-object visual trackers, so reject early.
+        if w * h > int(0.55 * fw * fh):
+            logger.warning("BBox too large for tracking (%dx%d in %dx%d frame)", w, h, fw, fh)
+            return {"status": "invalid_bbox", "reason": "bbox_too_large"}
+
         self.tracking_bbox = (x1, y1, w, h)  # type: ignore[assignment]
-        self.tracker = cv2.legacy.TrackerCSRT_create()  # type: ignore[attr-defined]
         self.tracking_initialized = False
         logger.info(f"Tracking target set with bbox: {self.tracking_bbox}")
 
-        # Convert RGB to BGR for CSRT (OpenCV expects BGR)
         frame_bgr = cv2.cvtColor(self._latest_rgb_frame, cv2.COLOR_RGB2BGR)
-        init_success = self.tracker.init(frame_bgr, self.tracking_bbox)  # type: ignore[attr-defined]
+        try:
+            self.tracker = _create_opencv_tracker()
+            init_success = self.tracker.init(frame_bgr, self.tracking_bbox)  # type: ignore[attr-defined]
+        except cv2.error as exc:
+            logger.error("Tracker init OpenCV error: %s", exc)
+            self.stop_track()
+            return {"status": "init_failed", "reason": str(exc)}
+
         if init_success:
             self.tracking_initialized = True
             logger.info("Tracker initialized successfully.")
@@ -168,6 +226,8 @@ class ObjectTracker2D(Module):
 
     def _reset_tracking_state(self) -> None:
         """Reset tracking state without stopping the thread."""
+        # Keep this method side-effect focused and idempotent so it can be used
+        # safely from both normal stop paths and failure paths.
         self.tracker = None
         self.tracking_bbox = None
         self.tracking_initialized = False
@@ -175,6 +235,7 @@ class ObjectTracker2D(Module):
         self._stuck_count = 0
 
         # Publish empty detection
+        # Downstream consumers can treat this as a "target lost / no track" signal.
         empty_2d = Detection2DArray(
             detections_length=0, header=Header(time.time(), self.frame_id), detections=[]
         )
@@ -241,6 +302,8 @@ class ObjectTracker2D(Module):
 
         # Check if tracker is stuck
         if self._last_bbox is not None:
+            # Exact equality is intentionally strict here: if the box does not move
+            # for too many cycles, we prefer to fail fast and wait for re-seeding.
             if (x1, y1, x2, y2) == self._last_bbox:
                 self._stuck_count += 1
                 if self._stuck_count >= self._max_stuck_frames:
@@ -287,7 +350,8 @@ class ObjectTracker2D(Module):
 
         # Create visualization
         viz_image = self._draw_visualization(frame, current_bbox_x1y1x2y2)
-        viz_copy = viz_image.copy()  # Force copy needed to prevent frame reuse
+        # Force copy so the published message does not alias mutable frame memory.
+        viz_copy = viz_image.copy()
         viz_msg = Image.from_numpy(viz_copy, format=ImageFormat.RGB)
         self.tracked_overlay.publish(viz_msg)
 
