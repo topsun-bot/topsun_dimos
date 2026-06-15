@@ -16,7 +16,6 @@ env:
   UV_NO_SYNC: "1"
 
 jobs:
-  # (removed duplicate ci-complete job; keep the existing ci-complete defined later in this workflow)
   lint:
     timeout-minutes: 10
     runs-on: ubuntu-latest
