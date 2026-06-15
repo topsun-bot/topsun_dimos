@@ -16,16 +16,7 @@ env:
   UV_NO_SYNC: "1"
 
 jobs:
-  ci-complete:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 60
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/dimensionalos/ros-dev:dev
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        ALIBABA_API_KEY: ${{ secrets.ALIBABA_API_KEY }}
+  # (removed duplicate ci-complete job; keep the existing ci-complete defined later in this workflow)
   lint:
     timeout-minutes: 10
     runs-on: ubuntu-latest
