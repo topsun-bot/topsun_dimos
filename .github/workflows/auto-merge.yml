@@ -100,8 +100,8 @@ jobs:
 
           # 60 iterations * 30s = 30 min total budget.
           # Bail early as soon as a single 👍 from CODEX_BOT is found.
-          MAX_ITERATIONS=60
-          INTERVAL=30
+          MAX_ITERATIONS=1
+          INTERVAL=0
           for i in $(seq 1 $MAX_ITERATIONS); do
             # Re-check PR state in case it was closed externally
             STATE=$(gh api "repos/$REPO/pulls/$PR" --jq .state)
