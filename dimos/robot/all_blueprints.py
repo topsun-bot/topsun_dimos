@@ -151,6 +151,7 @@ all_modules = {
     "fast-lio2": "dimos.hardware.sensors.lidar.fastlio2.module.FastLio2",
     "follow-me-skill-container": "dimos.agents.skills.follow_me.FollowMeSkillContainer",
     "foxglove-bridge": "dimos.robot.foxglove_bridge.FoxgloveBridge",
+    "g1-builtin-voice-input": "dimos.robot.unitree.g1.g1_builtin_voice_input.G1BuiltinVoiceInput",
     "g1-connection": "dimos.robot.unitree.g1.connection.G1Connection",
     "g1-connection-base": "dimos.robot.unitree.g1.connection.G1ConnectionBase",
     "g1-high-level-dds-sdk": "dimos.robot.unitree.g1.effectors.high_level.dds_sdk.G1HighLevelDdsSdk",

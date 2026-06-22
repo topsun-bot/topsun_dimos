@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 
 from reactivex.disposable import Disposable
 
@@ -26,6 +27,12 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.core.transport import pLCMTransport
+from dimos.robot.unitree.g1.g1_asr_dedupe import (
+    asr_texts_similar,
+    is_valid_user_utterance,
+    looks_like_robot_echo,
+    normalize_asr_text,
+)
 from dimos.robot.unitree.g1.greeter_skill_spec import GreeterSkillSpec
 from dimos.robot.unitree.g1.greeter_tour_skill_spec import TourGuideSpec
 from dimos.utils.logging_config import setup_logger
@@ -132,10 +139,12 @@ def _blocks_gesture_shortcut(norm: str) -> bool:
     return any(m in norm for m in _QUESTION_MARKERS)
 
 
-def match_gesture_shortcut(text: str, config: GreeterIntentRouterConfig) -> tuple[str, str] | None:
-    """Match gesture/dance commands: returns (command_or_DANCE_SHORTCUT, speak_line)."""
+def match_gesture_shortcut(text: str, config: GreeterIntentRouterConfig) -> str | None:
+    """Match gesture/dance voice commands; returns command name or ``DANCE_SHORTCUT``."""
     cleaned = text.strip()
     if not cleaned or len(cleaned) > config.gesture_max_chars:
+        return None
+    if looks_like_robot_echo(cleaned):
         return None
     norm = normalize_utterance(cleaned)
     if _blocks_gesture_shortcut(norm):
@@ -145,10 +154,10 @@ def match_gesture_shortcut(text: str, config: GreeterIntentRouterConfig) -> tupl
         key=lambda entry: max(len(kw) for kw in entry[0]),
         reverse=True,
     )
-    for keywords, command, speak in entries:
+    for keywords, command in entries:
         for kw in sorted(keywords, key=len, reverse=True):
             if kw in cleaned or normalize_utterance(kw) in norm:
-                return (command, speak)
+                return command
     return None
 
 
@@ -169,6 +178,42 @@ def match_unmapped_location_reply(text: str, config: GreeterIntentRouterConfig) 
     return None
 
 
+def _match_identity_faq_fuzzy(cleaned: str, norm: str) -> bool:
+    """宇树 ASR 常丢字头/错字;对「你是谁/叫什么」类问题放宽匹配。"""
+    if not norm:
+        return False
+    if len(norm) > 20:
+        return False
+    for a, b in (("介绍", "自己"), ("介告", "自己"), ("介绍下", "自己")):
+        if a in norm and b in norm:
+            return True
+    for frag in (
+        "你是谁",
+        "你叫什么",
+        "叫什么名",
+        "叫什么名字",
+        "你是哪位",
+        "你的名字",
+        "名字是什么",
+        "你叫啥",
+        "叫啥名",
+        "介绍下自己",
+        "介绍你自己",
+        "介告你自己",
+    ):
+        if frag in cleaned or frag in norm:
+            return True
+    if norm in ("名字", "叫啥", "你叫啥", "啥名", "哪位"):
+        return True
+    if len(norm) <= 6 and "名字" in norm:
+        return True
+    if "是谁" in norm and len(norm) <= 8:
+        return True
+    if "叫什么" in norm or "叫啥" in norm:
+        return True
+    return False
+
+
 def match_faq_answer(text: str, config: GreeterIntentRouterConfig) -> str | None:
     """Keyword FAQ: skip LLM when a configured keyword appears in the utterance."""
     cleaned = text.strip()
@@ -176,29 +221,45 @@ def match_faq_answer(text: str, config: GreeterIntentRouterConfig) -> str | None
         return None
     norm = normalize_utterance(cleaned)
     for keywords, answer in config.faq_entries:
+        if _IDENTITY_FAQ_KEYWORDS.intersection(keywords):
+            if _match_identity_faq_fuzzy(cleaned, norm):
+                return answer
         for kw in keywords:
-            if kw in cleaned or normalize_utterance(kw) in norm:
+            kw_norm = normalize_utterance(kw)
+            if kw in cleaned or (kw_norm and kw_norm in norm):
                 return answer
     return None
 
 
+_IDENTITY_FAQ_KEYWORDS = frozenset(
+    {
+        "你是谁",
+        "你叫什么",
+        "叫什么名字",
+        "你叫什么名字",
+        "你的名字",
+        "名字是什么",
+        "叫什么名",
+        "你是哪位",
+        "介绍你自己",
+    }
+)
+
+
 def collect_greeter_prewarm_texts(config: GreeterIntentRouterConfig) -> list[str]:
-    """All fixed lines that should be TTS-pre-cached at startup."""
+    """Core greeting templates only; gesture lines synthesize on first use."""
     texts = [
         config.welcome_template,
         config.farewell_template,
-        config.location_unknown_template,
-        config.llm_fallback_template,
     ]
-    for _, answer in config.faq_entries:
-        texts.append(answer)
-    for _, _, speak in config.gesture_shortcuts:
-        texts.append(speak)
+    for keywords, answer in config.faq_entries:
+        if _IDENTITY_FAQ_KEYWORDS.intersection(keywords):
+            texts.append(answer)
     return list(dict.fromkeys(t.strip() for t in texts if t.strip()))
 
 
 class GreeterIntentRouterConfig(ModuleConfig):
-    welcome_template: str = "您好，欢迎来访！我是智能接待员 Danee。"
+    welcome_template: str = "您好，欢迎来访！我是智能接待员 Danee，让我来带您参观一下。"
     farewell_template: str = "再见，欢迎下次来访！"
     hello_triggers: tuple[str, ...] = (
         "你好",
@@ -218,27 +279,41 @@ class GreeterIntentRouterConfig(ModuleConfig):
     max_shortcut_chars: int = 12  # 仅对很短的寒暄句走模板,避免误伤长句提问。
     # 非地点类 FAQ(直接 speak)。
     faq_entries: tuple[tuple[tuple[str, ...], str], ...] = (
-        (("你是谁", "你叫什么", "叫什么名字"), "我是智能接待员 Daneel，很高兴为您服务。"),
+        (
+            (
+                "你是谁",
+                "你叫什么",
+                "叫什么名字",
+                "你叫什么名字",
+                "你的名字",
+                "名字是什么",
+                "叫什么名",
+                "你是哪位",
+                "介绍你自己",
+            ),
+            "我是智能接待员 Daneel，很高兴为您服务。",
+        ),
     )
     location_landmarks_available: bool = False  # Orin 导览建图标点后改为 True
     location_query_max_chars: int = 48
     location_unknown_template: str = "抱歉，这个地点还没录入地图，请咨询工作人员。"
     llm_enabled: bool = False  # 临时关闭开放对话;改 True 并接线 llm_human_input 即可恢复。
-    llm_fallback_template: str = "抱歉，这个我还不会。您可以试试说你好、挥手或跳个舞。"
+    llm_fallback_template: str = ""  # 非空时模板外输入播此句;默认静默忽略。
+    shortcut_cooldown_s: float = 12.0  # 同一句/同类短路在冷却期内不重复播报
     gesture_max_chars: int = 24
-    # (触发词, 手臂命令名或 DANCE_SHORTCUT, 动作前短台词)
-    gesture_shortcuts: tuple[tuple[tuple[str, ...], str, str], ...] = (
-        (("挥手", "挥挥手", "挥一下手"), "HighWave", "嗨，向你挥挥手！"),
-        (("面前挥手",), "FaceWave", "你好呀！"),
-        (("比心", "比个心"), "ArmHeart", "比心哦！"),
-        (("右手比心",), "RightHeart", "送你一个小比心！"),
-        (("握手",), "Handshake", "很高兴认识你！"),
-        (("鼓掌", "拍手"), "Clap", "掌声送给您！"),
-        (("击掌",), "HighFive", "来，击个掌！"),
-        (("拥抱", "抱一下"), "Hug", "给您一个拥抱！"),
-        (("举手", "双手举起"), "HandsUp", "我在举手示意！"),
-        (("飞吻",), "LeftKiss", "送您一个飞吻！"),
-        (("跳舞", "跳个舞", "跳一支舞", "表演", "来段表演"), DANCE_SHORTCUT, "来啦，献舞一支！"),
+    # (触发词, 手臂命令名或 DANCE_SHORTCUT); 语音命中后只执行动作,不播报。
+    gesture_shortcuts: tuple[tuple[tuple[str, ...], str], ...] = (
+        (("挥手", "挥挥手", "挥一下手"), "HighWave"),
+        (("面前挥手",), "FaceWave"),
+        (("比心", "比个心"), "ArmHeart"),
+        (("右手比心",), "RightHeart"),
+        (("握手",), "Handshake"),
+        (("鼓掌", "拍手"), "Clap"),
+        (("击掌",), "HighFive"),
+        (("拥抱", "抱一下"), "Hug"),
+        (("举手", "双手举起"), "HandsUp"),
+        (("飞吻",), "LeftKiss"),
+        (("跳舞", "跳个舞", "跳一支舞", "表演", "来段表演"), DANCE_SHORTCUT),
     )
 
 
@@ -262,6 +337,8 @@ class GreeterIntentRouter(Module):
 
     _agent_idle_transport: pLCMTransport[bool] | None = None
     _busy_lock: threading.Lock
+    _last_shortcut_norm: str = ""
+    _last_shortcut_time: float = 0.0
 
     @rpc
     def start(self) -> None:
@@ -274,8 +351,15 @@ class GreeterIntentRouter(Module):
         if self.config.llm_enabled:
             mode = "寒暄/手势/问路(未建图)/FAQ 走短路, 其余→LLM"
         else:
-            mode = "仅模板短路, LLM 已关闭, 其余→固定拒答"
+            fallback = self.config.llm_fallback_template.strip()
+            mode = (
+                "仅模板短路, LLM 已关闭, 其余→固定拒答"
+                if fallback
+                else "仅模板短路, LLM 已关闭, 其余→静默忽略"
+            )
         logger.info("GreeterIntentRouter 已启动 — %s", mode)
+        # 确保免提麦在启动后即可开（不依赖 McpClient/LLM 是否就绪）。
+        self._agent_idle_transport.publish(True)
 
     @rpc
     def stop(self) -> None:
@@ -284,13 +368,65 @@ class GreeterIntentRouter(Module):
             self._agent_idle_transport = None
         super().stop()
 
+    def _should_skip_repeat_shortcut(self, cleaned: str) -> bool:
+        norm = normalize_asr_text(cleaned)
+        if not norm:
+            return True
+        elapsed = time.monotonic() - self._last_shortcut_time
+        if self._last_shortcut_norm and elapsed < self.config.shortcut_cooldown_s:
+            if norm == self._last_shortcut_norm or asr_texts_similar(cleaned, self._last_shortcut_norm):
+                logger.info("GreeterIntentRouter 冷却中,忽略重复: %s", cleaned[:40])
+                return True
+        return False
+
+    def _mark_shortcut(self, cleaned: str) -> None:
+        self._last_shortcut_norm = normalize_asr_text(cleaned)
+        self._last_shortcut_time = time.monotonic()
+
     def _on_human_input(self, text: str) -> None:
         cleaned = text.strip()
         if not cleaned:
             return
+        if not is_valid_user_utterance(cleaned):
+            logger.debug("GreeterIntentRouter 忽略无效 ASR: %s", cleaned[:60])
+            return
+        norm = normalize_utterance(cleaned)
+        if len(norm) < 4:
+            has_intent = match_greeter_intent(cleaned, self.config) is not None
+            has_identity = _match_identity_faq_fuzzy(cleaned, norm)
+            has_gesture = match_gesture_shortcut(cleaned, self.config) is not None
+            if not has_intent and not has_identity and not has_gesture:
+                logger.info("GreeterIntentRouter 忽略 ASR 碎片: %s", cleaned[:40])
+                return
+        if self._should_skip_repeat_shortcut(cleaned):
+            return
 
         intent = match_greeter_intent(cleaned, self.config)
         gesture = None if intent is not None else match_gesture_shortcut(cleaned, self.config)
+
+        # FAQ(如「你是谁」)优先于导览问路,避免被带路逻辑抢走。
+        faq_answer = (
+            None
+            if intent is not None or gesture is not None
+            else match_faq_answer(cleaned, self.config)
+        )
+        if faq_answer is not None:
+            self._mark_shortcut(cleaned)
+            lock = self._busy_lock
+            if not lock.acquire(blocking=False):
+                logger.info("GreeterIntentRouter 忙碌,忽略 FAQ: %s", cleaned[:40])
+                return
+
+            def _run_faq() -> None:
+                try:
+                    self._run_faq_shortcut(faq_answer)
+                finally:
+                    lock.release()
+
+            threading.Thread(
+                target=_run_faq, name="greeter-shortcut-faq", daemon=True
+            ).start()
+            return
 
         # 已接入导览带路时,问路/带路交给地标表 + 导航处理(命中→带路/讲解,未命中→固定
         # 拒答),全程不经 LLM。未接入(笔记本版)时走下面原有的「未建图固定拒答」。
@@ -308,20 +444,21 @@ class GreeterIntentRouter(Module):
             if intent is not None or gesture is not None
             else match_unmapped_location_reply(cleaned, self.config)
         )
-        faq_answer = (
-            None
-            if intent is not None or gesture is not None or location_reply is not None
-            else match_faq_answer(cleaned, self.config)
-        )
-        if intent is None and gesture is None and location_reply is None and faq_answer is None:
+        if intent is None and gesture is None and location_reply is None:
             if self.config.llm_enabled:
                 logger.info("GreeterIntentRouter → LLM: %s", cleaned[:80])
                 self.llm_human_input.publish(cleaned)
             else:
-                logger.info("GreeterIntentRouter 模板外拒答: %s", cleaned[:80])
-                self._run_template_fallback_shortcut()
+                fallback = self.config.llm_fallback_template.strip()
+                if fallback:
+                    self._mark_shortcut(cleaned)
+                    logger.info("GreeterIntentRouter 模板外拒答: %s", cleaned[:80])
+                    self._run_template_fallback_shortcut()
+                else:
+                    logger.info("GreeterIntentRouter 未识别,忽略: %s", cleaned[:80])
             return
 
+        self._mark_shortcut(cleaned)
         lock = self._busy_lock
         if not lock.acquire(blocking=False):
             logger.info("GreeterIntentRouter 忙碌,忽略: %s", cleaned[:40])
@@ -335,15 +472,10 @@ class GreeterIntentRouter(Module):
                     self._run_gesture_shortcut(gesture)
                 elif location_reply is not None:
                     self._run_location_unknown_shortcut(location_reply)
-                else:
-                    assert faq_answer is not None
-                    self._run_faq_shortcut(faq_answer)
             finally:
                 lock.release()
 
-        shortcut_kind = (
-            intent or (gesture[0] if gesture else None) or ("location" if location_reply else "faq")
-        )
+        shortcut_kind = intent or gesture or ("location" if location_reply else None)
         threading.Thread(target=_run, name=f"greeter-shortcut-{shortcut_kind}", daemon=True).start()
 
     def _set_agent_busy(self, busy: bool) -> None:
@@ -365,19 +497,17 @@ class GreeterIntentRouter(Module):
         finally:
             self._set_agent_busy(False)
 
-    def _run_gesture_shortcut(self, gesture: tuple[str, str]) -> None:
-        command, speak = gesture
+    def _run_gesture_shortcut(self, command: str) -> None:
         self._set_agent_busy(True)
         try:
-            logger.info("GreeterIntentRouter 表演: 先说 %s, 再 %s", speak, command)
-            self._speak.speak(speak, blocking=True)
+            logger.info("GreeterIntentRouter 手势(无播报): %s", command)
             if command == DANCE_SHORTCUT:
                 result = self._greeter.perform_dance()
             else:
                 result = self._greeter.execute_arm_command(command)
-            logger.info("GreeterIntentRouter 表演完成: %s", (result or "")[:120])
+            logger.info("GreeterIntentRouter 手势完成: %s", (result or "")[:120])
         except Exception:
-            logger.exception("GreeterIntentRouter 表演执行失败")
+            logger.exception("GreeterIntentRouter 手势执行失败")
         finally:
             self._set_agent_busy(False)
 
@@ -433,7 +563,9 @@ class GreeterIntentRouter(Module):
         def _run() -> None:
             self._set_agent_busy(True)
             try:
-                answer = self.config.llm_fallback_template
+                answer = self.config.llm_fallback_template.strip()
+                if not answer:
+                    return
                 logger.info("GreeterIntentRouter 模板外拒答播报: %s", answer[:80])
                 result = self._speak.speak(answer, blocking=True)
                 logger.info("GreeterIntentRouter 拒答完成: %s", (result or "")[:120])

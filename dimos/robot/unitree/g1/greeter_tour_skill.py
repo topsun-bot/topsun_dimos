@@ -14,15 +14,14 @@
 
 """G1 Orin 导览带路技能(标点 + 导航 + 到站讲解)。
 
-链路(全程模板化,不经 LLM):
+链路:
 
-1. 工作人员标点:``tag_location(name, intro_script, synonyms)`` 记录当前里程计位姿与
-   讲解词,持久化到地标表并预缓存讲解词 TTS。
+1. 工作人员标点:``tag_location(name, intro_script=..., synonyms=...)`` 记录当前里程计位姿与
+   讲解词,持久化到地标表并预缓存讲解词 TTS。``intro_script`` 可省略,此时在标点瞬间调用
+   LLM 生成(失败则用固定模板),**仅生成一次**;到站与问路仍播已保存文本,不经 LLM。
 2. 客人问路/带路:``GreeterIntentRouter`` 把问路句转给 ``handle_location_query``,匹配
    到地标则发布导航目标(``goal`` 流 → ``SimplePlanner``),否则播固定「未录入」模板。
-3. 到站:订阅里程计,当与目标距离小于阈值时播 ``intro_script``(可选挥手手势)。
-
-讲解词内容**只**来自标点时录入的 ``intro_script``;禁止运行时改写。
+3. 到站:订阅里程计,当与目标距离小于阈值时播 ``intro_script``(仅语音,不做手势)。
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.robot.unitree.g1.greeter_intro_script_generator import resolve_intro_script_for_tag
 from dimos.robot.unitree.g1.greeter_landmark_store import (
     GreeterLandmarkStore,
     Landmark,
@@ -83,7 +83,7 @@ class GreeterTourSkillConfig(ModuleConfig):
 
     store_path: str = ""  # 空 → ``default_store_path()``
     arrival_threshold_m: float = 0.8
-    arrival_gesture: str = "HighWave"  # 到站后可选手势;留空则不做手势
+    arrival_gesture: str = ""  # 到站后仅播报讲解词;非空则额外做手势(默认不做)
     guide_keywords: tuple[str, ...] = (
         "带我去",
         "带我到",
@@ -95,6 +95,11 @@ class GreeterTourSkillConfig(ModuleConfig):
     )
     guide_speak_template: str = "好的，请跟我来，我带您去{name}。"
     unknown_template: str = "抱歉，这个地点还没录入地图，请咨询工作人员。"
+    intro_script_fallback_template: str = "这里是{name}，欢迎参观。"
+    llm_intro_script_enabled: bool = True
+    llm_intro_model: str = ""  # 空 → 读 DIMOS_GREETER_INTRO_MODEL 或按 base_url 推断
+    llm_intro_timeout_sec: float = 15.0
+    llm_intro_max_chars: int = 120
 
 
 class GreeterTourSkillContainer(Module):
@@ -163,47 +168,62 @@ class GreeterTourSkillContainer(Module):
             logger.info("到站 %s,播报讲解词: %s", landmark.name, landmark.intro_script[:60])
             script = landmark.intro_script.strip() or f"我们到了{landmark.name}。"
             self._speak.speak(script, blocking=True)
-            gesture = self.config.arrival_gesture.strip()
-            if gesture and self._greeter is not None:
-                self._greeter.execute_arm_command(gesture)
         except Exception:
             logger.exception("到站讲解失败: %s", landmark.name)
 
     @skill
-    def tag_location(self, name: str, intro_script: str, synonyms: str = "") -> str:
+    def tag_location(self, name: str, intro_script: str = "", synonyms: str = "") -> str:
         """标记当前位置为一个导览地标,并保存到站讲解词(到站后会原样播报)。
 
-        在机器人走到目标点后调用。坐标取当前里程计位姿;``intro_script`` 是到站后
-        固定播报的讲解词(不会被改写)。
+        在机器人走到目标点后调用。坐标取当前里程计位姿。若未提供 ``intro_script``,
+        且配置开启 ``llm_intro_script_enabled``,则在标点时调用 LLM 生成 1~2 句讲解词并
+        写入地标表;生成失败则使用固定模板。生成后讲解词不再改写。
 
         Args:
             name: 地标名称,也是问路关键词,如 前台、厕所、展厅A。
-            intro_script: 到站后播报的讲解词,1~3 句固定文本。
+            intro_script: 可选。到站后播报的讲解词;留空则由 LLM 在标点时生成。
             synonyms: 可选同义词,用逗号/顿号分隔,如 "卫生间,洗手间"。
         """
         clean_name = name.strip()
         if not clean_name:
             return "地标名称不能为空。"
-        if not intro_script.strip():
-            return "讲解词(intro_script)不能为空。"
         if self._store is None:
             return "地标存储尚未初始化。"
         with self._lock:
             pose = self._latest_pose
         if pose is None:
             return "尚未收到里程计数据,无法记录坐标。请确认导航栈已运行。"
+        script, source = resolve_intro_script_for_tag(
+            clean_name,
+            intro_script,
+            llm_enabled=self.config.llm_intro_script_enabled,
+            fallback_template=self.config.intro_script_fallback_template,
+            model=self.config.llm_intro_model,
+            timeout_sec=self.config.llm_intro_timeout_sec,
+            max_chars=self.config.llm_intro_max_chars,
+        )
         landmark = Landmark(
             name=clean_name,
             x=pose[0],
             y=pose[1],
             z=pose[2],
-            intro_script=intro_script.strip(),
+            intro_script=script,
             synonyms=parse_synonyms(synonyms),
         )
         self._store.upsert(landmark)
         self._speak.prewarm_texts([landmark.intro_script])
-        logger.info("已标点 %s @ (%.2f, %.2f),讲解词已录入并预缓存", clean_name, pose[0], pose[1])
-        return f"已记录地标 '{clean_name}' 及讲解词,共 {len(self._store)} 个地标。"
+        logger.info(
+            "已标点 %s @ (%.2f, %.2f),讲解词来源=%s: %s",
+            clean_name,
+            pose[0],
+            pose[1],
+            source,
+            landmark.intro_script[:80],
+        )
+        source_note = {"provided": "手写", "llm": "LLM 生成", "fallback": "默认模板"}[source]
+        return (
+            f"已记录地标 '{clean_name}'（讲解词:{source_note}）,共 {len(self._store)} 个地标。"
+        )
 
     @skill
     def list_landmarks(self) -> str:

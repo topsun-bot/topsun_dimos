@@ -42,24 +42,31 @@ unitree_g1_nav_onboard = (
         create_nav_stack(
             planner="simple",
             vehicle_height=G1.height_clearance,
-            max_speed=0.6,
+            # Slower autonomy speed — more time for local obstacle avoidance.
+            max_speed=0.4,
             far_planner={
                 "is_static_env": False,
             },
             terrain_analysis={
-                "obstacle_height_threshold": 0.01,
-                "ground_height_threshold": 0.01,
+                # Catch low floor obstacles (e.g. quadruped lying down).
+                "obstacle_height_threshold": 0.05,
+                "ground_height_threshold": 0.05,
+                "min_relative_z": -0.8,
                 "sensor_range": 40,  # meters
             },
             local_planner={
                 "paths_dir": str(G1_LOCAL_PLANNER_PRECOMPUTED_PATHS),
                 "publish_free_paths": False,
+                "vehicle_width": G1.width_clearance,
+                "vehicle_length": G1.width_clearance,
+                "adjacent_range": 4.5,
             },
             simple_planner={
                 "cell_size": 0.2,
                 "obstacle_height_threshold": 0.10,
-                "inflation_radius": 0.5,
-                "lookahead_distance": 2.0,
+                "inflation_radius": 0.7,
+                "lookahead_distance": 1.0,
+                "stuck_min_inflation": 0.3,
                 "replan_rate": 5.0,
                 "replan_cooldown": 2.0,
             },

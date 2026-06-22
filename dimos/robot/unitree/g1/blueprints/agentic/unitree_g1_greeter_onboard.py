@@ -24,6 +24,9 @@
 短路,模板外输入固定拒答。``McpServer`` / ``McpClient`` 保留以便日后扩展,但运行时
 不向 LLM 转发用户输入。
 
+机载麦:默认使用 G1 内置语音(DDS ``rt/audio_msg``,App 开「唤醒对话模式」)。
+USB 麦 + Whisper: ``DIMOS_G1_VOICE_INPUT=vad`` 并设 ``DIMOS_MIC_DEVICE_INDEX``。
+
 用法(在 Orin SSH 会话中)::
 
     source .venv/bin/activate
@@ -31,6 +34,8 @@
     export LIDAR_IP=192.168.123.120
     dimos run unitree-g1-greeter-onboard
 """
+
+import os
 
 from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
@@ -45,6 +50,7 @@ from dimos.robot.unitree.g1.blueprints.agentic._greeter_stack import (
 from dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_onboard import (
     unitree_g1_nav_onboard,
 )
+from dimos.robot.unitree.g1.g1_builtin_voice_input import G1BuiltinVoiceInput
 from dimos.robot.unitree.g1.greeter_intent_router import GreeterIntentRouter
 from dimos.robot.unitree.g1.greeter_skill import GreeterSkillContainer
 from dimos.robot.unitree.g1.greeter_tour_skill import GreeterTourSkillContainer
@@ -53,6 +59,19 @@ from dimos.robot.unitree.g1.greeter_tour_skill import GreeterTourSkillContainer
 # 已标点 → 走地标表 + 导航;未标点名称仍固定拒答。讲解词只来自标点录入,不经 LLM。
 GREETER_ONBOARD_ROUTER_KWARGS = {**GREETER_ROUTER_KWARGS, "location_landmarks_available": True}
 
+_voice_mode = os.environ.get("DIMOS_G1_VOICE_INPUT", "builtin").strip().lower()
+_network_iface = os.environ.get("DIMOS_G1_NETWORK_INTERFACE", "eth0").strip() or "eth0"
+_mic_index_env = os.environ.get("DIMOS_MIC_DEVICE_INDEX", "").strip()
+
+if _voice_mode in ("vad", "usb", "whisper"):
+    _MIC_KWARGS: dict[str, int | str] = {"whisper_model": "tiny"}
+    if _mic_index_env:
+        _MIC_KWARGS["device_index"] = int(_mic_index_env)
+    _voice_input_bp = VadVoiceInput.blueprint(**_MIC_KWARGS)
+else:
+    # 默认: G1 App 唤醒对话模式 → DDS rt/audio_msg → /human_input
+    _voice_input_bp = G1BuiltinVoiceInput.blueprint(network_interface=_network_iface)
+
 unitree_g1_greeter_onboard = (
     autoconnect(
         # 机载导航栈:LiDAR 建图 + 导航 + 移动管理 + DDS 高层控制。
@@ -60,7 +79,7 @@ unitree_g1_greeter_onboard = (
         # 迎宾链路(手臂手势经 DDS ``G1HighLevelDdsSdk.publish_request`` 下发)。
         GreeterSkillContainer.blueprint(),
         SpeakSkill.blueprint(),
-        VadVoiceInput.blueprint(whisper_model="tiny"),
+        _voice_input_bp,
         GreeterIntentRouter.blueprint(**GREETER_ONBOARD_ROUTER_KWARGS),
         # 标点 + 导航带路 + 到站讲解(``goal`` 流接入 SimplePlanner)。
         GreeterTourSkillContainer.blueprint(),

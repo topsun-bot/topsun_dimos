@@ -28,6 +28,8 @@ from dimos.agents.annotation import skill
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
 from dimos.core.module import Module
+from dimos.robot.unitree.g1.audio.g1_speech_player import float_audio_to_g1_pcm
+from dimos.robot.unitree.g1.connection_spec import G1RobotAudioSpec
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.stream.audio.node_output import SounddeviceAudioOutput
 from dimos.stream.audio.tts.node_dashscope import DashScopeTTSNode
@@ -43,6 +45,7 @@ class SpeakSkill(Module):
     _tts_node: OpenAITTSNode | DashScopeTTSNode | None = None
     _audio_output: SounddeviceAudioOutput | None = None
     _connection: GO2ConnectionSpec | None = None
+    _g1_audio: G1RobotAudioSpec | None = None
     _audio_lock: threading.Lock = threading.Lock()
     _bg_threads: list[threading.Thread] = []
     _bg_threads_lock: threading.Lock = threading.Lock()
@@ -137,6 +140,10 @@ class SpeakSkill(Module):
             if self._tts_node is None:
                 return "Error: TTS not initialized"
 
+            g1_result = self._speak_on_g1_if_available(text)
+            if g1_result is not None:
+                return g1_result
+
             go2_result = self._speak_on_go2_if_available(text)
             if go2_result is not None:
                 return go2_result
@@ -223,6 +230,8 @@ class SpeakSkill(Module):
 
     def _speak_on_go2_if_available(self, text: str) -> str | None:
         """优先通过 Go2 AudioHub 播放, 让声音从机器人扬声器发出."""
+        if self._g1_audio is not None:
+            return None
         if self._connection is None or not os.environ.get("DASHSCOPE_API_KEY"):
             return None
 
@@ -243,6 +252,40 @@ class SpeakSkill(Module):
             return f"Spoke on Go2: {text}"
         except Exception:
             logger.exception("Go2 AudioHub speech failed; falling back to local audio output")
+            return None
+
+    def _speak_on_g1_if_available(self, text: str) -> str | None:
+        """CosyVoice 合成 + G1 PlayStream; 无 API key 时回退 TtsMaker."""
+        if self._g1_audio is None:
+            return None
+
+        t0 = time.monotonic()
+        try:
+            self._g1_audio.stop_speech_playback()
+            if os.environ.get("DASHSCOPE_API_KEY"):
+                cached = self._speech_cache.get(text)
+                if cached is None:
+                    cached = self._synthesize_to_array(text)
+                    self._speech_cache[text] = cached
+                pcm = float_audio_to_g1_pcm(cached, _SPEECH_SAMPLE_RATE)
+                if self._g1_audio.play_speech_pcm(pcm):
+                    logger.info(
+                        "SpeakSkill G1 CosyVoice 播放,耗时 %.1fs, text=%s",
+                        time.monotonic() - t0,
+                        text[:40],
+                    )
+                    return f"Spoke on G1: {text}"
+
+            if self._g1_audio.play_speech_text(text):
+                logger.info(
+                    "SpeakSkill G1 TtsMaker 播放,耗时 %.1fs, text=%s",
+                    time.monotonic() - t0,
+                    text[:40],
+                )
+                return f"Spoke on G1 (builtin TTS): {text}"
+            return None
+        except Exception:
+            logger.exception("G1 body speaker speech failed; falling back to local audio output")
             return None
 
     def _synthesize_dashscope_audio(self, text: str) -> bytes:

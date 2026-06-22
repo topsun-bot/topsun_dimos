@@ -59,6 +59,11 @@ def test_faq_identity() -> None:
     answer = match_faq_answer("你是谁", _CFG)
     assert answer is not None
     assert "Daneel" in answer
+    assert match_faq_answer("你叫什么名字", _CFG) == answer
+    assert match_faq_answer("你的名字是什么", _CFG) == answer
+    assert match_faq_answer("介告你自己", _CFG) == answer
+    assert match_faq_answer("名字", _CFG) == answer
+    assert match_faq_answer("名字。", _CFG) == answer
 
 
 def test_faq_location_not_shortcut() -> None:
@@ -87,18 +92,20 @@ def test_faq_no_match() -> None:
     assert match_faq_answer("今天天气怎么样", _CFG) is None
 
 
-def test_gesture_wave_with_speak() -> None:
-    assert match_gesture_shortcut("挥挥手", _CFG) == ("HighWave", "嗨，向你挥挥手！")
-    assert match_gesture_shortcut("挥挥手好吗", _CFG) == ("HighWave", "嗨，向你挥挥手！")
+def test_gesture_wave_short() -> None:
+    assert match_gesture_shortcut("挥手", _CFG) == "HighWave"
+    assert match_gesture_shortcut("挥挥手", _CFG) == "HighWave"
+    assert match_gesture_shortcut("挥挥手好吗", _CFG) == "HighWave"
 
 
-def test_gesture_heart_with_speak() -> None:
-    assert match_gesture_shortcut("比心", _CFG) == ("ArmHeart", "比心哦！")
+def test_gesture_blocked_on_robot_echo() -> None:
+    assert match_gesture_shortcut("这的不会祝你好挥手和推动", _CFG) is None
+    assert match_gesture_shortcut("比心", _CFG) == "ArmHeart"
 
 
 def test_dance_shortcut() -> None:
-    assert match_gesture_shortcut("跳个舞", _CFG) == (DANCE_SHORTCUT, "来啦，献舞一支！")
-    assert match_gesture_shortcut("来段表演", _CFG) == (DANCE_SHORTCUT, "来啦，献舞一支！")
+    assert match_gesture_shortcut("跳个舞", _CFG) == DANCE_SHORTCUT
+    assert match_gesture_shortcut("来段表演", _CFG) == DANCE_SHORTCUT
 
 
 def test_gesture_not_complex_question() -> None:
@@ -108,11 +115,13 @@ def test_gesture_not_complex_question() -> None:
 
 def test_llm_disabled_by_default() -> None:
     assert _CFG.llm_enabled is False
-    assert "还不会" in _CFG.llm_fallback_template
+    assert _CFG.llm_fallback_template == ""
 
 
 def test_prewarm_texts_include_templates() -> None:
     texts = collect_greeter_prewarm_texts(_CFG)
     assert _CFG.welcome_template in texts
-    assert _CFG.llm_fallback_template in texts
-    assert "嗨，向你挥挥手！" in texts
+    assert _CFG.farewell_template in texts
+    assert any("智能接待员" in t for t in texts)
+    assert _CFG.llm_fallback_template not in texts
+    assert "嗨，向你挥挥手！" not in texts

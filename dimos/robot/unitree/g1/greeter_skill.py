@@ -22,6 +22,7 @@ WebRTC 连接(``G1ConnectionSpec.publish_request``),因此本容器无需本地�
 
 from pathlib import Path
 import random
+import threading
 import time
 from typing import Literal
 
@@ -47,7 +48,7 @@ logger = setup_logger()
 # 动作播放完毕,再发送下一个。
 # 手势命令发出后即可返回;短停顿仅用于日志上区分动作,不阻塞后续 speak。
 _WELCOME_SEQUENCE: list[tuple[str, float]] = [
-    ("HighWave", 0.5),
+    ("Handshake", 0.5),
 ]
 _GOODBYE_SEQUENCE: list[tuple[str, float]] = [
     ("HighWave", 0.5),
@@ -126,9 +127,39 @@ class GreeterSkillContainer(Module):
                 time.sleep(pause)
         return "\n".join(results)
 
+    def _speak_with_sequence(self, text: str, sequence: list[tuple[str, float]]) -> str:
+        """播报与手臂动作并行(边说话边做手势)。"""
+        speech_box: list[str] = []
+        gesture_box: list[str] = []
+        errors: list[BaseException] = []
+
+        def _speak() -> None:
+            try:
+                speech_box.append(self._speak_skill.speak(text, blocking=True))
+            except BaseException as exc:
+                errors.append(exc)
+
+        def _gesture() -> None:
+            try:
+                gesture_box.append(self._run_sequence(sequence))
+            except BaseException as exc:
+                errors.append(exc)
+
+        speak_thread = threading.Thread(target=_speak, name="greeter-speak", daemon=True)
+        gesture_thread = threading.Thread(target=_gesture, name="greeter-gesture", daemon=True)
+        speak_thread.start()
+        gesture_thread.start()
+        speak_thread.join()
+        gesture_thread.join()
+        if errors:
+            raise errors[0]
+        speech = speech_box[0] if speech_box else ""
+        gesture = gesture_box[0] if gesture_box else ""
+        return f"{speech}\n{gesture}"
+
     @skill
     def greet_guest(self, spoken_text: str) -> str:
-        """欢迎到访的客人:先说欢迎语,再挥手(顺序在代码里固定,不要改用 speak+welcome_gesture)。
+        """欢迎到访的客人:边握手边播报欢迎语。
 
         Args:
             spoken_text: 要说出口的欢迎语,一两句、不超过 20 字。
@@ -136,13 +167,11 @@ class GreeterSkillContainer(Module):
         text = spoken_text.strip()
         if not text:
             return "欢迎语不能为空。"
-        speech = self._speak_skill.speak(text, blocking=True)
-        gesture = self._run_sequence(_WELCOME_SEQUENCE)
-        return f"{speech}\n{gesture}"
+        return self._speak_with_sequence(text, _WELCOME_SEQUENCE)
 
     @skill
     def farewell_guest(self, spoken_text: str) -> str:
-        """向离开的客人道别:先说告别语,再挥手。
+        """向离开的客人道别:边挥手边播报告别语。
 
         Args:
             spoken_text: 要说出口的告别语,一两句、不超过 20 字。
@@ -150,9 +179,7 @@ class GreeterSkillContainer(Module):
         text = spoken_text.strip()
         if not text:
             return "告别语不能为空。"
-        speech = self._speak_skill.speak(text, blocking=True)
-        gesture = self._run_sequence(_GOODBYE_SEQUENCE)
-        return f"{speech}\n{gesture}"
+        return self._speak_with_sequence(text, _GOODBYE_SEQUENCE)
 
     @skill
     def list_actions(self) -> str:
