@@ -263,8 +263,13 @@ def run(
     )
     from dimos.robot.get_all_blueprints import get_by_name_or_exit, get_module_by_name_or_exit
     from dimos.utils.logging_config import set_run_log_dir, setup_exception_handler
+    from dimos.utils.proxy_env import strip_socks_proxy_env
 
     setup_exception_handler()
+
+    # Strip SOCKS proxy env vars before worker processes inherit them,
+    # since httpx/ChatOpenAI cannot handle socks:// scheme.
+    strip_socks_proxy_env()
 
     cli_config_overrides: dict[str, Any] = ctx.obj
 
@@ -349,6 +354,14 @@ def run(
     coordinator = ModuleCoordinator.build(blueprint, kwargs)
 
     if daemon:
+        from dimos.agents.voice_input import blueprint_has_voice_input
+
+        if blueprint_has_voice_input(blueprint):
+            typer.echo(
+                "Warning: unitree-g1-greeter-voice 需要前台运行才能按 Enter 录音;"
+                " --daemon 下按键说话不可用,请改用 unitree-g1-greeter-hands-free。",
+                err=True,
+            )
         # Health check before daemonizing — catch early crashes
         if not coordinator.health_check():
             typer.echo("Error: health check failed — a worker process died.", err=True)
@@ -403,6 +416,10 @@ def run(
         # default so Ctrl+C raises KeyboardInterrupt and the try/finally below
         # runs with a visible traceback.
         install_signal_handlers(entry, coordinator, sigint=False)
+        from dimos.agents.voice_input import blueprint_has_voice_input, start_stdin_ptt_forwarder
+
+        if blueprint_has_voice_input(blueprint):
+            start_stdin_ptt_forwarder()
         try:
             coordinator.loop()
         finally:

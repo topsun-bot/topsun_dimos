@@ -16,6 +16,7 @@
 
 from enum import IntEnum
 import json
+import os
 import threading
 import time
 from typing import Any
@@ -25,6 +26,9 @@ from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type
     MotionSwitcherClient,
 )
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # type: ignore[import-not-found]
+from unitree_sdk2py.g1.arm.g1_arm_action_client import (  # type: ignore[import-not-found]
+    G1ArmActionClient,
+)
 from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
     ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
     ROBOT_API_ID_LOCO_GET_FSM_ID,
@@ -39,10 +43,18 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.robot.unitree.g1.audio.g1_speech_player import (
+    amplify_pcm16,
+    play_pcm_on_g1,
+    stop_g1_playback,
+)
 from dimos.robot.unitree.g1.effectors.high_level.commands import (
     ARM_API_ID,
     ARM_COMMANDS,
     ARM_COMMANDS_DOC,
+    ARM_EXECUTE_CUSTOM_ACTION_API_ID,
+    ARM_GET_ACTION_LIST_API_ID,
+    ARM_STOP_CUSTOM_ACTION_API_ID,
     ARM_TOPIC,
     MODE_API_ID,
     MODE_COMMANDS,
@@ -62,6 +74,20 @@ _LOCO_API_IDS = {
 }
 
 
+def _env_int(name: str, default: int, *, min_v: int, max_v: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    return max(min_v, min(max_v, int(raw)))
+
+
+def _env_float(name: str, default: float, *, min_v: float, max_v: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    return max(min_v, min(max_v, float(raw)))
+
+
 class FsmState(IntEnum):
     ZERO_TORQUE = 0
     DAMP = 1
@@ -78,7 +104,11 @@ class G1HighLevelDdsSdkConfig(ModuleConfig):
     ai_standup: bool = True
     motion_switcher_timeout: float = 5.0
     loco_client_timeout: float = 10.0
+    arm_action_timeout: float = 5.0
     cmd_vel_timeout: float = 0.2
+    # G1 body speaker: ``SetVolume`` 0–100; PCM gain scales CosyVoice before PlayStream.
+    speaker_volume: int = 100
+    speaker_pcm_gain: float = 1.5
 
 
 class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
@@ -96,6 +126,8 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         self._mode_selected = False
         self.motion_switcher: Any = None
         self.loco_client: Any = None
+        self.arm_action_client: Any = None
+        self.audio_client: Any = None
 
     @rpc
     def start(self) -> None:
@@ -122,6 +154,45 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         self.loco_client._RegistApi(_LOCO_API_IDS["GET_FSM_MODE"], 0)
         self.loco_client._RegistApi(_LOCO_API_IDS["GET_BALANCE_MODE"], 0)
 
+        # Arm action client — exposes preset gestures + UniStore/teach actions over
+        # the arm request service (``rt/api/arm/request``). Needed so greeter skills
+        # (greet_guest / execute_arm_command / perform_dance) work over DDS, not just
+        # WebRTC. The stock python client only registers 7106/7107, so register the
+        # custom-action APIs (7108 execute, 7113 stop) explicitly.
+        self.arm_action_client = G1ArmActionClient()
+        self.arm_action_client.SetTimeout(self.config.arm_action_timeout)
+        self.arm_action_client.Init()
+        self.arm_action_client._RegistApi(ARM_EXECUTE_CUSTOM_ACTION_API_ID, 0)
+        self.arm_action_client._RegistApi(ARM_STOP_CUSTOM_ACTION_API_ID, 0)
+        logger.info("G1 arm action client initialized")
+
+        from unitree_sdk2py.g1.audio.g1_audio_client import (  # type: ignore[import-not-found]
+            AudioClient,
+        )
+
+        self.audio_client = AudioClient()
+        self.audio_client.SetTimeout(self.config.loco_client_timeout)
+        self.audio_client.Init()
+        speaker_volume = _env_int(
+            "DIMOS_G1_SPEAKER_VOLUME",
+            self.config.speaker_volume,
+            min_v=0,
+            max_v=100,
+        )
+        self._speaker_pcm_gain = _env_float(
+            "DIMOS_G1_SPEAKER_PCM_GAIN",
+            self.config.speaker_pcm_gain,
+            min_v=0.1,
+            max_v=4.0,
+        )
+        vol_code = self.audio_client.SetVolume(speaker_volume)
+        logger.info(
+            "G1 audio client initialized (SetVolume=%d, pcm_gain=%.2f, code=%s)",
+            speaker_volume,
+            self._speaker_pcm_gain,
+            vol_code,
+        )
+
         self._select_motion_mode()
         self._running = True
 
@@ -146,6 +217,55 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         self._running = False
         logger.info("G1 DDS SDK connection stopped")
         super().stop()
+
+    @rpc
+    def stop_speech_playback(self) -> bool:
+        """Stop Unitree cloud TTS and dimos PlayStream on the G1 body speaker."""
+        if self.audio_client is None:
+            return False
+        try:
+            stop_g1_playback(self.audio_client)
+            return True
+        except Exception:
+            logger.exception("G1 stop_speech_playback failed")
+            return False
+
+    @rpc
+    def play_speech_pcm(self, pcm: bytes) -> bool:
+        """Play 16 kHz mono PCM16 on the G1 body speaker via ``AudioClient.PlayStream``."""
+        if self.audio_client is None:
+            logger.warning("G1 audio client not initialized")
+            return False
+        if not pcm:
+            return False
+        try:
+            gain = getattr(self, "_speaker_pcm_gain", 1.0)
+            if gain != 1.0:
+                pcm = amplify_pcm16(pcm, gain)
+            play_pcm_on_g1(self.audio_client, pcm)
+            return True
+        except Exception:
+            logger.exception("G1 PlayStream speech failed")
+            return False
+
+    @rpc
+    def play_speech_text(self, text: str, speaker_id: int = 0) -> bool:
+        """Speak text on the G1 body speaker via DDS ``AudioClient.TtsMaker``."""
+        if self.audio_client is None:
+            logger.warning("G1 audio client not initialized")
+            return False
+        try:
+            code = self.audio_client.TtsMaker(text, speaker_id)
+            if code != 0:
+                logger.warning("G1 TtsMaker failed with code=%s text=%s", code, text[:40])
+                return False
+            # Block until the robot finishes speaking (TtsMaker is fire-and-forget).
+            duration = max(2.0, min(len(text) * 0.25, 45.0))
+            time.sleep(duration)
+            return True
+        except Exception:
+            logger.exception("G1 TtsMaker speech failed")
+            return False
 
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
@@ -200,10 +320,15 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
     @rpc
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[str, Any]:
         logger.info(f"Publishing request to topic: {topic} with data: {data}")
-        assert self.loco_client is not None
 
         api_id = data.get("api_id")
         parameter = data.get("parameter", {})
+
+        # Arm gestures / UniStore actions are served by a dedicated DDS service.
+        if topic == ARM_TOPIC:
+            return self._handle_arm_request(api_id, parameter)
+
+        assert self.loco_client is not None
 
         try:
             API_SET_FSM_ID = 7101
@@ -222,6 +347,26 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
                 return {"code": -1, "error": "unsupported_api"}
         except Exception as e:
             logger.error(f"publish_request failed: {e}")
+            return {"code": -1, "error": str(e)}
+
+    def _handle_arm_request(self, api_id: int | None, parameter: dict[str, Any]) -> dict[str, Any]:
+        """Dispatch arm-service requests to the ``G1ArmActionClient``."""
+        if self.arm_action_client is None:
+            return {"code": -1, "error": "arm_action_client_not_initialized"}
+        try:
+            if api_id == ARM_API_ID:  # 7106: execute preset action by id
+                action_id = int(parameter.get("data", 0))
+                return {"code": self.arm_action_client.ExecuteAction(action_id)}
+            if api_id == ARM_GET_ACTION_LIST_API_ID:  # 7107
+                code, action_data = self.arm_action_client.GetActionList()
+                return {"code": code, "data": action_data}
+            if api_id in (ARM_EXECUTE_CUSTOM_ACTION_API_ID, ARM_STOP_CUSTOM_ACTION_API_ID):
+                code, _ = self.arm_action_client._Call(api_id, json.dumps(parameter))
+                return {"code": code}
+            logger.warning(f"Unsupported arm API ID: {api_id}")
+            return {"code": -1, "error": "unsupported_arm_api"}
+        except Exception as e:
+            logger.error(f"arm request failed: {e}")
             return {"code": -1, "error": str(e)}
 
     @rpc

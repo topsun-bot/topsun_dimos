@@ -1,4 +1,5 @@
-# Copyright 2026 Dimensional Inc.
+xhu#!/usr/bin/env python3
+# Copyright 2025-2026 Dimensional Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Protocol
+"""Run G1 Orin greeter lite (no nix / no nav). Sport mode R2+A before start.
 
-from dimos.spec.utils import Spec
+Without TTS keys or Whisper, modules still start; inject text via::
 
+    dimos topic send /human_input '"你好"'
+"""
 
-class SpeakSkillSpec(Spec, Protocol):
-    def speak(self, text: str, blocking: bool = True) -> str: ...
+from dimos.core.coordination.module_coordinator import ModuleCoordinator
+from dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_greeter_dds_lite import (
+    unitree_g1_greeter_dds_lite,
+)
 
-    def prewarm_texts(self, texts: list[str]) -> None: ...
+if __name__ == "__main__":
+    ModuleCoordinator.build(unitree_g1_greeter_dds_lite).loop()

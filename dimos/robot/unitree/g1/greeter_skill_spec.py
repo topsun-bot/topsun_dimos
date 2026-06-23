@@ -1,4 +1,4 @@
-# Copyright 2026 Dimensional Inc.
+# Copyright 2025-2026 Dimensional Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,11 @@ from typing import Protocol
 from dimos.spec.utils import Spec
 
 
-class SpeakSkillSpec(Spec, Protocol):
-    def speak(self, text: str, blocking: bool = True) -> str: ...
+class GreeterSkillSpec(Spec, Protocol):
+    def greet_guest(self, spoken_text: str) -> str: ...
 
-    def prewarm_texts(self, texts: list[str]) -> None: ...
+    def farewell_guest(self, spoken_text: str) -> str: ...
+
+    def execute_arm_command(self, command_name: str) -> str: ...
+
+    def perform_dance(self) -> str: ...

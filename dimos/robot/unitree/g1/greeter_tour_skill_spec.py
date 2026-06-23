@@ -1,4 +1,4 @@
-# Copyright 2026 Dimensional Inc.
+# Copyright 2025-2026 Dimensional Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@ from typing import Protocol
 from dimos.spec.utils import Spec
 
 
-class SpeakSkillSpec(Spec, Protocol):
-    def speak(self, text: str, blocking: bool = True) -> str: ...
+class TourGuideSpec(Spec, Protocol):
+    """导览带路接口,供 ``GreeterIntentRouter`` 在已标点时转发问路/带路请求。"""
 
-    def prewarm_texts(self, texts: list[str]) -> None: ...
+    def handle_location_query(self, text: str) -> str: ...
+
+    def landmark_count(self) -> int: ...
