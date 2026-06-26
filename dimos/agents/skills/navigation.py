@@ -74,8 +74,17 @@ class PlanarFrameTransform:
         s = math.sin(-self.yaw)
         return (c * dx - s * dy, s * dx + c * dy)
 
+    def from_current(self, x: float, y: float) -> tuple[float, float]:
+        """Map a point from the current odom frame into the persisted-map frame."""
+        c = math.cos(self.yaw)
+        s = math.sin(self.yaw)
+        return (c * x - s * y + self.x, s * x + c * y + self.y)
+
     def yaw_to_current(self, yaw: float) -> float:
         return yaw - self.yaw
+
+    def yaw_from_current(self, yaw: float) -> float:
+        return yaw + self.yaw
 
 # navigate_with_text fallback step order (env: DIMOS_NAV_FALLBACK=object_room|semantic|room_first)
 _NAV_FALLBACK_OBJECT_ROOM = (
@@ -435,7 +444,23 @@ class NavigationSkillContainer(Module):
     def _should_transform_persisted_record(self, record: SpatialRecord) -> bool:
         if self._persisted_to_current is None:
             return False
+        if record.metadata.get("coordinate_frame") == "map":
+            return True
         return not bool(record.session_id and record.session_id == self._memory_session_id)
+
+    def _odom_pose_to_persisted_frame(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        yaw: float,
+    ) -> tuple[float, float, float, float, str]:
+        """Return pose and coordinate_frame label for spatial-memory storage."""
+        if self._persisted_to_current is None:
+            return (x, y, z, yaw, "odom")
+        mx, my = self._persisted_to_current.from_current(x, y)
+        myaw = self._persisted_to_current.yaw_from_current(yaw)
+        return (mx, my, z, myaw, "map")
 
     def _record_pose_in_navigation_frame(self, record: SpatialRecord) -> PoseStamped:
         x, y, z = record.position
@@ -521,10 +546,19 @@ class NavigationSkillContainer(Module):
             if pos is None or rot_tuple is None:
                 return False
 
+            store_x, store_y, store_z, store_yaw, coord_frame = self._odom_pose_to_persisted_frame(
+                float(pos.x),
+                float(pos.y),
+                float(pos.z),
+                float(rot_tuple[2]),
+            )
+            store_rot = (rot_tuple[0], rot_tuple[1], store_yaw)
+            store_pos = (store_x, store_y, store_z)
+
             location = RobotLocation(
                 name=name,
-                position=(pos.x, pos.y, pos.z),
-                rotation=rot_tuple,
+                position=store_pos,
+                rotation=store_rot,
             )
             self._spatial_memory.tag_location(location)
 
@@ -532,12 +566,11 @@ class NavigationSkillContainer(Module):
             has_frame = self._latest_image is not None and hasattr(self._latest_image, "data")
             if has_frame:
                 img_copy = self._latest_image.data.copy()
-                pos_tuple = (float(pos.x), float(pos.y), float(pos.z))
                 captured_frames.append(
                     (
                         self._latest_image.data.copy(),  # type: ignore[union-attr]
-                        (float(pos.x), float(pos.y), float(pos.z)),
-                        rot_tuple,
+                        store_pos,
+                        store_rot,
                     )
                 )
                 try:
@@ -552,14 +585,15 @@ class NavigationSkillContainer(Module):
                 frame_idx = len(captured_frames) - 1
                 threading.Thread(
                     target=self._detect_single_frame_async,
-                    args=(img_copy, pos_tuple, rot_tuple, name),
+                    args=(img_copy, store_pos, store_rot, name, coord_frame),
                     daemon=True,
                     name=f"vlm-frame-{name}-{frame_idx}",
                 ).start()
 
             logger.info(
-                "[tag_location] snap name=%r image_saved=%s captured_total=%d",
+                "[tag_location] snap name=%r frame=%s image_saved=%s captured_total=%d",
                 name,
+                coord_frame,
                 image_saved,
                 len(captured_frames),
             )
@@ -568,15 +602,29 @@ class NavigationSkillContainer(Module):
         image_saved = _snap_one(location_name)
         position = self._latest_odom.position
         rot_tuple = self._odom_euler_tuple() or (0.0, 0.0, 0.0)
-        logger.info(f"Tagged location '{location_name}' at ({position.x:.2f},{position.y:.2f})")
+        store_x, store_y, store_z, store_yaw, coord_frame = self._odom_pose_to_persisted_frame(
+            float(position.x),
+            float(position.y),
+            float(position.z),
+            float(rot_tuple[2]),
+        )
+        store_rot = (rot_tuple[0], rot_tuple[1], store_yaw)
+        logger.info(
+            "Tagged location '%s' at (%.2f,%.2f) frame=%s",
+            location_name,
+            store_x,
+            store_y,
+            coord_frame,
+        )
 
         # One ROOM landmark per name (record() merges by name; snaps only add CLIP images).
         room_rec = SpatialRecord(
             name=location_name,
             record_type=RecordType.ROOM,
-            position=(float(position.x), float(position.y), float(position.z)),
-            rotation=rot_tuple,
+            position=(store_x, store_y, store_z),
+            rotation=store_rot,
             session_id=self._memory_session_id,
+            metadata={"coordinate_frame": coord_frame},
         )
         if image_saved and self._latest_image is not None and hasattr(self._latest_image, "data"):
             try:
@@ -1917,6 +1965,7 @@ class NavigationSkillContainer(Module):
         position: tuple[float, float, float],
         rotation: tuple[float, float, float],
         room_name: str,
+        coordinate_frame: str = "odom",
     ) -> None:
         """Run VLM on a single captured frame and store detected objects.
 
@@ -1977,6 +2026,7 @@ class NavigationSkillContainer(Module):
                 "observed_position": list(position),
                 "observed_rotation": list(obj_rotation),
                 "room_name": room_name,
+                "coordinate_frame": coordinate_frame,
                 "bbox_0to1000": bbox,
                 "yaw_offset_deg": round(math.degrees(float(item.get("yaw_offset", 0.0))), 1),
                 "capture_yaw_deg": round(math.degrees(capture_yaw), 1),

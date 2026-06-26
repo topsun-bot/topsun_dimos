@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import asdict
+import math
 from pathlib import Path
 import threading
 from threading import RLock
@@ -44,6 +45,7 @@ class Config(ModuleConfig):
     algo: str = "height_cost"
     config: OccupancyConfig = Field(default_factory=HeightCostConfig)
     persistent_map_dir: str | None = None
+    persistent_map_yaml: str | None = None
     load_persistent_map_on_start: bool = True
     publish_persistent_map_on_start: bool = True
     auto_save_interval_s: float | None = 30.0
@@ -67,27 +69,30 @@ class CostMapper(Module):
         super().start()
 
         def _publish_costmap(grid: OccupancyGrid, calc_time_ms: float, rx_monotonic: float) -> None:
+            publish_grid = grid
             with self._latest_lock:
                 self._latest_costmap = grid
-                if self._persistent_costmap is not None and getattr(
-                    self, "_merge_live_into_persistent", False
-                ):
-                    # Throttle merges — only when the robot has moved or 2 s have
-                    # passed since the last merge.
-                    now = time.monotonic()
-                    if (
-                        now - getattr(self, "_last_merge_time", 0.0) > 2.0
-                        or self._has_moved_since_last_merge(grid)
-                    ):
-                        grid = self._merge_grids(self._persistent_costmap, grid)
-                        with self._latest_lock:
-                            self._persistent_costmap = grid
-                        self._last_merge_time = now  # type: ignore[attr-defined]
-                        self._last_merge_origin = (  # type: ignore[attr-defined]
-                            grid.origin.position.x,
-                            grid.origin.position.y,
-                        )
-            self.global_costmap.publish(grid)
+                if self._persistent_costmap is not None:
+                    if getattr(self, "_merge_live_into_persistent", False):
+                        # Throttle merges — only when the robot has moved or 2 s have
+                        # passed since the last merge.
+                        now = time.monotonic()
+                        if (
+                            now - getattr(self, "_last_merge_time", 0.0) > 2.0
+                            or self._has_moved_since_last_merge(grid)
+                        ):
+                            merged = self._merge_grids(self._persistent_costmap, grid)
+                            self._persistent_costmap = merged
+                            publish_grid = merged
+                            self._last_merge_time = now  # type: ignore[attr-defined]
+                            self._last_merge_origin = (  # type: ignore[attr-defined]
+                                merged.origin.position.x,
+                                merged.origin.position.y,
+                            )
+                    else:
+                        # Static / pre-relocalization persistent map drives planning.
+                        publish_grid = self._persistent_costmap
+            self.global_costmap.publish(publish_grid)
 
         def _calculate_and_time(
             msg: PointCloud2,
@@ -338,6 +343,8 @@ class CostMapper(Module):
     def _resolve_map_path(self, path: str | None) -> Path:
         if path is not None:
             return Path(path).expanduser()
+        if self.config.persistent_map_yaml is not None:
+            return Path(self.config.persistent_map_yaml).expanduser()
         if self.config.persistent_map_dir is not None:
             return Path(self.config.persistent_map_dir).expanduser()
         return STATE_DIR / "maps" / "default" / "costmap"

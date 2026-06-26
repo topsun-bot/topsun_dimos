@@ -18,7 +18,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 import pytest
 
-from dimos.agents.skills.navigation import NavigationSkillContainer
+from dimos.agents.skills.navigation import NavigationSkillContainer, PlanarFrameTransform
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import Out
@@ -633,6 +633,42 @@ def test_relocalization_transform_skips_current_session_record() -> None:
 
     assert pose.position.x == pytest.approx(12.0)
     assert pose.position.y == pytest.approx(3.0)
+
+
+def test_relocalization_transform_applies_to_current_session_map_record() -> None:
+    nav = _nav_container()
+    nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
+    current_record = SpatialRecord(
+        name="当前房间",
+        record_type=RecordType.ROOM,
+        position=(12.0, 3.0, 0.0),
+        session_id="session_current",
+        metadata={"coordinate_frame": "map"},
+    )
+
+    pose = nav._record_pose_in_navigation_frame(current_record)
+
+    assert pose.position.x == pytest.approx(2.0)
+    assert pose.position.y == pytest.approx(3.0)
+
+
+def test_planar_frame_transform_round_trip() -> None:
+    tx = PlanarFrameTransform(5.0, -2.0, 0.3)
+    ox, oy = 1.5, -0.5
+    mx, my = tx.from_current(ox, oy)
+    back_x, back_y = tx.to_current(mx, my)
+    assert back_x == pytest.approx(ox)
+    assert back_y == pytest.approx(oy)
+
+
+def test_odom_pose_to_persisted_frame_uses_transform() -> None:
+    nav = _nav_container()
+    nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
+    x, y, z, yaw, frame = nav._odom_pose_to_persisted_frame(2.0, 3.0, 0.0, 0.5)
+    assert frame == "map"
+    assert x == pytest.approx(12.0)
+    assert y == pytest.approx(3.0)
+    assert yaw == pytest.approx(0.5)
 
 
 def test_relocalization_transform_suppresses_stale_coordinate_warning() -> None:

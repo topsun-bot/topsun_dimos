@@ -239,6 +239,42 @@ class OccupancyGrid(Timestamped):
         return (self.unknown_cells / self.total_cells * 100) if self.total_cells > 0 else 0.0
 
     @classmethod
+    def from_ros_map_yaml(cls, yaml_path: Path) -> OccupancyGrid:
+        """Load a ROS map_server-style ``.yaml`` + image (``.pgm``/``.png``)."""
+        import yaml
+
+        yaml_path = yaml_path.expanduser().resolve()
+        with yaml_path.open() as f:
+            meta = yaml.safe_load(f)
+
+        image_path = yaml_path.parent / str(meta["image"])
+        resolution = float(meta["resolution"])
+        origin_xyz = meta["origin"]
+        negate = int(meta.get("negate", 0))
+        occupied_thresh = float(meta.get("occupied_thresh", 0.65))
+        free_thresh = float(meta.get("free_thresh", 0.196))
+
+        img = Image.open(image_path).convert("L")
+        pixels = np.array(img, dtype=np.float32)
+        if negate:
+            occ = pixels / 255.0
+        else:
+            occ = (255.0 - pixels) / 255.0
+
+        grid = np.full(pixels.shape, CostValues.UNKNOWN, dtype=np.int8)
+        grid[occ > occupied_thresh] = CostValues.OCCUPIED
+        grid[occ < free_thresh] = CostValues.FREE
+        # map_server stores row 0 at the top; occupancy grids use world +Y upward.
+        grid = np.flipud(grid)
+
+        origin = Pose(
+            float(origin_xyz[0]),
+            float(origin_xyz[1]),
+            float(origin_xyz[2]) if len(origin_xyz) > 2 else 0.0,
+        )
+        return cls(grid=grid, resolution=resolution, origin=origin, frame_id="map")
+
+    @classmethod
     def from_path(cls, path: Path) -> OccupancyGrid:
         if path.is_dir():
             return cls.from_directory(path)
@@ -254,6 +290,8 @@ class OccupancyGrid(Timestamped):
             case ".png":
                 img = Image.open(path).convert("L")
                 return cls(grid=np.array(img).astype(np.int8))
+            case ".yaml" | ".yml":
+                return cls.from_ros_map_yaml(path)
             case _:
                 raise NotImplementedError(f"Unsupported file format: {path.suffix}")
 

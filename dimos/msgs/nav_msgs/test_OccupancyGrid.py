@@ -20,6 +20,7 @@ import pickle
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from dimos.mapping.occupancy.gradient import gradient
 from dimos.mapping.occupancy.inflation import simple_inflate
@@ -360,6 +361,82 @@ def test_filter_below() -> None:
     assert filtered.height == grid.height
     assert filtered.resolution == grid.resolution
     assert filtered.frame_id == grid.frame_id
+
+
+def test_from_ros_map_yaml(tmp_path: Path) -> None:
+    """Load a ROS map_server yaml + pgm pair."""
+    pgm_path = tmp_path / "test.pgm"
+    Image.fromarray(
+        np.array(
+            [
+                [255, 255, 0],
+                [205, 255, 255],
+                [0, 0, 255],
+            ],
+            dtype=np.uint8,
+        )
+    ).save(pgm_path)
+
+    yaml_path = tmp_path / "test.yaml"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "image: test.pgm",
+                "mode: trinary",
+                "resolution: 0.25",
+                "origin: [1.0, 2.0, 0.0]",
+                "negate: 0",
+                "occupied_thresh: 0.65",
+                "free_thresh: 0.196",
+            ]
+        )
+    )
+
+    grid = OccupancyGrid.from_ros_map_yaml(yaml_path)
+
+    assert grid.width == 3
+    assert grid.height == 3
+    assert grid.resolution == 0.25
+    assert grid.frame_id == "map"
+    assert grid.origin.position.x == 1.0
+    assert grid.origin.position.y == 2.0
+    assert grid.occupied_cells == 3
+    assert grid.free_cells == 5
+    assert grid.unknown_cells == 1
+
+
+def test_from_path_supports_ros_yaml(tmp_path: Path) -> None:
+    """from_path routes .yaml files through from_ros_map_yaml."""
+    pgm_path = tmp_path / "mini.pgm"
+    Image.fromarray(np.full((2, 2), 255, dtype=np.uint8)).save(pgm_path)
+    yaml_path = tmp_path / "mini.yaml"
+    yaml_path.write_text(
+        "image: mini.pgm\nresolution: 0.1\norigin: [0, 0, 0]\nnegate: 0\n"
+        "occupied_thresh: 0.65\nfree_thresh: 0.196\n"
+    )
+
+    grid = OccupancyGrid.from_path(yaml_path)
+
+    assert grid.width == 2
+    assert grid.resolution == 0.1
+
+
+def test_load_office_static_map_if_present() -> None:
+    """Smoke-test the office map shipped under data/map (local only)."""
+    from dimos.constants import DIMOS_PROJECT_ROOT
+
+    yaml_path = DIMOS_PROJECT_ROOT / "data" / "map" / "map_grid.yaml"
+    if not yaml_path.exists():
+        pytest.skip("office static map not available locally")
+
+    grid = OccupancyGrid.from_ros_map_yaml(yaml_path)
+
+    assert grid.width > 100
+    assert grid.height > 100
+    assert grid.resolution == pytest.approx(0.1)
+    assert grid.origin.position.x == pytest.approx(-26.845)
+    assert grid.occupied_cells > 0
+    assert grid.free_cells > 0
 
 
 def test_max() -> None:

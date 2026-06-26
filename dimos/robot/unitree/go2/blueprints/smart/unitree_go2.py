@@ -15,6 +15,7 @@
 
 from pathlib import Path
 
+from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.stream import In
 from dimos.mapping.costmapper import CostMapper
@@ -31,10 +32,17 @@ from dimos.navigation.patrolling.module import PatrollingModule
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
 
+_OFFICE_STATIC_MAP = DIMOS_PROJECT_ROOT / "data" / "map" / "map_grid.yaml"
+
 unitree_go2 = autoconnect(
     unitree_go2_basic,
     VoxelGridMapper.blueprint(),
-    CostMapper.blueprint(),
+    CostMapper.blueprint(
+        persistent_map_yaml=str(_OFFICE_STATIC_MAP),
+        load_persistent_map_on_start=True,
+        publish_persistent_map_on_start=True,
+        auto_save_interval_s=None,
+    ),
     ReplanningAStarPlanner.blueprint(),
     WavefrontFrontierExplorer.blueprint(),
     PatrollingModule.blueprint(),
