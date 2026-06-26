@@ -15,10 +15,11 @@
 import asyncio
 from dataclasses import dataclass
 import functools
+import logging
 import os
 import threading
 import time
-from typing import Any, TypeAlias
+from typing import Any, Callable, TypeAlias
 
 import numpy as np
 from numpy.typing import NDArray
@@ -54,6 +55,8 @@ from dimos.utils.reactive import backpressure, callback_to_observable
 
 VideoMessage: TypeAlias = NDArray[np.uint8]  # Shape: (height, width, 3)
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SerializableVideoFrame:
@@ -86,11 +89,25 @@ class SerializableVideoFrame:
 class UnitreeWebRTCConnection(Resource):
     _SPORT_API_ID_RAGEMODE: int = 2059
 
-    def __init__(self, ip: str, mode: str = "ai", aes_128_key: str | None = None) -> None:
+    def __init__(
+        self,
+        ip: str,
+        mode: str = "ai",
+        aes_128_key: str | None = None,
+        *,
+        auto_reconnect: bool = True,
+        reconnect_delay: float = 3.0,
+    ) -> None:
         self.ip = ip
         self.mode = mode
         self.stop_timer: threading.Timer | None = None
         self.cmd_vel_timeout = 0.2
+        self._auto_reconnect = auto_reconnect
+        self._reconnect_delay = reconnect_delay
+        self._reconnecting = False
+        self._topic_callbacks: dict[str, list[Callable[..., Any]]] = {}
+        self._video_track_callbacks: list[Callable[..., Any]] = []
+        self._video_channel_enabled = False
         # 优先使用显式传入的 key, 其次从环境变量读取
         if not aes_128_key:
             aes_128_key = os.environ.get("UNITREE_AES_128_KEY")
@@ -98,27 +115,25 @@ class UnitreeWebRTCConnection(Resource):
         self.conn = LegionConnection(WebRTCConnectionMethod.LocalSTA, ip=self.ip, **extra)
         self.connect()
 
-    def connect(self) -> None:
+    def connect(self, timeout: float = 15.0) -> None:
         self.loop = asyncio.new_event_loop()
         self.task = None
         self.connected_event = asyncio.Event()
         self.connection_ready = threading.Event()
+        self._connect_error: Exception | None = None
 
         async def async_connect() -> None:
-            await self.conn.connect()
-            await self.conn.datachannel.disableTrafficSaving(True)
+            try:
+                await self.conn.connect()
+                await self._async_post_connect_setup()
 
-            self.conn.datachannel.set_decoder(decoder_type="native")
+                self.connected_event.set()
+                self.connection_ready.set()
 
-            await self.conn.datachannel.pub_sub.publish_request_new(
-                RTC_TOPIC["MOTION_SWITCHER"], {"api_id": 1002, "parameter": {"name": self.mode}}
-            )
-
-            self.connected_event.set()
-            self.connection_ready.set()
-
-            while True:
-                await asyncio.sleep(1)
+                await self._connection_monitor_loop()
+            except Exception as e:
+                self._connect_error = e
+                self.connection_ready.set()
 
         def start_background_loop() -> None:
             asyncio.set_event_loop(self.loop)
@@ -128,12 +143,74 @@ class UnitreeWebRTCConnection(Resource):
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=start_background_loop, daemon=True)
         self.thread.start()
-        self.connection_ready.wait()
+        if not self.connection_ready.wait(timeout=timeout):
+            raise ConnectionError(
+                f"WebRTC connection to {self.ip} timed out after {timeout:.0f}s"
+            )
+        if self._connect_error is not None:
+            raise ConnectionError(
+                f"WebRTC connection to {self.ip} failed: {self._connect_error}"
+            ) from self._connect_error
+
+    async def _async_post_connect_setup(self) -> None:
+        await self.conn.datachannel.disableTrafficSaving(True)
+        self.conn.datachannel.set_decoder(decoder_type="native")
+        await self.conn.datachannel.pub_sub.publish_request_new(
+            RTC_TOPIC["MOTION_SWITCHER"], {"api_id": 1002, "parameter": {"name": self.mode}}
+        )
+        self._resubscribe_topics()
+        if self._video_channel_enabled:
+            self.conn.video.switchVideoChannel(True)
+            for callback in self._video_track_callbacks:
+                if callback not in self.conn.video.track_callbacks:
+                    self.conn.video.add_track_callback(callback)
+
+    def _resubscribe_topics(self) -> None:
+        for topic, callbacks in self._topic_callbacks.items():
+            for callback in callbacks:
+                self.conn.datachannel.pub_sub.subscribe(topic, callback)
+
+    def _is_connection_lost(self) -> bool:
+        if self.conn.isConnected:
+            return False
+        pc = self.conn.pc
+        if pc is None:
+            return True
+        return pc.connectionState in ("failed", "closed")
+
+    async def _connection_monitor_loop(self) -> None:
+        while self._auto_reconnect:
+            await asyncio.sleep(1)
+            if self._reconnecting or not self._is_connection_lost():
+                continue
+            await self._try_reconnect()
+
+    async def _try_reconnect(self) -> None:
+        self._reconnecting = True
+        try:
+            logger.warning("WebRTC disconnected from %s, reconnecting...", self.ip)
+            while self._auto_reconnect:
+                try:
+                    await self.conn.reconnect()
+                    await self._async_post_connect_setup()
+                    logger.info("WebRTC reconnected to %s", self.ip)
+                    return
+                except Exception as e:
+                    logger.error(
+                        "Reconnect to %s failed: %s, retrying in %.0fs",
+                        self.ip,
+                        e,
+                        self._reconnect_delay,
+                    )
+                    await asyncio.sleep(self._reconnect_delay)
+        finally:
+            self._reconnecting = False
 
     def start(self) -> None:
         pass
 
     def stop(self) -> None:
+        self._auto_reconnect = False
         # Cancel timer
         if self.stop_timer:
             self.stop_timer.cancel()
@@ -220,19 +297,25 @@ class UnitreeWebRTCConnection(Resource):
     # Generic conversion of unitree subscription to Subject (used for all subs)
     def unitree_sub_stream(self, topic_name: str):  # type: ignore[no-untyped-def]
         def subscribe_in_thread(cb) -> None:  # type: ignore[no-untyped-def]
-            # Run the subscription in the background thread that has the event loop
+            callbacks = self._topic_callbacks.setdefault(topic_name, [])
+            if cb not in callbacks:
+                callbacks.append(cb)
+
             def run_subscription() -> None:
                 self.conn.datachannel.pub_sub.subscribe(topic_name, cb)
 
-            # Use call_soon_threadsafe to run in the background thread
             self.loop.call_soon_threadsafe(run_subscription)
 
         def unsubscribe_in_thread(cb) -> None:  # type: ignore[no-untyped-def]
-            # Run the unsubscription in the background thread that has the event loop
+            callbacks = self._topic_callbacks.get(topic_name, [])
+            if cb in callbacks:
+                callbacks.remove(cb)
+            if not callbacks:
+                self._topic_callbacks.pop(topic_name, None)
+
             def run_unsubscription() -> None:
                 self.conn.datachannel.pub_sub.unsubscribe(topic_name)
 
-            # Use call_soon_threadsafe to run in the background thread
             self.loop.call_soon_threadsafe(run_unsubscription)
 
         return callback_to_observable(
@@ -364,15 +447,22 @@ class UnitreeWebRTCConnection(Resource):
         stop_event = threading.Event()
 
         from aiortc import MediaStreamTrack
+        from aiortc.mediastreams import MediaStreamError
 
         async def accept_track(track: MediaStreamTrack) -> None:
             while True:
                 if stop_event.is_set():
                     return
-                frame = await track.recv()
+                try:
+                    frame = await track.recv()
+                except MediaStreamError:
+                    logger.debug("Video track ended, waiting for reconnect")
+                    return
                 serializable_frame = SerializableVideoFrame.from_av_frame(frame)  # type: ignore[no-untyped-call]
                 subject.on_next(serializable_frame)
 
+        self._video_track_callbacks.append(accept_track)
+        self._video_channel_enabled = True
         self.conn.video.add_track_callback(accept_track)
 
         # Run the video channel switching in the background thread
@@ -383,7 +473,11 @@ class UnitreeWebRTCConnection(Resource):
 
         def stop() -> None:
             stop_event.set()  # Signal the loop to stop
-            self.conn.video.track_callbacks.remove(accept_track)
+            if accept_track in self.conn.video.track_callbacks:
+                self.conn.video.track_callbacks.remove(accept_track)
+            if accept_track in self._video_track_callbacks:
+                self._video_track_callbacks.remove(accept_track)
+            self._video_channel_enabled = bool(self._video_track_callbacks)
 
             # Run the video channel switching off in the background thread
             def switch_video_channel_off() -> None:
@@ -415,6 +509,7 @@ class UnitreeWebRTCConnection(Resource):
 
     def disconnect(self) -> None:
         """Disconnect from the robot and clean up resources."""
+        self._auto_reconnect = False
         # Cancel timer
         if self.stop_timer:
             self.stop_timer.cancel()
