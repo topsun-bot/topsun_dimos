@@ -34,11 +34,9 @@ class MyLidar(NativeModule):
     pointcloud: Out[PointCloud2]
     imu: Out[Imu]
 
-
 ```
 
 That's it. `MyLidar` is a full DimOS module. You can use it with `autoconnect`, blueprints, transport overrides, and specs. Once this module is started, your `./build/my_lidar` will get called with specific CLI args.
-
 
 ## How it works
 
@@ -67,8 +65,7 @@ mylidar.imu.transport = LCMTransport("/imu", Imu)
 mylidar.start()
 ```
 
-<!--Result:-->
-```
+```results
 2026-02-14T11:22:12.123963Z [info     ] Starting native process   [dimos/core/native_module.py] cmd='./build/my_lidar --pointcloud /lidar#sensor_msgs.PointCloud2 --imu /imu#sensor_msgs.Imu --host_ip 192.168.1.5 --frequency 10.0' cwd=/home/lesh/coding/dimos/docs/usage/build
 ```
 
@@ -119,11 +116,11 @@ class MyConfig(NativeModuleConfig):
 If a config field shouldn't be a CLI arg, add it to `cli_exclude`:
 
 ```python skip
-class FastLio2Config(NativeModuleConfig):
-    executable: str = "./build/fastlio2"
-    config: str = "mid360.yaml"                          # human-friendly name
-    config_path: str = Field(default_factory=lambda m: str(Path(m["config"]).resolve()))
-    cli_exclude: frozenset[str] = frozenset({"config"})  # only config_path is passed
+class MyNativeConfig(NativeModuleConfig):
+    executable: str = "./build/my_native"
+    acc_cov: float = 1.0                                  # rendered into a config file, not a CLI arg
+    config_path: str | None = None                        # set at start() to the generated file
+    cli_exclude: frozenset[str] = frozenset({"acc_cov"})  # only config_path is passed
 ```
 
 ## Using with blueprints

@@ -22,7 +22,6 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.core.transport import pSHMTransport
 from dimos.msgs.sensor_msgs.Image import Image
-from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.visualization.vis_module import vis_module
 
@@ -106,13 +105,15 @@ rerun_config = {
     "visual_override": {
         "world/camera_info": _convert_camera_info,
         "world/global_map": _convert_global_map,
+        "world/merged_map": _convert_global_map,
         "world/navigation_costmap": _convert_navigation_costmap,
     },
     "max_hz": {
-        "world/global_map": 0,  # publishes at ~7.8 Hz
-        "world/color_image": 0,  # publishes at ~14 Hz
-        "world/global_costmap": 0,  # publishes at ~7.6 Hz
+        "world/global_map": 2,  # source ~7.8 Hz
+        "world/color_image": 5,  # source ~14 Hz
+        "world/global_costmap": 2,  # source ~7.6 Hz
     },
+    "memory_limit": "2GB",
     # slapping a go2 shaped box on top of tf/base_link
     "static": {
         "world/tf/base_link": _static_base_link,
@@ -124,7 +125,6 @@ _with_vis = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config=rerun_config,
-        foxglove_config={"shm_channels": ["/color_image#sensor_msgs.Image"]},
     ),
 )
 
@@ -133,11 +133,11 @@ unitree_go2_basic = (
     autoconnect(
         _with_vis,
         GO2Connection.blueprint(),
-    )
-    .global_config(n_workers=4, robot_model="unitree_go2")
-    .configurators(ClockSyncConfigurator())
+    ).global_config(n_workers=4, robot_model="unitree_go2")
+    # we temporarily disabled sensor timestamps
+    # and are derriving all timestmaps upon reception
+    # this is because image webrtc stream doesn't have timestamps,
+    # so it's difficult to corelate the streams otherwise
+    #
+    #    .configurators(ClockSyncConfigurator())
 )
-
-__all__ = [
-    "unitree_go2_basic",
-]

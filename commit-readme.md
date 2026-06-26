@@ -1,0 +1,177 @@
+# Commit 变更日志
+
+> 记录本仓库 fork 上的每次提交，便于追溯改动、快速上手用法、以及出问题时回滚到指定版本。
+>
+> **维护规则**：每次 `git commit` / `cherry-pick` / `merge` / `push` 后，由 Agent 自动在本文件顶部追加一条记录（见 `.cursor/rules/commit-readme.mdc`）。
+
+---
+
+## 快速回滚
+
+```bash
+# 查看某次提交的完整 diff
+git show <sha>
+
+# 回滚到指定版本（保留工作区改动）
+git checkout <sha> -- <file>
+
+# 硬回滚整个分支到某次提交（慎用）
+git reset --hard <sha>
+```
+
+| 想做的事 | 回滚到 |
+|----------|--------|
+| 查看/维护提交日志 | `af7df1395` |
+| Rerun 画面冻结 / 内存暴涨 | `58a9830b5` |
+| replay-db 找不到本地 .db | `58a9830b5` |
+| Go2 扬声器 TTS / 人体检测 lookout | `c40daacb0` |
+| WebRTC publish_request 卡死 | `c40daacb0` |
+
+---
+
+## 提交记录
+
+### 8c5936431 — docs: update commit-readme for af7df1395
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-24 |
+| **分支** | `up-main` |
+
+修正 changelog 自引用 SHA（`af7df1395`）。
+
+---
+
+### af7df1395 — docs: add commit-readme changelog and document fork commits
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-05-27 |
+| **分支** | `up-main` |
+| **作者** | jiangtao-huazhijian |
+
+**修改文件**
+
+| 文件 | 改动 |
+|------|------|
+| `commit-readme.md` | 新建：fork 提交变更日志，含快速回滚索引 |
+| `.cursor/rules/commit-readme.mdc` | 新建（本地，不入库）：Agent 自动维护规则 |
+
+**改进点**
+
+1. 集中记录每次 fork 提交的改动、用法、回滚方式。
+2. 写入 Cursor 规则，后续 commit/cherry-pick/merge/push 自动追加记录。
+
+**用法**
+
+```bash
+# 查看所有 fork 提交记录
+cat commit-readme.md
+
+# 按 SHA 回滚单个文件
+git checkout 58a9830b5 -- dimos/memory2/replay.py
+```
+
+---
+
+### c40daacb0 — feat: Go2 robot speaker TTS, YOLO lookout, and connection timeout
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-05-27 |
+| **分支** | `up-main` |
+| **作者** | jiangtao-huazhijian |
+
+**修改文件**
+
+| 文件 | 改动 |
+|------|------|
+| `dimos/agents/skills/speak_skill.py` | Go2 扬声器 TTS、音频缓存、`speak_cached` |
+| `dimos/perception/perceive_loop_skill.py` | `look_out_for` 连续模式、YOLO 快检、cooldown |
+| `dimos/models/vl/create.py` | 注册 `openai` VL 模型 |
+| `dimos/models/vl/types.py` | `VlModelName` 增加 `"openai"` |
+| `dimos/robot/unitree/connection.py` | `publish_request` 10s 超时防卡死 |
+
+**改进点**
+
+1. **Go2 扬声器 TTS**：检测到 `GO2Connection` 时，TTS 音频通过 WebRTC AudioHub 上传到机器人扬声器播放；无连接时回退本地扬声器。
+2. **低延迟告警**：`speak_cached(text)` 首次生成并上传音频（~2-3s），后续同文本即时播放（~0.2s）；`precache_audio(texts)` 可提前预热。
+3. **YOLO 快检 lookout**：`look_out_for(..., use_yolo=True)` 用本地 YOLO 检测人体等 COCO 类（~30ms），替代 VLM（~3s）。
+4. **连续监控**：`continuous=True` + `cooldown=10.0` 支持重复触发，适合门禁/巡逻告警。
+5. **连接防卡死**：`publish_request` 加 10s 超时，避免 WebRTC 无响应时线程永久阻塞。
+
+**用法**
+
+```bash
+# 启动 agentic blueprint（真机）
+dimos run unitree-go2-agentic --robot-ip 192.168.123.161
+
+# Agent 说话（走机器人扬声器）
+dimos agent-send "say hello in Chinese"
+
+# 预缓存固定告警语（低延迟）
+dimos mcp call precache_audio --json-args '{"texts": ["Person detected", "Intruder alert"]}'
+dimos mcp call speak_cached --arg text="Person detected"
+
+# 连续 YOLO 人体检测 + 语音告警
+dimos agent-send 'look out for a person and speak "Person detected" when found, use yolo and continuous mode with 10 second cooldown'
+```
+
+**依赖 / 前置**
+
+- `OPENAI_API_KEY` 环境变量（TTS 用 `tts-1`）
+- Go2 真机 WebRTC 连接正常（AudioHub API）
+- YOLO 模式需 `ultralytics`（`uv sync --extra perception`）
+
+**回滚**
+
+```bash
+git checkout 58a9830b5 -- dimos/agents/skills/speak_skill.py dimos/perception/perceive_loop_skill.py dimos/models/vl/create.py dimos/models/vl/types.py dimos/robot/unitree/connection.py
+```
+
+---
+
+### 58a9830b5 — fix: prevent Rerun freeze and fix replay-db path resolution
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-05-27 14:41:09 +0800 |
+| **分支** | `up-main` |
+| **作者** | jiangtao-huazhijian |
+
+**修改文件**
+
+| 文件 | 改动 |
+|------|------|
+| `dimos/visualization/rerun/bridge.py` | `memory_limit` 从 `"25%"` 改为 `"2GB"` |
+| `dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py` | Rerun `max_hz` 节流：map 2Hz、image 5Hz、costmap 2Hz |
+| `dimos/memory2/replay.py` | `resolve_db_path` 统一走 `resolve_named_path`，支持本地 `.db` |
+| `docs/team-git-workflow.md` | 新增团队 Git 工作流文档 |
+
+**改进点**
+
+1. **防 Rerun 卡死**：固定 2GB 内存上限 + 渲染节流，避免 WebRTC 视频轨 + 高频点云导致 Rerun OOM/冻结。
+2. **replay-db 路径修复**：`--replay-db recording_go2` 现在能正确找到项目根目录的 `recording_go2.db`，不再误去 LFS 找内置数据。
+3. **团队文档**：记录 fork 双远端、分支策略、PR 流程。
+
+**用法**
+
+```bash
+# 重定位 replay 测试
+dimos --replay --replay-db recording_go2 run unitree-go2-relocalization \
+  -o relocalizationmodule.map_file=recording_go2_twopass_map
+
+# 也可显式指定 .db 路径
+dimos --replay --replay-db ./recording_go2.db run unitree-go2-basic
+```
+
+**回滚**
+
+```bash
+# 回滚到 upstream/main（不含本次修复）
+git checkout b45e5d581
+```
+
+---
+
+> 更早的 upstream 提交见 `git log upstream/main`。本文件从 fork 本地改动 `58a9830b5` 起记录。

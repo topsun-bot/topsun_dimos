@@ -1,0 +1,99 @@
+---
+description: 每次 commit / cherry-pick / merge / push 后自动更新根目录 commit-readme.md
+alwaysApply: true
+---
+
+# Commit 变更日志维护（commit-readme.md）
+
+## 触发时机
+
+在以下操作**完成之后**（不论是否由用户明确要求），必须更新根目录 `commit-readme.md`：
+
+- `git commit`
+- `git cherry-pick`
+- `git merge`（含 fast-forward）
+- `git push`（push 前确保 readme 已包含本次要推的 commit）
+
+**不触发**：仅 `git add`、`git status`、`git diff`、`git stash` 等未产生新 commit 的操作。
+
+## 文件位置
+
+```
+/home/jiangtao/huazhijian/gitlab/dimos/commit-readme.md
+```
+
+该文件**应纳入 git 跟踪**（与 `.cursor/` 不同，commit-readme.md 在仓库根目录，需要 commit）。
+
+## 每次追加的记录格式
+
+在 `## 提交记录` 章节**最顶部**（最新在上）插入一条，使用以下模板：
+
+```markdown
+### <short-sha> — <commit subject>
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | YYYY-MM-DD HH:MM:SS +0800 |
+| **分支** | `<branch-name>` |
+| **作者** | `<author>` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|------|------|
+| `path/to/file.py` | 一句话说明 |
+
+**改进点**
+
+1. ...
+2. ...
+
+**用法**
+
+\`\`\`bash
+# 可直接复制运行的命令
+\`\`\`
+
+**依赖 / 前置**（可选）
+
+- ...
+
+**回滚**
+
+\`\`\`bash
+git checkout <parent-sha> -- <files>
+# 或
+git reset --hard <parent-sha>
+\`\`\`
+
+---
+```
+
+## 记录内容要求
+
+1. **时间**：用 `git log -1 --format='%ai'` 获取 commit 时间。
+2. **修改文件**：列出本次 commit 涉及的所有非自动生成文件；略过 `.cursor/`、`jiangtao/`、LFS pointer、`.db-shm`/`.db-wal`。
+3. **改进点**：写"为什么改"和"解决了什么问题"，不要只复述 diff。
+4. **用法**：给出能直接运行的 `dimos run` / `dimos mcp call` / CLI 命令；有配置项时写明 `-o` 参数。
+5. **回滚**：给出 `git checkout <sha> -- <file>` 或 `git reset --hard <sha>`，并在「快速回滚」表格中更新一行索引。
+
+## 工作流程（Agent 必须按序执行）
+
+1. 完成 `git commit`（或 cherry-pick / merge）。
+2. 运行 `git log -1 --format='%H%n%h%n%s%n%ai%n%an'` 获取元数据。
+3. 运行 `git show --stat --name-only HEAD` 获取文件列表。
+4. 阅读 diff，撰写改进点和用法。
+5. 更新 `commit-readme.md`（最新记录置顶）。
+6. 更新「快速回滚」表格（如有新功能点）。
+7. 将 `commit-readme.md` 单独 commit，message 为 `docs: update commit-readme for <short-sha>`。
+
+若本次 commit 已包含代码 + readme 更新，可合并为一次 commit，但**不得遗漏 readme 更新**。
+
+## 与 git-merge-policy 的关系
+
+- `commit-readme.md` 属于 fork 自有文档，**可以**在 `up-main` / `feat/jiangtao` 等分支上提交。
+- 不要主动把 `origin/main` 独有的 ship 流水线文件混入 readme 记录。
+
+## 示例
+
+用户说"commit 一下"时，除了执行 git commit，还必须同步更新 `commit-readme.md` 并告知用户新增了哪条记录。

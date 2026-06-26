@@ -15,8 +15,6 @@
 from dimos.models.vl.base import VlModel
 from dimos.models.vl.types import VlModelName
 
-__all__ = ["VlModelName", "create"]
-
 
 def create(name: VlModelName) -> VlModel:
     # This uses inline imports to only import what's needed.
@@ -29,3 +27,7 @@ def create(name: VlModelName) -> VlModel:
             from dimos.models.vl.moondream import MoondreamVlModel
 
             return MoondreamVlModel()
+        case "openai":
+            from dimos.models.vl.openai import OpenAIVlModel
+
+            return OpenAIVlModel()

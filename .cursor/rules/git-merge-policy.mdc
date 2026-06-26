@@ -1,0 +1,88 @@
+---
+alwaysApply: true
+---
+# Git 分支合并策略（dimos 仓库）
+
+本仓库现有两个远端：
+
+| 远端 | URL | 用途 |
+|------|-----|------|
+| `upstream` | `https://github.com/dimensionalOS/dimos.git` | 上游官方仓库（只读，本地从这里拉新版本） |
+| `origin` | `git@github.com:jiangtao129/dimos.git` | 个人 GitHub fork — 主推送目标。承载 `main`（同步上游 + fork 自有 `/ship` 流水线）和 `feat/jiangtao`（业务开发分支）两条线 |
+
+> 历史变迁：
+> - 2026-04 ~ 2026-05-13：`origin` 曾指向 `git@gitlab.topsun:topsun/dimos_huazhijian.git`，已废弃删除
+> - 2026-05-13 ~ 2026-05-14：fork 在 `github` 远端名下（同 URL），那段时间 `feat/jiangtao` push 目标是 `github`
+> - 2026-05-14：`github` remote 重命名为 `origin`，统一为现在的样子
+
+## 允许的合并方向
+
+- `upstream/dev` → 本地 `dev`（fast-forward / merge / rebase 均可）
+- `upstream/main` → 本地 `main`（fast-forward / merge / rebase 均可）
+- 本地 `dev` → `feat/jiangtao`（fast-forward / merge / rebase 均可）
+- 本地 `main` → `feat/jiangtao`（fast-forward / merge / rebase 均可）
+- `feat/jiangtao` → `origin/feat/jiangtao` → PR 到 `origin/main`（**push 推荐 `git push origin feat/jiangtao`，合并通过 GitHub PR + auto-merge**）
+
+## 谨慎操作（除非用户明确要求）
+
+`origin/main` 上有 fork 自有的 `/ship` 流水线、CI verify workflow、`AGENTS.md`、`.cursor/commands/ship.md` 等文件。**不要主动**做这些动作（除非用户明确要求）：
+
+- ❌ `git merge origin/main` 到 `feat/jiangtao`（PR 合并是反向的，业务工作流是 feat/jiangtao → main）
+- ❌ `git cherry-pick <origin/main 上 fork 自有 commit>` 到 feat/jiangtao
+- ❌ 把 `origin/main` 独有的文件手动复制到 `feat/jiangtao`
+
+> 注意：`origin/main` 跟随 `upstream/main` + fork 自有 ship 流水线。它和 `feat/jiangtao` 业务开发是**两条不应该混淆**的平行线。在 2026-05-14 已经做过一次 `origin/main` → `feat/jiangtao` merge（解决冲突时按"优先上游"原则把 macos.yml / code-cleanup.yml 删了，ci.yml 加了 fork-gate），那次是用户明确要求的。
+
+## 例外
+
+用户**明确**说"把 origin/main 合并 / cherry-pick 进来" / "我需要 ship 流水线" / "把 main 上的 CI 文件拿过来" 时，再执行。操作前要：
+
+1. 明确告知用户两条线的差异和后果
+2. 询问偏好的方式（merge / cherry-pick / 单独拷贝某些文件）
+3. 拿到明确确认后再动手
+
+## Branch protection
+
+`origin/main` 和 `origin/feat/jiangtao` 都启用了 GitHub branch protection：
+
+- 必须经 PR 修改，required check 为 `verify`（fork 自有 workflow，由 `.github/workflows/verify.yml` 触发）
+- `enforce_admins: true` — 直接 push 会被拒
+- 紧急情况下临时关闭 `enforce_admins`、push、立即恢复：
+
+  ```bash
+  gh api -X DELETE "repos/jiangtao129/dimos/branches/<branch>/protection/enforce_admins"
+  git push
+  gh api -X POST   "repos/jiangtao129/dimos/branches/<branch>/protection/enforce_admins"
+  ```
+- 合并策略：只允许 **squash merge**（仓库设置不允许 merge commit / rebase）
+
+## `.cursor/` 是用户私人配置 — 不入库
+
+`.cursor/`（含本规则文件）已加入 `.gitignore`，是**用户本地私人偏好**：
+
+- ❌ 不要 `git add .cursor/` 或建议用户提交 `.cursor/` 下的任何文件
+- ❌ 不要 push 任何 `.cursor/*` 内容到 `origin/feat/jiangtao` 或任何其他远端
+- ❌ 不要从 `.gitignore` 里把 `.cursor/` 移除
+- ✅ 创建 / 修改规则文件时，文件留在工作区即可
+
+> 例外：origin/main 上**已经追踪**的 `.cursor/commands/ship.md` 和 `.cursor/rules/00-workflow.mdc` 是 fork 自有的 ship 流水线文件（不是用户私人偏好），保持现状即可，不要主动删，也不要主动改。
+
+## Commit 行为
+
+**默认不主动 commit 任何东西**。即使工作区有大量改动（包括本规则文件、文档等），也只在用户明确说"commit 一下" / "提交" / "帮我 push" 时才执行 git add / commit / push。
+
+## 生成文件的默认目录
+
+为用户生成的笔记、教程、调研报告、说明文档、PDF 等，默认放到：
+
+```
+/home/jiangtao/huazhijian/gitlab/dimos/docs/cursor/
+```
+
+例外（仍然按之前规矩走）：
+
+- 用户明确指定路径
+- 修改 / 新建项目源码本身（不放在 docs/cursor，而是放在它该在的源码位置）
+- 项目根的 `docs/upstream-update-*.md` 这类显式针对仓库本身的文档
+
+`docs/cursor/` 同样**不要主动 commit**，除非用户明确说要 commit。
