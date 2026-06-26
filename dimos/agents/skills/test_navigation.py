@@ -363,6 +363,59 @@ def test_navigate_with_text_stops_after_known_object_landmark() -> None:
     assert object_attempts == []
 
 
+def test_scan_room_rotation_uses_list_recognition_not_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_ROTATION_STEP_DEG", "180")
+    nav = _nav_container()
+    fake = _FakeUnitree()
+    nav._unitree_skill_container = fake
+    nav._latest_odom = PoseStamped(
+        position=make_vector3(0.0, 0.0, 0.0),
+        orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+    )
+    calls: list[str] = []
+
+    def fake_query(_name: str) -> str | None:
+        calls.append("query")
+        return None
+
+    def fake_list(_name: str) -> str | None:
+        calls.append("list")
+        return "Visually acquired '垃圾桶' (list recognition)"
+
+    nav._detect_and_servo = fake_query  # type: ignore[method-assign]
+    nav._detect_and_servo_by_list_recognition = fake_list  # type: ignore[method-assign]
+
+    result = nav._scan_room_for_object("垃圾桶")
+    assert result == "Visually acquired '垃圾桶' (list recognition)"
+    assert calls == ["query", "list"]
+    assert len(fake.rotations) == 1
+
+
+def test_pick_object_from_recognition_picks_largest_bbox() -> None:
+    nav = _nav_container()
+    items = [
+        {"name": "垃圾桶", "bbox": [100, 100, 200, 200]},
+        {"name": "垃圾桶", "bbox": [880, 646, 1000, 1000]},
+    ]
+    picked = nav._pick_object_from_recognition(items, "垃圾桶")
+    assert picked is not None
+    assert picked["bbox"] == [880, 646, 1000, 1000]
+
+
+def test_list_recognition_skips_when_target_not_in_results() -> None:
+    nav = _nav_container()
+    nav._latest_image = Image.from_numpy(
+        __import__("numpy").zeros((64, 64, 3), dtype=__import__("numpy").uint8)
+    )
+    nav._recognize_objects_simple = lambda _img: [  # type: ignore[method-assign]
+        {"name": "门", "bbox": [10, 10, 100, 100]},
+        {"name": "椅子", "bbox": [200, 200, 300, 300]},
+    ]
+    assert nav._detect_and_servo_by_list_recognition("垃圾桶") is None
+
+
 def test_room_anchor_sweep_scans_rooms_until_object_found() -> None:
     nav = _nav_container()
     rooms = [

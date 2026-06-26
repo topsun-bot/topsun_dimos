@@ -37,6 +37,7 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.navigation.topology import TopologyGraph
 from dimos.navigation.visual.query import (
+    _scale_bbox_to_image,
     get_object_bbox_from_image,
     parse_simple_bbox_line,
     yaw_offset_from_bbox,
@@ -120,6 +121,18 @@ def _panorama_rotations() -> int:
     if override:
         return max(1, int(override))
     return 3
+
+
+def _search_rotation_step_deg() -> float:
+    """Rotation step for object search scan — smaller than tagging step
+    for finer-grained visual acquisition. Default: tagging_step - 20°, min 10°.
+    Override via DIMOS_SEARCH_ROTATION_STEP_DEG."""
+    import os
+
+    override = os.getenv("DIMOS_SEARCH_ROTATION_STEP_DEG")
+    if override:
+        return max(1.0, float(override))
+    return max(10.0, _rotation_step_deg() - 20.0)
 
 _VLM_OBJECT_LIST_PROMPT = (
     "列出图中所有可单独指认的物体（家具、电器、设备、装饰、人等）。\n"
@@ -706,9 +719,18 @@ class NavigationSkillContainer(Module):
 
     def _nav_fallback_step_in_frame(self, query: str, *, timeout: float = 30.0) -> str | None:
         resolved = self._resolve_landmark_from_query(query)
-        if resolved is not None and resolved.record_type == RecordType.ROOM:
-            logger.info("[in_frame] skip — %r is a room name, not an in-frame object", query)
-            return None
+        if resolved is not None:
+            if resolved.record_type == RecordType.ROOM:
+                logger.info("[in_frame] skip — %r is a room name, not an in-frame object", query)
+                return None
+            if resolved.record_type == RecordType.LANDMARK:
+                logger.info(
+                    "[in_frame] skip — %r has known landmark at (%.2f, %.2f); landmark step should navigate there first",
+                    query,
+                    resolved.position[0],
+                    resolved.position[1],
+                )
+                return None
         logger.info("[in_frame] VLM bbox + tracking for %r (timeout=%.0fs) ...", query, timeout)
         msg = self._navigate_to_object(query, timeout=timeout)
         if msg:
@@ -1030,6 +1052,26 @@ class NavigationSkillContainer(Module):
                 obj_room = str(raw_room)
 
         skip = self._sweep_skip_rooms
+
+        # Sort rooms: put the object's recorded room first (most likely location),
+        # then sort the rest by distance from the object's memorized position.
+        if obj_rec is not None:
+            ox, oy = obj_rec.position[0], obj_rec.position[1]
+
+            def _room_sort_key(room: Any) -> tuple[int, float]:
+                rname = room.name or room.record_id
+                is_obj_room = 0 if rname == obj_room else 1
+                dist = math.hypot(room.position[0] - ox, room.position[1] - oy)
+                return (is_obj_room, dist)
+
+            rooms = sorted(rooms, key=_room_sort_key)
+            logger.info(
+                "[L4]   Sorted rooms by proximity to object's recorded room '%s' at (%.2f, %.2f)",
+                obj_room or "?",
+                ox,
+                oy,
+            )
+
         logger.info(
             "[L4]   Sweeping %d room(s)%s ...",
             len(rooms),
@@ -1476,12 +1518,109 @@ class NavigationSkillContainer(Module):
         logger.info("[detect+servo] ✓ servoed to '%s'", target_name)
         return f"Visually acquired '{target_name}'"
 
+    def _recognize_objects_simple(self, image: Image) -> list[dict[str, Any]]:
+        """Run the same list-recognition prompt used during tag_room."""
+        response = self._vl_model.query(image, self._VLM_SIMPLE_BBOX_PROMPT)
+        if not response or not str(response).strip():
+            return []
+        items = parse_simple_bbox_line(str(response).strip())
+        logger.info(
+            "[room_scan] list VLM recognition: %d object(s) — %s",
+            len(items),
+            ", ".join(str(o.get("name", "")) for o in items[:8]),
+        )
+        return items
+
+    @staticmethod
+    def _bbox_area_0to1000(bbox: list[int] | list[float]) -> float:
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+        return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+    def _pick_object_from_recognition(
+        self,
+        items: list[dict[str, Any]],
+        target_name: str,
+    ) -> dict[str, Any] | None:
+        """Pick one object entry from a simple-format VLM recognition list."""
+        want = _normalize_vlm_object_name(target_name)
+        candidates = [
+            item
+            for item in items
+            if _normalize_vlm_object_name(str(item.get("name", ""))) == want
+        ]
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        return max(
+            candidates,
+            key=lambda item: self._bbox_area_0to1000(list(item.get("bbox", []))),
+        )
+
+    def _bbox_from_simple_recognition_item(self, item: dict[str, Any]) -> BBox | None:
+        bbox_list = item.get("bbox")
+        if not isinstance(bbox_list, list) or len(bbox_list) != 4 or self._latest_image is None:
+            return None
+        return _scale_bbox_to_image(
+            (float(bbox_list[0]), float(bbox_list[1]), float(bbox_list[2]), float(bbox_list[3])),
+            self._latest_image,
+        )
+
+    def _detect_and_servo_by_list_recognition(self, target_name: str) -> str | None:
+        """Re-run tag-style list recognition on the current frame; match by object name."""
+        if self._latest_image is None:
+            return None
+        try:
+            items = self._recognize_objects_simple(self._latest_image)
+        except Exception:
+            logger.exception("[room_scan] VLM list recognition failed for '%s'", target_name)
+            return None
+
+        want = _normalize_vlm_object_name(target_name)
+        seen = [_normalize_vlm_object_name(str(item.get("name", ""))) for item in items]
+        if want not in seen:
+            logger.info(
+                "[room_scan] '%s' not in recognition list %s — continue rotating",
+                want,
+                seen or ["(empty)"],
+            )
+            return None
+
+        obj = self._pick_object_from_recognition(items, target_name)
+        if obj is None:
+            return None
+
+        bbox = self._bbox_from_simple_recognition_item(obj)
+        if bbox is None:
+            return None
+        if not self._bbox_reasonable_for_tracking(bbox):
+            logger.warning(
+                "[room_scan] bbox for '%s' unreasonable after list recognition: %s",
+                want,
+                bbox,
+            )
+            return None
+
+        logger.info(
+            "[room_scan] ✓ '%s' in list at bbox=%s, servoing ...", want, obj.get("bbox")
+        )
+        if not self._servo_to_bbox(bbox):
+            logger.warning("[room_scan] servo rotation failed for '%s'", want)
+            return None
+        logger.info("[room_scan] ✓ servoed to '%s' via list recognition", want)
+        return f"Visually acquired '{want}' (list recognition)"
+
     def _scan_room_for_object(
-        self, target_name: str, *, stored_yaw: float | None = None
+        self,
+        target_name: str,
+        *,
+        stored_yaw: float | None = None,
     ) -> str | None:
         """360° in-room search: optional stored bearing, then detect + N rotations."""
-        step_deg = _rotation_step_deg()
-        n_steps = _panorama_rotations()
+        step_deg = _search_rotation_step_deg()
+        # Auto-calculate rotations to cover full 360° (ceil so last step
+        # overlaps slightly rather than leaving a gap).
+        n_steps = max(1, int(math.ceil(360.0 / step_deg)))
 
         if stored_yaw is not None:
             euler = self._odom_euler_tuple()
@@ -1513,11 +1652,16 @@ class NavigationSkillContainer(Module):
             step_deg,
             n_steps,
         )
+        logger.info(
+            "[room_scan] rotation scan for '%s' uses list recognition (not query prompt)",
+            target_name,
+        )
+
         for step in range(n_steps):
             self._rotate_in_place_degrees(step_deg)
             time.sleep(0.5)
             try:
-                result = self._detect_and_servo(target_name)
+                result = self._detect_and_servo_by_list_recognition(target_name)
                 if result:
                     logger.info(
                         "[room_scan] ✓ '%s' found at scan step %d/%d",
@@ -1528,7 +1672,7 @@ class NavigationSkillContainer(Module):
                     return result
             except Exception:
                 logger.exception(
-                    "[room_scan] detect-and-servo error for '%s' at step %d/%d",
+                    "[room_scan] detect error for '%s' at step %d/%d",
                     target_name,
                     step + 1,
                     n_steps,

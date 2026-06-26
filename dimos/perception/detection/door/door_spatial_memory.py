@@ -126,6 +126,10 @@ class SpatialLandmarkMemory:
                     by_name.state = rec.state
                 if rec.image_snapshot_path:
                     by_name.image_snapshot_path = rec.image_snapshot_path
+                if rec.metadata:
+                    if by_name.metadata is None:
+                        by_name.metadata = {}
+                    by_name.metadata.update(rec.metadata)
                 self._dirty = True
                 self._auto_save()
                 return by_name.record_id
@@ -144,6 +148,13 @@ class SpatialLandmarkMemory:
                     by_name.confidence = rec.confidence
                 if rec.image_snapshot_path:
                     by_name.image_snapshot_path = rec.image_snapshot_path
+                # Merge metadata: keep existing keys, update with new values.
+                # Critical for room_name — when an object is re-detected in a
+                # different room, the metadata must reflect the latest observation.
+                if rec.metadata:
+                    if by_name.metadata is None:
+                        by_name.metadata = {}
+                    by_name.metadata.update(rec.metadata)
                 self._dirty = True
                 self._auto_save()
                 return by_name.record_id
@@ -163,6 +174,10 @@ class SpatialLandmarkMemory:
                 existing.confidence = rec.confidence
             if rec.image_snapshot_path:
                 existing.image_snapshot_path = rec.image_snapshot_path
+            if rec.metadata:
+                if existing.metadata is None:
+                    existing.metadata = {}
+                existing.metadata.update(rec.metadata)
             self._dirty = True
             self._auto_save()
             return existing.record_id
