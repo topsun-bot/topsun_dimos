@@ -27,7 +27,7 @@ from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
-from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
+from dimos.visualization.vis_module import vis_module
 
 _logger = logging.getLogger(__name__)
 
@@ -154,55 +154,36 @@ def _go2_rerun_blueprint() -> Any:
 
 rerun_config = {
     "blueprint": _go2_rerun_blueprint,
-    # any pubsub that supports subscribe_all and topic that supports str(topic)
-    # is acceptable here. macOS publishes color_image over pSHMTransport so we
-    # add a SHM subscriber alongside the default LCM one.
+    # macOS publishes color_image over pSHMTransport so we add a SHM subscriber
+    # alongside the default LCM one.
     "pubsubs": [LCM(), _ColorImageSHMSubscriber()] if platform.system() != "Linux" else [LCM()],
-    # Custom converters for specific rerun entity paths
-    # Normally all these would be specified in their respectative modules
-    # Until this is implemented we have central overrides here
-    #
-    # This is unsustainable once we move to multi robot etc
     "visual_override": {
         "world/camera_info": _convert_camera_info,
         "world/global_map": _convert_global_map,
         "world/navigation_costmap": _convert_navigation_costmap,
     },
     "max_hz": {
-        "world/global_map": 0,  # publishes at ~7.8 Hz
-        "world/color_image": 0,  # publishes at ~14 Hz
-        "world/global_costmap": 0,  # publishes at ~7.6 Hz
+        "world/global_map": 2,
+        "world/color_image": 5,
+        "world/global_costmap": 2,
     },
-    # slapping a go2 shaped box on top of tf/base_link
+    "memory_limit": "2GB",
     "static": {
         "world/tf/base_link": _static_base_link,
     },
 }
 
-
-if global_config.viewer == "foxglove":
-    from dimos.robot.foxglove_bridge import FoxgloveBridge
-
-    with_vis = autoconnect(
-        _transports_base,
-        FoxgloveBridge.blueprint(shm_channels=["/color_image#sensor_msgs.Image"]),
-    )
-elif global_config.viewer.startswith("rerun"):
-    from dimos.visualization.rerun.bridge import RerunBridgeModule, _resolve_viewer_mode
-
-    with_vis = autoconnect(
-        _transports_base,
-        RerunBridgeModule.blueprint(viewer_mode=_resolve_viewer_mode(), **rerun_config),
-    )
-else:
-    with_vis = _transports_base
-
+_with_vis = vis_module(
+    viewer_backend=global_config.viewer,
+    rerun_config=rerun_config,
+    foxglove_config={"shm_channels": ["/color_image#sensor_msgs.Image"]},
+)
 
 unitree_go2_basic = (
     autoconnect(
-        with_vis,
+        _transports_base,
+        _with_vis,
         GO2Connection.blueprint(),
-        WebsocketVisModule.blueprint(),
     )
     .global_config(n_workers=4, robot_model="unitree_go2")
     .configurators(ClockSyncConfigurator())
