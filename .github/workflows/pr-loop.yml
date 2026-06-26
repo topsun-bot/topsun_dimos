@@ -1,0 +1,64 @@
+name: PR Loop
+
+# Codex verdict handler. PR Gate does the rest (CI + auto-merge).
+# When Codex submits a review with P0/P1 inline comments on an open PR,
+# this workflow asks @claude to fix.
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  claude-fix:
+    if: github.event.review.user.login == 'chatgpt-codex-connector[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.state !== 'open') {
+              core.info(`PR #${pr.number} is ${pr.state} — skip.`);
+              return;
+            }
+
+            const headSha = pr.head.sha;
+            const { data: comments } = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr.number, per_page: 100,
+            });
+            const codex = comments.filter(c => c.user.login === 'chatgpt-codex-connector[bot]');
+            const current = codex.filter(c =>
+              c.commit_id === headSha && (c.body.includes('[P0') || c.body.includes('[P1'))
+            );
+            // Skip template refires already raised on older commits.
+            const novel = current.filter(cur =>
+              !codex.some(prev =>
+                prev.commit_id !== headSha &&
+                prev.path === cur.path &&
+                prev.body.substring(0, 120) === cur.body.substring(0, 120)
+              )
+            );
+            if (novel.length === 0) {
+              core.info(`No novel P0/P1 issues on ${headSha} — nothing to fix.`);
+              return;
+            }
+
+            const token  = process.env.PAT_TOKEN;
+            const client = token ? require('@actions/github').getOctokit(token) : github;
+            await client.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: pr.number,
+              body:
+                '@claude Please fix the P0 and P1 issues raised in the Codex review above. ' +
+                'Make minimal changes, do not modify unrelated files.',
+            });
+            core.info(`Posted @claude fix request on PR #${pr.number}.`);

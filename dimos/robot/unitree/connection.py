@@ -95,6 +95,7 @@ class SerializableVideoFrame:
 
 class UnitreeWebRTCConnection(Resource):
     _SPORT_API_ID_RAGEMODE: int = 2059
+    _SPORT_API_ID_FREEAVOID: int = 2048
 
     def __init__(self, ip: str, mode: str = "ai", aes_128_key: str | None = None) -> None:
         self.ip = ip
@@ -332,6 +333,36 @@ class UnitreeWebRTCConnection(Resource):
         self.publish_request(
             RTC_TOPIC["OBSTACLES_AVOID"],
             {"api_id": 1001, "parameter": {"enable": int(enabled)}},
+        )
+
+    def free_avoid(self, enabled: bool = True) -> bool:
+        """Toggle SportClient's hidden AI obstacle-avoidance (FreeAvoid).
+
+        Mirrors Unitree's official SDK call:
+            int32_t SportClient::FreeAvoid(bool flag);
+        with constants:
+            ROBOT_SPORT_API_ID_FREEAVOID = 2048
+            topic = "rt/api/sport/request"  (== RTC_TOPIC["SPORT_MOD"])
+            parameter is serialised via JsonizeDataBool with the field "data".
+
+        This switch is not exposed via the Go2 app or remote controller. It is
+        sport-mode-embedded and orthogonal to ObstaclesAvoidClient.SwitchSet
+        (`set_obstacle_avoidance`, api_id=1001) — they may be enabled together.
+        The robot must already be in sport mode and have completed
+        `balance_stand` before calling this, otherwise the request may be
+        rejected on the device side.
+
+        Args:
+            enabled: True to turn FreeAvoid on, False to turn it off.
+
+        Returns:
+            bool: True if the device acknowledged the request, False otherwise.
+        """
+        return bool(
+            self.publish_request(
+                RTC_TOPIC["SPORT_MOD"],
+                {"api_id": self._SPORT_API_ID_FREEAVOID, "parameter": {"data": bool(enabled)}},
+            )
         )
 
     def free_walk(self) -> bool:

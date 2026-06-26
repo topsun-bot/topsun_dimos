@@ -1,0 +1,193 @@
+name: PR Gate
+
+# PR Gate runs on GitHub-hosted runners and, after its own tests pass,
+# waits for the other check runs on the PR to settle and squash-merges
+# the PR if everything came back green. This keeps the merge decision
+# self-contained — no cross-workflow workflow_run trigger needed.
+
+on:
+  push:
+    branches: [main, dev]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+
+concurrency:
+  group: pr-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-gate:
+    name: pr-gate
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # 20-min envelope = head steps (~3 min) + 12-min wait window + 5-min merge
+    # buffer, so a green PR is never killed while waiting on Codex feedback.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install fast-path test deps
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-timeout
+
+      - name: Syntax check
+        run: |
+          python3 -m compileall -q dimos/
+
+      - name: Fast tests
+        run: |
+          if [ -d tests ]; then
+            python3 -m pytest tests/ -v --tb=short -m "not slow" --timeout=30 --noconftest
+          else
+            echo "no top-level tests/ dir on this branch — skipping pytest"
+          fi
+
+      - name: Request @codex review (advisory)
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/github-script@v7
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number,
+            });
+            const reviewed = reviews.some(r =>
+              r.user.login === 'chatgpt-codex-connector[bot]' && r.commit_id === pr.head.sha
+            );
+            if (reviewed) { core.info('Codex already reviewed this HEAD.'); return; }
+            const token = process.env.PAT_TOKEN;
+            const client = token ? require('@actions/github').getOctokit(token) : github;
+            try {
+              await client.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: pr.number, body: '@codex review',
+              });
+              core.info('Posted @codex review (advisory).');
+            } catch (e) { core.warning(`@codex review post failed: ${e.message}`); }
+
+      - name: Wait for checks, surface Codex feedback, auto-merge if clean
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/github-script@v7
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+          script: |
+            const pr      = context.payload.pull_request;
+            const headSha = pr.head.sha;
+            const SELF    = 'pr-gate';
+            const CODEX   = 'chatgpt-codex-connector[bot]';
+
+            // Wait up to 12 min for every other check_run AND a Codex review on this HEAD.
+            const deadline = Date.now() + 12 * 60 * 1000;
+            while (Date.now() < deadline) {
+              const [{ data: checks }, { data: reviews }] = await Promise.all([
+                github.rest.checks.listForRef({
+                  owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100,
+                }),
+                github.rest.pulls.listReviews({
+                  owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
+                }),
+              ]);
+              const pending = checks.check_runs.filter(r => r.name !== SELF && r.status !== 'completed');
+              const codexDone = reviews.some(r => r.user.login === CODEX && r.commit_id === headSha);
+              if (pending.length === 0 && codexDone) break;
+              const reasons = [];
+              if (pending.length) reasons.push(`checks: ${pending.map(p => `${p.name}(${p.status})`).join(', ')}`);
+              if (!codexDone)     reasons.push('codex review not yet on this HEAD');
+              core.info(`waiting — ${reasons.join(' | ')}`);
+              await new Promise(r => setTimeout(r, 20000));
+            }
+
+            // Final fetch of state
+            const [{ data: final }, { data: comments }, { data: reviews }] = await Promise.all([
+              github.rest.checks.listForRef({
+                owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100,
+              }),
+              github.rest.pulls.listReviewComments({
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
+              }),
+              github.rest.pulls.listReviews({
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
+              }),
+            ]);
+
+            const others = final.check_runs.filter(r => r.name !== SELF);
+            const bad    = others.filter(r => !['success', 'skipped', 'neutral'].includes(r.conclusion));
+            if (bad.length) {
+              core.info(`not merging — not green: ${bad.map(b => `${b.name}=${b.conclusion ?? b.status}`).join(', ')}`);
+              return;
+            }
+
+            const codexInline = comments.filter(c =>
+              c.user.login === CODEX && c.commit_id === headSha
+            );
+            const sev = body => body.includes('[P0') ? 'P0'
+                              : body.includes('[P1') ? 'P1'
+                              : body.includes('[P2') ? 'P2'
+                              : (/P0 Badge/.test(body) ? 'P0'
+                                : /P1 Badge/.test(body) ? 'P1'
+                                : /P2 Badge/.test(body) ? 'P2' : 'P?');
+            const counts = { P0: 0, P1: 0, P2: 0, 'P?': 0 };
+            for (const c of codexInline) counts[sev(c.body)] += 1;
+
+            // Always echo Codex feedback to the PR conversation so it's visible
+            const codexReview = reviews.find(r => r.user.login === CODEX && r.commit_id === headSha);
+            if (codexInline.length || codexReview) {
+              const lines = [`### 🔎 Codex feedback on \`${headSha.slice(0,7)}\``];
+              lines.push(`P0: ${counts.P0} · P1: ${counts.P1} · P2: ${counts.P2}` +
+                         (counts['P?'] ? ` · unclassified: ${counts['P?']}` : ''));
+              if (codexInline.length) {
+                lines.push('', '<details><summary>Inline comments</summary>', '');
+                for (const c of codexInline) {
+                  const line = c.line || c.original_line || '?';
+                  lines.push(`- **${sev(c.body)}** \`${c.path}:${line}\` — ${c.body.split('\\n')[0].slice(0, 200)}`);
+                }
+                lines.push('', '</details>');
+              }
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: pr.number, body: lines.join('\n'),
+                });
+              } catch (e) { core.warning(`summary post failed: ${e.message}`); }
+            }
+
+            if (counts.P0 + counts.P1 > 0) {
+              core.info(`not merging — Codex flagged ${counts.P0} P0 + ${counts.P1} P1 issue(s).`);
+              return;
+            }
+
+            const advisoryNote = counts.P2 ? ` (Codex left ${counts.P2} P2 advisory)` : '';
+            try {
+              await github.rest.pulls.merge({
+                owner:          context.repo.owner,
+                repo:           context.repo.repo,
+                pull_number:    pr.number,
+                merge_method:   'squash',
+                commit_title:   `${pr.title} (#${pr.number})`,
+                commit_message: `Auto-merged: all checks passed${advisoryNote}.`,
+                sha:            headSha,
+              });
+              core.info(`PR #${pr.number} merged${advisoryNote}.`);
+            } catch (e) {
+              core.warning(`merge failed: ${e.message}`);
+            }
