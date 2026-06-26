@@ -219,7 +219,12 @@ def _nav_container() -> NavigationSkillContainer:
     nav._sweep_skip_rooms = set()
     nav._memory_session_id = "session_current"
     nav._persisted_to_current = None
+    nav._metric_reloc_ready = False
     nav._metric_relocalization = None
+    nav._latest_odom = None
+    nav._latest_image = None
+    nav._landmark_memory = SimpleNamespace(get_all=lambda: [])
+    nav._spatial_memory = SimpleNamespace(query_location_by_image=lambda _img: None)
     return nav
 
 
@@ -577,6 +582,7 @@ def test_stop_all_motion_cancels_tracking_and_recovers() -> None:
 
 
 def test_coordinate_frame_stale_detected_from_visual_room_mismatch() -> None:
+    """Odom-frame landmarks are rejected before visual drift heuristics run."""
     nav = _nav_container()
     nav._room_visual_max_distance = 0.35
     nav._latest_image = SimpleNamespace(data=object())
@@ -598,7 +604,7 @@ def test_coordinate_frame_stale_detected_from_visual_room_mismatch() -> None:
     reason = nav._coordinate_frame_stale_reason(room)
 
     assert reason is not None
-    assert "old odom frame" in reason
+    assert "odom coordinates" in reason
 
 
 def test_relocalization_transform_maps_persisted_record_to_current_frame() -> None:
@@ -674,6 +680,7 @@ def test_odom_pose_to_persisted_frame_uses_transform() -> None:
 def test_relocalization_transform_suppresses_stale_coordinate_warning() -> None:
     nav = _nav_container()
     nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
+    nav._metric_reloc_ready = True
     nav._latest_odom = _pose(2.0, 0.0)
     nav._latest_image = SimpleNamespace(data=object())
     old_room = SpatialRecord(
@@ -681,9 +688,56 @@ def test_relocalization_transform_suppresses_stale_coordinate_warning() -> None:
         record_type=RecordType.ROOM,
         position=(12.0, 0.0, 0.0),
         session_id="session_old",
+        metadata={"coordinate_frame": "map"},
     )
 
     assert nav._coordinate_frame_stale_reason(old_room) is None
+
+
+def test_odom_landmark_not_trusted_after_restart() -> None:
+    nav = _nav_container()
+    nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
+    nav._metric_reloc_ready = True
+    record = SpatialRecord(
+        name="垃圾桶",
+        record_type=RecordType.LANDMARK,
+        position=(5.0, 3.0, 0.0),
+        session_id="session_current",
+    )
+
+    reason = nav._coordinate_frame_stale_reason(record)
+
+    assert reason is not None
+    assert "odom coordinates" in reason
+
+
+def test_map_landmark_requires_metric_reloc() -> None:
+    nav = _nav_container()
+    record = SpatialRecord(
+        name="垃圾桶",
+        record_type=RecordType.LANDMARK,
+        position=(5.0, 3.0, 0.0),
+        metadata={"coordinate_frame": "map"},
+    )
+
+    reason = nav._coordinate_frame_stale_reason(record)
+
+    assert reason is not None
+    assert "not ready" in reason
+
+
+def test_map_landmark_trusted_after_metric_reloc() -> None:
+    nav = _nav_container()
+    nav.set_persisted_to_current_transform(10.0, 0.0, 0.0)
+    nav._metric_reloc_ready = True
+    record = SpatialRecord(
+        name="垃圾桶",
+        record_type=RecordType.LANDMARK,
+        position=(5.0, 3.0, 0.0),
+        metadata={"coordinate_frame": "map"},
+    )
+
+    assert nav._coordinate_frame_stale_reason(record) is None
 
 
 def test_metric_relocalize_sets_navigation_transform() -> None:
@@ -703,6 +757,7 @@ def test_metric_relocalize_sets_navigation_transform() -> None:
 
     assert "succeeded" in msg
     assert nav._persisted_to_current is not None
+    assert nav._metric_reloc_ready is True
     assert nav._persisted_to_current.x == pytest.approx(10.0)
     assert nav._persisted_to_current.y == pytest.approx(-2.0)
     assert nav._persisted_to_current.yaw == pytest.approx(0.0)
@@ -722,6 +777,7 @@ def test_metric_relocalize_failure_does_not_set_transform() -> None:
 
     assert "failed" in msg
     assert nav._persisted_to_current is None
+    assert nav._metric_reloc_ready is False
 
 
 @pytest.mark.slow

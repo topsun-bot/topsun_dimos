@@ -311,6 +311,7 @@ class NavigationSkillContainer(Module):
     _frontier_explorer: WavefrontFrontierExplorer | None = None
     _memory_session_id: str = ""
     _persisted_to_current: PlanarFrameTransform | None = None
+    _metric_reloc_ready: bool = False
 
     color_image: In[Image]
     odom: In[PoseStamped]
@@ -321,6 +322,7 @@ class NavigationSkillContainer(Module):
         self._memory_session_id = f"session_{int(time.time())}"
         self._sweep_skip_rooms: set[str] = set()
         self._persisted_to_current = None
+        self._metric_reloc_ready = False
 
         self._vl_model = _create_vl_model()
         _log_vlm_runtime_config(self._vl_model)
@@ -331,6 +333,13 @@ class NavigationSkillContainer(Module):
         self.register_disposable(Disposable(self.color_image.subscribe(self._on_color_image)))
         self.register_disposable(Disposable(self.odom.subscribe(self._on_odom)))
         self._skill_started = True
+        self._metric_reloc_ready = False
+        self._persisted_to_current = None
+        logger.info(
+            "Navigation session %s started; awaiting metric relocalization before "
+            "trusting map-frame landmarks.",
+            self._memory_session_id,
+        )
         threading.Thread(
             target=self._auto_metric_relocalize_once,
             daemon=True,
@@ -370,8 +379,14 @@ class NavigationSkillContainer(Module):
         return True
 
     @rpc
+    def is_metric_reloc_ready(self) -> bool:
+        """Return True once startup (or manual) metric relocalization has succeeded."""
+        return self._metric_reloc_ready
+
+    @rpc
     def clear_persisted_to_current_transform(self) -> bool:
         self._persisted_to_current = None
+        self._metric_reloc_ready = False
         logger.info("Cleared map_from_current transform.")
         return True
 
@@ -385,7 +400,14 @@ class NavigationSkillContainer(Module):
         try:
             # 360° rotation first → builds a much larger local costmap with
             # distinctive features in all directions.
-            result = self.relocalize_with_metric_map(scan=True, publish_on_success=True)
+            search_radius_m = float(
+                os.getenv("DIMOS_METRIC_RELOCALIZE_SEARCH_RADIUS_M", "5.0")
+            )
+            result = self.relocalize_with_metric_map(
+                scan=True,
+                publish_on_success=True,
+                search_radius_m=search_radius_m,
+            )
             logger.info("Startup metric relocalization result: %s", result)
         except Exception:
             logger.warning("Startup metric relocalization failed", exc_info=True)
@@ -419,6 +441,7 @@ class NavigationSkillContainer(Module):
         ty = float(result["map_from_current_y"])
         yaw = float(result["map_from_current_yaw"])
         self.set_persisted_to_current_transform(tx, ty, yaw)
+        self._metric_reloc_ready = True
 
         if publish_on_success:
             if abs(math.sin(yaw)) < 0.2:
@@ -461,6 +484,21 @@ class NavigationSkillContainer(Module):
         mx, my = self._persisted_to_current.from_current(x, y)
         myaw = self._persisted_to_current.yaw_from_current(yaw)
         return (mx, my, z, myaw, "map")
+
+    def _landmark_coordinate_trust_reason(self, record: SpatialRecord) -> str | None:
+        """Return a human-readable reason when a record must not be used for navigation."""
+        frame = str(record.metadata.get("coordinate_frame", "odom"))
+        if frame == "map":
+            if not self._metric_reloc_ready or self._persisted_to_current is None:
+                return (
+                    "Landmark is in map coordinates but metric relocalization is not ready. "
+                    "Wait for startup relocalization or call relocalize_with_metric_map."
+                )
+            return None
+        return (
+            "Landmark was stored in odom coordinates and is not trusted after restart. "
+            "Complete metric relocalization, then re-tag rooms/objects in map frame."
+        )
 
     def _record_pose_in_navigation_frame(self, record: SpatialRecord) -> PoseStamped:
         x, y, z = record.position
@@ -616,6 +654,12 @@ class NavigationSkillContainer(Module):
             store_y,
             coord_frame,
         )
+        if coord_frame == "odom":
+            logger.warning(
+                "[tag_location] Stored '%s' in odom frame — not trusted for navigation "
+                "until metric relocalization succeeds; re-tag after relocalize.",
+                location_name,
+            )
 
         # One ROOM landmark per name (record() merges by name; snaps only add CLIP images).
         room_rec = SpatialRecord(
@@ -1209,6 +1253,10 @@ class NavigationSkillContainer(Module):
 
     def _coordinate_frame_stale_reason(self, target: SpatialRecord) -> str | None:
         """Detect persisted coordinates that no longer match the current odom frame."""
+        trust_reason = self._landmark_coordinate_trust_reason(target)
+        if trust_reason:
+            return trust_reason
+
         if self._should_transform_persisted_record(target):
             return None
 
