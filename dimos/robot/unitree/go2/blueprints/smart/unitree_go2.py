@@ -19,6 +19,7 @@ from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.stream import In
 from dimos.mapping.costmapper import CostMapper
+from dimos.mapping.pointclouds.occupancy import HeightCostConfig
 from dimos.mapping.voxels import VoxelGridMapper
 from dimos.memory2.module import Recorder, RecorderConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -42,6 +43,7 @@ unitree_go2 = autoconnect(
         load_persistent_map_on_start=True,
         publish_persistent_map_on_start=True,
         auto_save_interval_s=None,
+        config=HeightCostConfig(resolution=0.1),
     ),
     ReplanningAStarPlanner.blueprint(),
     WavefrontFrontierExplorer.blueprint(),

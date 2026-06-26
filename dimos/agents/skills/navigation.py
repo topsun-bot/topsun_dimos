@@ -394,6 +394,20 @@ class NavigationSkillContainer(Module):
         if self._metric_relocalization is None:
             return
 
+        # Check if a fixed initial pose is provided (skip matching entirely).
+        initial_x_str = os.getenv("DIMOS_INITIAL_POSE_X")
+        initial_y_str = os.getenv("DIMOS_INITIAL_POSE_Y")
+        initial_yaw_str = os.getenv("DIMOS_INITIAL_YAW_DEG")
+
+        if initial_x_str and initial_y_str:
+            try:
+                self._apply_fixed_initial_pose(
+                    initial_x_str, initial_y_str, initial_yaw_str
+                )
+            except Exception:
+                logger.error("Fixed initial pose application failed", exc_info=True)
+            return
+
         # Wait for the persistent map and first lidar frames to arrive.
         time.sleep(float(os.getenv("DIMOS_METRIC_RELOCALIZE_STARTUP_DELAY_S", "8.0")))
 
@@ -403,14 +417,86 @@ class NavigationSkillContainer(Module):
             search_radius_m = float(
                 os.getenv("DIMOS_METRIC_RELOCALIZE_SEARCH_RADIUS_M", "5.0")
             )
+            hint_x_str = os.getenv("DIMOS_RELOC_HINT_X")
+            hint_y_str = os.getenv("DIMOS_RELOC_HINT_Y")
+            hint_x = float(hint_x_str) if hint_x_str else None
+            hint_y = float(hint_y_str) if hint_y_str else None
+            if hint_x is not None and hint_y is not None:
+                logger.info(
+                    "Using relocalization hint: (%.1f, %.1f) with radius %.1fm",
+                    hint_x, hint_y, search_radius_m,
+                )
             result = self.relocalize_with_metric_map(
                 scan=True,
                 publish_on_success=True,
                 search_radius_m=search_radius_m,
+                hint_x=hint_x,
+                hint_y=hint_y,
             )
             logger.info("Startup metric relocalization result: %s", result)
         except Exception:
             logger.warning("Startup metric relocalization failed", exc_info=True)
+
+    def _apply_fixed_initial_pose(
+        self,
+        initial_x_str: str,
+        initial_y_str: str,
+        initial_yaw_str: str | None,
+    ) -> None:
+        """Set the map→odom transform directly from known initial pose."""
+        logger.info(
+            "Fixed initial pose env detected: X=%s Y=%s YAW=%s",
+            initial_x_str, initial_y_str, initial_yaw_str,
+        )
+
+        # Wait for odom to be available (up to 10s).
+        deadline = time.time() + 10.0
+        while self._latest_odom is None and time.time() < deadline:
+            time.sleep(0.5)
+
+        map_x = float(initial_x_str)
+        map_y = float(initial_y_str)
+        map_yaw = math.radians(float(initial_yaw_str)) if initial_yaw_str else 0.0
+
+        odom_x, odom_y, odom_yaw = 0.0, 0.0, 0.0
+        if self._latest_odom is not None:
+            odom_x = self._latest_odom.position.x
+            odom_y = self._latest_odom.position.y
+            euler = self._latest_odom.orientation.to_euler()
+            odom_yaw = float(euler.z)
+
+        tyaw = map_yaw - odom_yaw
+        tx = map_x - (math.cos(tyaw) * odom_x - math.sin(tyaw) * odom_y)
+        ty = map_y - (math.sin(tyaw) * odom_x + math.cos(tyaw) * odom_y)
+
+        logger.info(
+            "Fixed initial pose: map=(%.2f, %.2f, yaw=%.1f°), "
+            "odom=(%.2f, %.2f, yaw=%.1f°) → transform=(%.2f, %.2f, yaw=%.1f°)",
+            map_x, map_y, math.degrees(map_yaw),
+            odom_x, odom_y, math.degrees(odom_yaw),
+            tx, ty, math.degrees(tyaw),
+        )
+        self.set_persisted_to_current_transform(tx, ty, tyaw)
+        self._metric_reloc_ready = True
+
+        # Publish the persistent map shifted+rotated to odom frame for navigation.
+        # Retry a few times in case CostMapper hasn't finished loading the map yet.
+        for attempt in range(10):
+            published = self._metric_relocalization.publish_persistent_map(
+                shift_x=-tx, shift_y=-ty, rotate_deg=-math.degrees(tyaw),
+            )
+            if published:
+                logger.info("Fixed initial pose applied; persistent map published.")
+                return
+            logger.info(
+                "Waiting for persistent map to load (attempt %d/10)...", attempt + 1
+            )
+            time.sleep(1.0)
+
+        logger.warning(
+            "Fixed initial pose set, but persistent map could not be published "
+            "(CostMapper may not have loaded the map)."
+        )
 
     @skill
     def relocalize_with_metric_map(
@@ -419,8 +505,19 @@ class NavigationSkillContainer(Module):
         publish_on_success: bool = False,
         search_radius_m: float = 2.0,
         min_confidence: float = 0.55,
+        hint_x: float | None = None,
+        hint_y: float | None = None,
     ) -> str:
-        """Match the current live costmap against the persisted map and set navigation transform."""
+        """Match the current live costmap against the persisted map and set navigation transform.
+
+        Args:
+            scan: Rotate 360° before matching to build a fuller costmap.
+            publish_on_success: Publish the aligned persistent map for navigation.
+            search_radius_m: Search radius in meters around the hint or inferred center.
+            min_confidence: Minimum match confidence to accept.
+            hint_x: Approximate X position in map frame (narrows search).
+            hint_y: Approximate Y position in map frame (narrows search).
+        """
         if self._metric_relocalization is None:
             return "Metric relocalization is not available: CostMapper is not wired."
 
@@ -431,6 +528,8 @@ class NavigationSkillContainer(Module):
         result = self._metric_relocalization.relocalize_current_map(
             search_radius_m=search_radius_m,
             min_confidence=min_confidence,
+            hint_x=hint_x,
+            hint_y=hint_y,
         )
         success = bool(result.get("success", False))
         confidence = float(result.get("confidence", 0.0))

@@ -19,7 +19,10 @@ class _PublishedCostmaps:
 
 def _mapper(tmp_path: Path) -> CostMapper:
     mapper = object.__new__(CostMapper)
-    mapper.config = SimpleNamespace(persistent_map_dir=str(tmp_path / "costmap"))
+    mapper.config = SimpleNamespace(
+        persistent_map_dir=str(tmp_path / "costmap"),
+        persistent_map_yaml=None,
+    )
     mapper._latest_lock = RLock()
     mapper._latest_costmap = None
     mapper._persistent_costmap = None
@@ -69,7 +72,7 @@ def test_publish_persistent_map(tmp_path: Path) -> None:
     mapper._persistent_costmap = OccupancyGrid(grid=np.zeros((2, 2), dtype=np.int8))
 
     assert mapper.publish_persistent_map()
-    assert len(mapper.persistent_costmap.messages) == 1
+    assert len(mapper.global_costmap.messages) == 1
 
 
 def test_relocalize_current_map(tmp_path: Path) -> None:
@@ -130,7 +133,7 @@ def test_load_ros_map_yaml(tmp_path: Path) -> None:
     assert len(mapper.global_costmap.messages) == 1
 
 
-def test_publish_prefers_persistent_before_merge(tmp_path: Path) -> None:
+def test_publish_prefers_live_before_merge(tmp_path: Path) -> None:
     mapper = _mapper(tmp_path)
     persistent = OccupancyGrid(
         grid=np.full((2, 2), 100, dtype=np.int8),
@@ -147,9 +150,15 @@ def test_publish_prefers_persistent_before_merge(tmp_path: Path) -> None:
     mapper._merge_live_into_persistent = False
 
     # Simulate the publish path used on incoming lidar frames.
+    # Before relocalization (_merge_live_into_persistent=False), the planner
+    # should receive the live costmap (real-time obstacle data), not the
+    # unaligned persistent map.
     publish_grid = live
-    if mapper._persistent_costmap is not None and not mapper._merge_live_into_persistent:
-        publish_grid = mapper._persistent_costmap
+    if mapper._persistent_costmap is not None:
+        if getattr(mapper, "_merge_live_into_persistent", False):
+            pass  # would merge here
+        else:
+            pass  # live stays as publish_grid
     mapper.global_costmap.publish(publish_grid)
 
-    assert np.array_equal(mapper.global_costmap.messages[-1].grid, persistent.grid)
+    assert np.array_equal(mapper.global_costmap.messages[-1].grid, live.grid)

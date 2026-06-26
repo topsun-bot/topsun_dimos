@@ -279,10 +279,14 @@ class _FakeMetricRelocalization:
         min_compared_cells: int = 20,
         min_occupied_cells: int = 1,
         min_confidence: float = 0.55,
+        hint_x: float | None = None,
+        hint_y: float | None = None,
     ) -> dict[str, float | int | bool]:
         return self.result
 
-    def publish_persistent_map(self, shift_x: float = 0.0, shift_y: float = 0.0) -> bool:
+    def publish_persistent_map(
+        self, shift_x: float = 0.0, shift_y: float = 0.0, rotate_deg: float = 0.0
+    ) -> bool:
         self.published = True
         return True
 

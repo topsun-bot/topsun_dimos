@@ -90,8 +90,12 @@ class CostMapper(Module):
                                 merged.origin.position.y,
                             )
                     else:
-                        # Static / pre-relocalization persistent map drives planning.
-                        publish_grid = self._persistent_costmap
+                        # Before relocalization, still publish the live costmap so
+                        # that the A* planner uses real-time obstacle data.
+                        # The persistent map is only merged after
+                        # _merge_live_into_persistent is explicitly set to True
+                        # (post-relocalization).
+                        pass
             self.global_costmap.publish(publish_grid)
 
         def _calculate_and_time(
@@ -110,17 +114,7 @@ class CostMapper(Module):
         )
 
         if self.config.load_persistent_map_on_start:
-            self.load_map(publish=self.config.publish_persistent_map_on_start)
-            # Re-publish persistent map after the Rerun bridge LCM listener is ready.
-            import threading as _threading
-
-            _threading.Thread(
-                target=lambda: (
-                    time.sleep(4.0),
-                    self.publish_persistent_map(),
-                ),
-                daemon=True,
-            ).start()
+            self.load_map(publish=False)
 
         if self.config.auto_save_interval_s is not None:
             self.register_disposable(
@@ -253,13 +247,23 @@ class CostMapper(Module):
 
         if publish:
             self.global_costmap.publish(grid)
+            self.persistent_costmap.publish(grid)
 
-        self.persistent_costmap.publish(grid)
         logger.info("Loaded persistent costmap.", path=str(map_path))
         return True
 
     @rpc
-    def publish_persistent_map(self, shift_x: float = 0.0, shift_y: float = 0.0) -> bool:
+    def publish_persistent_map(
+        self, shift_x: float = 0.0, shift_y: float = 0.0, rotate_deg: float = 0.0
+    ) -> bool:
+        """Publish the persistent map transformed into the odom frame.
+
+        The caller passes the *inverse* of map_from_current as shift + rotate:
+          shift_x = -tx, shift_y = -ty, rotate_deg = -tyaw_deg
+        This function applies: for each world point P_map in the grid,
+          P_odom = R(rotate_deg) * (P_map - grid_center) + grid_center + (shift_x, shift_y)
+        However we implement this as a grid-level remap for efficiency.
+        """
         with self._latest_lock:
             persistent = self._persistent_costmap
 
@@ -267,17 +271,87 @@ class CostMapper(Module):
             return False
 
         self._merge_live_into_persistent = True
-        self.persistent_costmap.publish(persistent)
 
-        if shift_x != 0.0 or shift_y != 0.0:
+        needs_shift = shift_x != 0.0 or shift_y != 0.0
+        needs_rotate = abs(rotate_deg) > 0.5
+
+        if needs_shift or needs_rotate:
+            import numpy as np
+
+            grid = persistent.grid
+            res = persistent.resolution
+            old_H, old_W = grid.shape
+            ox = persistent.origin.position.x
+            oy = persistent.origin.position.y
+
+            if needs_rotate:
+                angle_rad = math.radians(rotate_deg)
+                cos_a = math.cos(angle_rad)
+                sin_a = math.sin(angle_rad)
+
+                # The transform for each map point P_map to odom:
+                #   P_odom = R(angle) * (P_map + (shift_x, shift_y))
+                # where R is rotation around the WORLD ORIGIN (0,0).
+                # Equivalently: shift first, then rotate around origin.
+
+                # Compute rotated bounding box of the shifted grid
+                shifted_corners = [
+                    (ox + shift_x, oy + shift_y),
+                    (ox + old_W * res + shift_x, oy + shift_y),
+                    (ox + old_W * res + shift_x, oy + old_H * res + shift_y),
+                    (ox + shift_x, oy + old_H * res + shift_y),
+                ]
+                rotated_corners = []
+                for wx, wy in shifted_corners:
+                    rx = cos_a * wx - sin_a * wy
+                    ry = sin_a * wx + cos_a * wy
+                    rotated_corners.append((rx, ry))
+
+                new_min_x = min(c[0] for c in rotated_corners)
+                new_min_y = min(c[1] for c in rotated_corners)
+                new_max_x = max(c[0] for c in rotated_corners)
+                new_max_y = max(c[1] for c in rotated_corners)
+
+                new_ox = new_min_x
+                new_oy = new_min_y
+                new_W = int(math.ceil((new_max_x - new_min_x) / res))
+                new_H = int(math.ceil((new_max_y - new_min_y) / res))
+
+                # Inverse-map each new cell back to old grid (vectorized).
+                cols = np.arange(new_W, dtype=np.float32)
+                rows = np.arange(new_H, dtype=np.float32)
+                cc, rr = np.meshgrid(cols, rows)
+
+                # New world coords (cell centers) = odom coords
+                new_wx = new_ox + cc * res + res * 0.5
+                new_wy = new_oy + rr * res + res * 0.5
+
+                # Inverse: P_map = R(-angle) * P_odom - (shift_x, shift_y)
+                inv_cos = math.cos(-angle_rad)
+                inv_sin = math.sin(-angle_rad)
+                map_wx = inv_cos * new_wx - inv_sin * new_wy - shift_x
+                map_wy = inv_sin * new_wx + inv_cos * new_wy - shift_y
+
+                # Map to old grid indices
+                old_col = ((map_wx - ox) / res).astype(np.intp)
+                old_row = ((map_wy - oy) / res).astype(np.intp)
+
+                valid = (old_col >= 0) & (old_col < old_W) & (old_row >= 0) & (old_row < old_H)
+                new_grid = np.full((new_H, new_W), -1, dtype=np.int8)
+                new_grid[valid] = grid[old_row[valid], old_col[valid]]
+
+                origin_x = new_ox
+                origin_y = new_oy
+                result_grid = new_grid
+            else:
+                origin_x = ox + shift_x
+                origin_y = oy + shift_y
+                result_grid = grid
+
             shifted = OccupancyGrid(
-                grid=persistent.grid,
-                resolution=persistent.resolution,
-                origin=Pose(
-                    persistent.origin.position.x + shift_x,
-                    persistent.origin.position.y + shift_y,
-                    persistent.origin.position.z,
-                ),
+                grid=result_grid,
+                resolution=res,
+                origin=Pose(origin_x, origin_y, persistent.origin.position.z),
                 frame_id=persistent.frame_id,
                 ts=time.time(),
             )
@@ -285,8 +359,10 @@ class CostMapper(Module):
                 self._persistent_costmap = shifted
             self.global_costmap.publish(shifted)
             logger.info(
-                "Published shifted persistent costmap to global_costmap (shift %.2f, %.2f)",
-                shift_x, shift_y,
+                "Published transformed persistent costmap to global_costmap "
+                "(shift %.2f, %.2f, rotate %.1f°, size %dx%d)",
+                shift_x, shift_y, rotate_deg,
+                result_grid.shape[1], result_grid.shape[0],
             )
         else:
             self.global_costmap.publish(persistent)
@@ -301,6 +377,8 @@ class CostMapper(Module):
         min_compared_cells: int = 20,
         min_occupied_cells: int = 1,
         min_confidence: float = 0.55,
+        hint_x: float | None = None,
+        hint_y: float | None = None,
     ) -> dict[str, float | int | bool]:
         with self._latest_lock:
             persistent = self._persistent_costmap
@@ -323,6 +401,8 @@ class CostMapper(Module):
             min_compared_cells=min_compared_cells,
             min_occupied_cells=min_occupied_cells,
             min_confidence=min_confidence,
+            hint_x=hint_x,
+            hint_y=hint_y,
         )
         transform_x = result.x - current.origin.position.x
         transform_y = result.y - current.origin.position.y

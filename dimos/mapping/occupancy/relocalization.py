@@ -53,12 +53,17 @@ def match_occupancy_se2(
     min_compared_cells: int = 20,
     min_occupied_cells: int = 1,
     min_confidence: float = 0.55,
+    hint_x: float | None = None,
+    hint_y: float | None = None,
 ) -> OccupancyMatchResult:
     """Estimate where a local occupancy patch fits in a persistent map.
 
     The first implementation supports right-angle yaw candidates. That keeps the
     transform deterministic for grid cells while still handling common startup
     heading ambiguity. Arbitrary yaw can be added later with image resampling.
+
+    If hint_x/hint_y are provided, the search is centered on that map-frame
+    position instead of inferred from the local_map origin.
     """
     _validate_match_inputs(persistent_map, local_map)
 
@@ -66,12 +71,20 @@ def match_occupancy_se2(
     stride_cells = max(1, round((stride_m or resolution) / resolution))
     radius_cells = max(0, round(search_radius_m / resolution))
 
-    initial_dx_cells = round(
-        (local_map.origin.position.x - persistent_map.origin.position.x) / resolution
-    )
-    initial_dy_cells = round(
-        (local_map.origin.position.y - persistent_map.origin.position.y) / resolution
-    )
+    if hint_x is not None and hint_y is not None:
+        initial_dx_cells = round(
+            (hint_x - persistent_map.origin.position.x) / resolution
+        )
+        initial_dy_cells = round(
+            (hint_y - persistent_map.origin.position.y) / resolution
+        )
+    else:
+        initial_dx_cells = round(
+            (local_map.origin.position.x - persistent_map.origin.position.x) / resolution
+        )
+        initial_dy_cells = round(
+            (local_map.origin.position.y - persistent_map.origin.position.y) / resolution
+        )
 
     best_adjusted = -math.inf
     best_score = -math.inf
