@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| Go2 重定位调用链解读与注释 | `b3b88279` |
 | 查看/维护提交日志 | `af7df1395` |
 | Rerun 画面冻结 / 内存暴涨 | `58a9830b5` |
 | replay-db 找不到本地 .db | `58a9830b5` |
@@ -30,6 +31,49 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### b3b88279 — feat(relocalization): document call flow and annotate relocalization internals
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-06-30 17:21:31 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiang.tao` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/mapping/relocalization/module.py` | 增补重定位模块中文注释, 明确订阅链路、阈值和 TF/融合行为 |
+| `dimos/mapping/relocalization/relocalize.py` | 增补多尺度 RANSAC+ICP 细节注释, 解释缓存、候选筛选与重排逻辑 |
+
+**改进点**
+
+1. 将 `unitree-go2-relocalization` 从 CLI 到重定位核心算法的调用链解释补齐, 降低后续联调排障成本。
+2. 把 `map<-world` 与 `world<-map` 的坐标系转换意图写清楚, 降低 TF 使用和地图融合误用风险。
+3. 明确 `RELOC_INTERVAL`、`MIN_LOCAL_POINTS`、`fitness_threshold` 对性能与稳定性的影响, 便于现场调参。
+
+**用法**
+
+```bash
+# 真机启动重定位
+dimos run unitree-go2-relocalization --robot-ip 192.168.123.161 \
+  -o relocalizationmodule.map_file=recording_go2
+
+# 回放验证重定位
+dimos --replay --replay-db recording_go2 run unitree-go2-relocalization \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+**回滚**
+
+```bash
+git checkout b3b88279^ -- dimos/mapping/relocalization/module.py dimos/mapping/relocalization/relocalize.py
+# 或
+git reset --hard b3b88279^
+```
+
+---
 
 ### 8c5936431 — docs: update commit-readme for af7df1395
 
