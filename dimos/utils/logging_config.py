@@ -27,7 +27,7 @@ from typing import Any
 import structlog
 from structlog.processors import CallsiteParameter, CallsiteParameterAdder
 
-from dimos.constants import DIMOS_PROJECT_ROOT, LOG_DIR
+from dimos.constants import DIMOS_PROJECT_ROOT, resolve_log_dir
 
 # Suppress noisy loggers
 logging.getLogger("aiortc.codecs.h264").setLevel(logging.ERROR)
@@ -77,7 +77,7 @@ def get_run_log_dir() -> Path | None:
 
 
 def _get_log_directory() -> Path:
-    log_dir = LOG_DIR
+    log_dir = resolve_log_dir()
 
     try:
         log_dir.mkdir(parents=True, exist_ok=True)

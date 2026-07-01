@@ -25,7 +25,6 @@ from dimos.core.transport import pSHMTransport
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
-from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.visualization.vis_module import vis_module
 
@@ -141,9 +140,6 @@ def _go2_rerun_blueprint() -> Any:
                 line_grid=rrb.LineGrid3D(
                     plane=rr.components.Plane3D.XY.with_distance(0.5),
                 ),
-                overrides={
-                    "world/lidar": rrb.EntityBehavior(visible=False),
-                },
             ),
             column_shares=[1, 2],
         ),
@@ -164,6 +160,7 @@ rerun_config = {
         "world/navigation_costmap": _convert_navigation_costmap,
     },
     "max_hz": {
+        "world/lidar": 2,  # source ~7.8 Hz; default layer was hidden in blueprint
         "world/global_map": 2,  # source ~7.8 Hz
         "world/color_image": 5,  # source ~14 Hz
         "world/global_costmap": 2,  # source ~7.6 Hz

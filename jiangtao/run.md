@@ -3,15 +3,18 @@
 ## Step 1: 录制（真机遛一圈）
 
 ```bash
-dimos run unitree-go2-memory --robot-ip 192.168.123.161
+dimos --robot-ip 10.10.197.155 run unitree-go2-memory
 # 生成 recording_go2.db
 ```
 
 ## Step 2: 离线 PGO 导出 premap
 
+前置：需安装 `gtsam-extended`（`uv pip install "gtsam-extended>=4.3a1.post1"` 或 `uv sync --extra mapping`）。
+
 ```bash
 dimos map global recording_go2 --export
 # 生成 ./recording_go2.pc2.lcm
+# CUDA 异常时加 --device CPU:0
 ```
 
 ## Step 3: 重定位导航
@@ -26,7 +29,7 @@ dimos --replay --replay-db recording_go2 run unitree-go2-relocalization \
 真机：
 
 ```bash
-dimos run unitree-go2-relocalization --robot-ip 192.168.123.161 \
+dimos --robot-ip 10.10.197.149 run unitree-go2-relocalization \
   -o relocalizationmodule.map_file=recording_go2
 ```
 
@@ -68,16 +71,17 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 
 每行一个值，共 11 行：
 
-| 行 | 字段 | 说明 |
-|---|---|---|
-| 1 | timestamp | Unix 时间戳 |
-| 2 | x | 世界坐标 X (m) |
-| 3 | y | 世界坐标 Y (m) |
-| 4 | z | 世界坐标 Z (m) |
-| 5 | qx | 四元数 x |
-| 6 | qy | 四元数 y |
-| 7 | qz | 四元数 z |
-| 8 | qw | 四元数 w |
-| 9 | yaw | 偏航角 (rad) |
-| 10 | pitch | 俯仰角 (rad) |
-| 11 | roll | 翻滚角 (rad) |
+
+| 行   | 字段        | 说明         |
+| --- | --------- | ---------- |
+| 1   | timestamp | Unix 时间戳   |
+| 2   | x         | 世界坐标 X (m) |
+| 3   | y         | 世界坐标 Y (m) |
+| 4   | z         | 世界坐标 Z (m) |
+| 5   | qx        | 四元数 x      |
+| 6   | qy        | 四元数 y      |
+| 7   | qz        | 四元数 z      |
+| 8   | qw        | 四元数 w      |
+| 9   | yaw       | 偏航角 (rad)  |
+| 10  | pitch     | 俯仰角 (rad)  |
+| 11  | roll      | 翻滚角 (rad)  |

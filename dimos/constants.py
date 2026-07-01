@@ -27,12 +27,28 @@ else:
 
 DIMOS_PROJECT_ROOT = Path(__file__).parent.parent
 
-if (DIMOS_PROJECT_ROOT / ".git").exists():
-    # Running from Git repository
-    LOG_DIR = DIMOS_PROJECT_ROOT / "logs"
-else:
-    # Running from an installed package - use XDG_STATE_HOME
-    LOG_DIR = STATE_DIR / "logs"
+
+def resolve_log_dir() -> Path:
+    """Base directory for per-run log folders (``<log_dir>/<run-id>/main.jsonl``).
+
+    Priority:
+    1. ``DIMOS_LOG_DIR`` env var (absolute path)
+    2. Current working directory when it looks like a dimos project checkout
+    3. Installed package git root (``DIMOS_PROJECT_ROOT``)
+    4. XDG state dir (pip install without ``.git``)
+    """
+    if override := os.environ.get("DIMOS_LOG_DIR"):
+        return Path(override).expanduser().resolve()
+    cwd = Path.cwd()
+    if (cwd / "pyproject.toml").is_file() and (cwd / "dimos").is_dir():
+        return cwd / "logs"
+    if (DIMOS_PROJECT_ROOT / ".git").exists():
+        return DIMOS_PROJECT_ROOT / "logs"
+    return STATE_DIR / "logs"
+
+
+# Resolved at import for legacy callers; CLI uses resolve_log_dir() after load_dotenv().
+LOG_DIR = resolve_log_dir()
 
 """
 Constants for shared memory

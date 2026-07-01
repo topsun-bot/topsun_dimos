@@ -34,7 +34,7 @@ import requests
 import typer
 
 from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
-from dimos.constants import CONFIG_DIR, LOG_DIR
+from dimos.constants import CONFIG_DIR, resolve_log_dir
 from dimos.core.daemon import daemonize, install_signal_handlers
 from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.run_registry import get_most_recent, is_pid_alive, stop_entry
@@ -261,7 +261,7 @@ def run(
 
     blueprint_name = "-".join(robot_types)
     run_id = generate_run_id(blueprint_name)
-    log_dir = LOG_DIR / run_id
+    log_dir = resolve_log_dir() / run_id
 
     # Tag every descendant with the run id so the watchdog and stale-run
     # cleanup can identify them via os.environ after main dies.
