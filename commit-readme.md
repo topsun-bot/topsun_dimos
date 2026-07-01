@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 日志目录 cwd 解析 / Go2 Rerun 雷达可见 | `88abe28d` |
 | Go2 重定位调用链解读与注释 | `b3b88279` |
 | 查看/维护提交日志 | `af7df1395` |
 | Rerun 画面冻结 / 内存暴涨 | `58a9830b5` |
@@ -31,6 +32,54 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 88abe28d — fix: resolve log dir from cwd and restore Go2 lidar Rerun visibility
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-01 17:00:30 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/constants.py` | 新增 `resolve_log_dir()`，优先 `DIMOS_LOG_DIR` / cwd 项目根 / 包根 |
+| `dimos/robot/cli/dimos.py` | CLI 启动时用 `resolve_log_dir()` 写 per-run 日志 |
+| `dimos/utils/logging_config.py` | 日志初始化同步使用 `resolve_log_dir()` |
+| `dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py` | 恢复 Rerun `world/lidar` 可见，设 `max_hz=2` |
+| `jiangtao/bugfix.md` | Go2 真机/WebRTC/录制/gtsam 等问题知识库 |
+| `jiangtao/run.md` | 更新录制、PGO、重定位运行笔记 |
+
+**改进点**
+
+1. 修复 editable 安装指向其他 checkout 时日志写到错误目录的问题；在 `topsun_dimos` 下 `dimos run` 日志落到本仓库 `logs/`。
+2. 恢复 Go2 basic blueprint 中 Rerun 雷达点云图层，避免误以为无 lidar 数据。
+3. 沉淀现场排障记录到 `jiangtao/bugfix.md`，便于后续复用。
+
+**用法**
+
+```bash
+# 默认: 在 dimos 项目根目录运行时日志写到 ./logs/
+cd ~/huazhijian/topsun-bot/topsun_dimos
+dimos --replay run unitree-go2-relocalization -o relocalizationmodule.map_file=recording_go2
+
+# 显式指定日志目录
+export DIMOS_LOG_DIR=/tmp/dimos-logs
+dimos run unitree-go2-memory --robot-ip 10.10.197.155
+```
+
+**回滚**
+
+```bash
+git checkout 88abe28d^ -- dimos/constants.py dimos/robot/cli/dimos.py dimos/utils/logging_config.py \
+  dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py jiangtao/bugfix.md jiangtao/run.md
+# 或
+git reset --hard 88abe28d^
+```
+
+---
 
 ### b3b88279 — feat(relocalization): document call flow and annotate relocalization internals
 
