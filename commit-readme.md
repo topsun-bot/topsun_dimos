@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| Go2 启动 foxglove_config TypeError | `792a4c4d` |
 | relocalize 离线逐步调试脚本 | `58cfbe41` |
 | 日志目录 cwd 解析 / Go2 Rerun 雷达可见 | `88abe28d` |
 | Go2 重定位调用链解读与注释 | `b3b88279` |
@@ -33,6 +34,41 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 792a4c4d — fix(go2): remove invalid foxglove_config from vis_module blueprint
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-03 15:46:09 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py` | 删除 `vis_module()` 不支持的 `foxglove_config` 参数 |
+| `jiangtao/run.md` | 真机命令改为 AP 热点 IP `192.168.12.1` |
+
+**改进点**
+
+1. Foxglove 已从 dimos 移除，保留 `foxglove_config=` 会在 `unitree-go2` / `unitree-go2-relocalization` 启动时报 `TypeError`。
+2. 运行笔记与当前 Go2 热点联调环境对齐。
+
+**用法**
+
+```bash
+dimos --robot-ip 192.168.12.1 run unitree-go2-relocalization \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+**回滚**
+
+```bash
+git checkout 792a4c4d^ -- dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py
+```
+
+---
 
 ### 58cfbe41 — feat(relocalization): add offline debug script for relocalize step-by-step
 
