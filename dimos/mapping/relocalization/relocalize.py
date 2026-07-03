@@ -99,6 +99,60 @@ def _global_fine(global_map: o3d.geometry.PointCloud, voxel_size: float) -> o3d.
     return cached  # type: ignore[no-any-return]
 
 
+def _prepare_fine_cloud(
+    cloud: o3d.geometry.PointCloud,
+    voxel_size: float = FINE_VOXEL,
+) -> o3d.geometry.PointCloud:
+    """Prepare a downsampled cloud with normals for point-to-plane ICP."""
+    # local 点云每次都会变化，因此不能像固定 premap 一样放入全局缓存。
+    down = cloud.voxel_down_sample(voxel_size)
+    # point-to-plane ICP 和墙面筛选都依赖法向，半径沿用原 final ICP 参数。
+    down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2, max_nn=30))
+    return down
+
+
+def _wall_subset(cloud: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
+    """Keep mostly vertical surfaces so floor points cannot hide a bad yaw."""
+    # 读取法向，法向 z 分量较小的点对应近似竖直的墙面。
+    normals = np.asarray(cloud.normals)
+    mask = np.abs(normals[:, 2]) < 0.7
+    # 墙面点太少时 wall-only 约束不稳定，直接退回完整点云。
+    if mask.sum() < 100:
+        return cloud
+
+    # 创建独立点云，保证墙面 ICP 不会修改原始 fine 点云。
+    subset = o3d.geometry.PointCloud()
+    subset.points = o3d.utility.Vector3dVector(np.asarray(cloud.points)[mask])
+    subset.normals = o3d.utility.Vector3dVector(normals[mask])
+    return subset
+
+
+def _crop_target_around_source(
+    source: o3d.geometry.PointCloud,
+    target: o3d.geometry.PointCloud,
+    init_T_map_world: np.ndarray,
+    crop_radius: float,
+) -> o3d.geometry.PointCloud:
+    """Crop the target around the source transformed by the cached pose."""
+    source_points = np.asarray(source.points)
+    # 空 source 无法形成裁剪框，保留完整 target 交给 ICP 报告真实结果。
+    if len(source_points) == 0:
+        return target
+
+    # 直接用矩阵变换 numpy 点，不复制 Open3D 点云，减少一次内存分配。
+    transformed = (init_T_map_world[:3, :3] @ source_points.T).T
+    transformed += init_T_map_world[:3, 3]
+    min_bound = transformed.min(axis=0) - crop_radius
+    max_bound = transformed.max(axis=0) + crop_radius
+    crop_box = o3d.geometry.AxisAlignedBoundingBox(min_bound, max_bound)
+    cropped = target.crop(crop_box)
+
+    # 缓存初值偏差较大时裁剪区可能没有地图点；此时退回完整 premap。
+    if len(cropped.points) < 100:
+        return target
+    return cropped
+
+
 def _ransac(
     src_down: o3d.geometry.PointCloud,
     tgt_down: o3d.geometry.PointCloud,
@@ -158,11 +212,7 @@ def relocalize(
     """
     # Step 0：把当前 local_map 做一次细尺度下采样，供候选评分和 final ICP 复用。
     # Fine downsample once — used for both candidate scoring and the final ICP.
-    src_fine = local_map.voxel_down_sample(FINE_VOXEL)
-    # 为 point-to-plane ICP 和 wall-only 分割估计 local 法向。
-    src_fine.estimate_normals(
-        o3d.geometry.KDTreeSearchParamHybrid(radius=FINE_VOXEL * 2, max_nn=30)
-    )
+    src_fine = _prepare_fine_cloud(local_map)
     # 获取 premap 的细尺度缓存；第一次调用会计算，后续同进程复用。
     tgt_fine = _global_fine(global_map, FINE_VOXEL)
 
@@ -215,19 +265,6 @@ def relocalize(
     # candidate hide its wall misalignment behind perfect floor alignment. The
     # FULL clouds are still used for the final refinement, so the gravity
     # anchor and inlier density are preserved in the output.
-    def _wall_subset(cloud: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
-        # 读取法向，法向 z 分量小的点更像竖直墙面。
-        nrm = np.asarray(cloud.normals)
-        mask = np.abs(nrm[:, 2]) < 0.7  # roughly horizontal
-        # 墙面点太少时 wall-only 不可靠，退回完整点云。
-        if mask.sum() < 100:
-            return cloud  # too sparse -> fall back to full cloud
-        # 创建一个新点云，只保留墙面点和对应法向。
-        sub = o3d.geometry.PointCloud()
-        sub.points = o3d.utility.Vector3dVector(np.asarray(cloud.points)[mask])
-        sub.normals = o3d.utility.Vector3dVector(nrm[mask])
-        return sub
-
     # 对 local 和 premap 都取 wall-only 子集，后续评分/ICP 用这两个子集。
     src_walls = _wall_subset(src_fine)
     tgt_walls = _wall_subset(tgt_fine)
@@ -277,3 +314,66 @@ def relocalize(
     )
     # 返回 final 变换矩阵；fitness 仍用 wall-only best_fit，避免地面掩盖墙面错配。
     return np.asarray(final.transformation), best_fit
+
+
+def relocalize_with_initial(
+    global_map: o3d.geometry.PointCloud,
+    local_map: o3d.geometry.PointCloud,
+    init_T_map_world: np.ndarray,
+    *,
+    max_correspondence_distance: float = RERANK_DIST,
+    max_iteration: int = 50,
+    crop_radius: float | None = 8.0,
+) -> tuple[np.ndarray, float]:
+    """Refine ``map <- world`` from a cached transform without global RANSAC."""
+    # JSON 或调用方传入的初值必须是有限的 4x4 刚体变换矩阵。
+    initial = np.asarray(init_T_map_world, dtype=float)
+    if initial.shape != (4, 4) or not np.isfinite(initial).all():
+        raise ValueError("init_T_map_world must be a finite 4x4 matrix")
+    if max_iteration <= 0:
+        raise ValueError("max_iteration must be positive")
+    if max_correspondence_distance <= 0:
+        raise ValueError("max_correspondence_distance must be positive")
+
+    # local 每次都重新下采样；premap 继续使用进程内 fine cache。
+    src_fine = _prepare_fine_cloud(local_map)
+    tgt_fine = _global_fine(global_map, FINE_VOXEL)
+
+    # 有缓存姿态时只取附近 premap，减少 ICP KD-tree 搜索的 target 点数。
+    target_for_icp = tgt_fine
+    if crop_radius is not None and crop_radius > 0:
+        target_for_icp = _crop_target_around_source(
+            src_fine,
+            tgt_fine,
+            initial,
+            crop_radius,
+        )
+
+    # 第一段用墙面 ICP 优先纠正 xy/yaw，避免地面高 fitness 掩盖错朝向。
+    src_walls = _wall_subset(src_fine)
+    tgt_walls = _wall_subset(target_for_icp)
+    robust_plane = _reg.TransformationEstimationPointToPlane(
+        _reg.TukeyLoss(k=max_correspondence_distance)
+    )
+    wall_result = _reg.registration_icp(
+        src_walls,
+        tgt_walls,
+        max_correspondence_distance,
+        initial,
+        robust_plane,
+        _reg.ICPConvergenceCriteria(max_iteration=max_iteration),
+    )
+
+    # 第二段回到完整点云，用地面/天花板等约束做 final ICP。
+    final_result = _reg.registration_icp(
+        src_fine,
+        target_for_icp,
+        max_correspondence_distance,
+        wall_result.transformation,
+        robust_plane,
+        _reg.ICPConvergenceCriteria(max_iteration=max_iteration),
+    )
+
+    # 取墙面和全点云 fitness 中较小值，两道约束任一不可靠就拒绝。
+    fitness = min(float(wall_result.fitness), float(final_result.fitness))
+    return np.asarray(final_result.transformation), fitness
