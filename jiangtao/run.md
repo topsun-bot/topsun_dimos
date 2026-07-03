@@ -3,7 +3,7 @@
 ## Step 1: 录制（真机遛一圈）
 
 ```bash
-dimos --robot-ip 10.10.197.155 run unitree-go2-memory
+dimos --robot-ip 192.168.12.1 run unitree-go2-memory
 # 生成 recording_go2.db
 ```
 
@@ -29,7 +29,7 @@ dimos --replay --replay-db recording_go2 run unitree-go2-relocalization \
 真机：
 
 ```bash
-dimos --robot-ip 10.10.197.149 run unitree-go2-relocalization \
+dimos --robot-ip 192.168.12.1 run unitree-go2-relocalization \
   -o relocalizationmodule.map_file=recording_go2
 ```
 

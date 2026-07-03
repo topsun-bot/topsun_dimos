@@ -174,7 +174,6 @@ rerun_config = {
 _with_vis = vis_module(
     viewer_backend=global_config.viewer,
     rerun_config=rerun_config,
-    foxglove_config={"shm_channels": ["/color_image#sensor_msgs.Image"]},
 )
 
 unitree_go2_basic = (
