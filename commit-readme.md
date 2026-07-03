@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| relocalize 离线逐步调试脚本 | `58cfbe41` |
 | 日志目录 cwd 解析 / Go2 Rerun 雷达可见 | `88abe28d` |
 | Go2 重定位调用链解读与注释 | `b3b88279` |
 | 查看/维护提交日志 | `af7df1395` |
@@ -32,6 +33,45 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 58cfbe41 — feat(relocalization): add offline debug script for relocalize step-by-step
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-03 11:07:23 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `jiangtao/scripts/debug_relocalize.py` | 离线逐步调试 `relocalize()`：从本地 premap + 录制 db 构造输入，打印 Step 0–7 变量 |
+
+**改进点**
+
+1. 不连真机、不依赖 WebRTC/torch，仅用本地 `recording_go2.pc2.lcm` 与 `recording_go2.db` 验证重定位算法。
+2. 逐步展开 RANSAC 候选、质心 yaw flip、重力过滤、wall-only 重排与 ICP，便于 IDE 断点对照 `relocalize.py` 阅读。
+3. 末尾对比原版 `relocalize()` 输出，确认逐步逻辑与生产代码一致。
+
+**用法**
+
+```bash
+cd ~/huazhijian/topsun-bot/topsun_dimos
+.venv/bin/python jiangtao/scripts/debug_relocalize.py
+
+# IDE: 选 launch 配置 "Debug: relocalize 离线算法 (推荐, 不连真机)"
+```
+
+**回滚**
+
+```bash
+git checkout 58cfbe41^ -- jiangtao/scripts/debug_relocalize.py
+# 或
+git reset --hard 58cfbe41^
+```
+
+---
 
 ### 88abe28d — fix: resolve log dir from cwd and restore Go2 lidar Rerun visibility
 
