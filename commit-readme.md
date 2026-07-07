@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| fast ICP 诊断 / point-to-plane / 开机 odom 分析 | `bacc407a` |
 | Go2 启动 foxglove_config TypeError | `792a4c4d` |
 | relocalize 离线逐步调试脚本 | `58cfbe41` |
 | 日志目录 cwd 解析 / Go2 Rerun 雷达可见 | `88abe28d` |
@@ -34,6 +35,54 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### bacc407a — feat(relocalization): fast ICP diagnostics and point-to-plane option
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-07 09:54:23 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/mapping/relocalization/relocalize.py` | FastIcpDiagnostics、cached ICP 两阶段诊断、可配置 point_to_point / point_to_plane (TukeyLoss) |
+| `dimos/mapping/relocalization/module.py` | cached_start 门槛、fast_icp_estimation 配置、结构化 ICP 日志 |
+| `dimos/mapping/relocalization/test_*.py` | 新增/更新 fast ICP 与 point-to-plane 单测 |
+| `jiangtao/scripts/record_boot_consistency.py` | 开机 odom/lidar/global_map 一致性录制与 compare |
+| `jiangtao/20260706-开机odom一致性与yaw漂移分析报告.md` | 站定 yaw 漂移 (~0.31°/s) 与双流传 odom 分析 |
+| `jiangtao/run.md` | 补充 boot consistency 用法与报告链接 |
+
+**改进点**
+
+1. 快速 ICP 输出 wall/full 前后 fitness、裁剪 ROI、初值偏差等诊断，便于排查固定 T 失败。
+2. cached_start 增加 fitness / 平移 / yaw 验收门槛，避免 JSON 初值偏差过大仍发布 TF。
+3. `fast_icp_estimation=point_to_plane` 与全局 RANSAC 后 ICP 使用相同 TukeyLoss 配置。
+4. 附带 boot consistency 工具与报告，验证 Unitree odom yaw 漂移而 world 点云短期稳定。
+
+**用法**
+
+```bash
+# 快速 ICP 切换 point-to-plane
+dimos --robot-ip 192.168.12.1 run unitree-go2-relocalization \
+  -o relocalizationmodule.map_file=recording_go2 \
+  -o relocalizationmodule.fast_icp_estimation=point_to_plane
+
+# 开机 odom 一致性录制
+.venv/bin/python jiangtao/scripts/record_boot_consistency.py record --mode lcm --duration 25 --tag boot1
+.venv/bin/python jiangtao/scripts/record_boot_consistency.py compare jiangtao/cache/boot_consistency/boot1_*
+```
+
+**回滚**
+
+```bash
+git checkout bacc407a^ -- dimos/mapping/relocalization/
+git checkout bacc407a^ -- jiangtao/scripts/record_boot_consistency.py jiangtao/run.md
+```
+
+---
 
 ### 792a4c4d — fix(go2): remove invalid foxglove_config from vis_module blueprint
 
