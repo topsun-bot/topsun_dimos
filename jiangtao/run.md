@@ -67,6 +67,32 @@ python jiangtao/scripts/visualize_global_map.py --z-min 0.2 --z-max 0.8 --save o
 python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 90 --azimuth -90
 ```
 
+## 开机 odom 一致性诊断
+
+同一物理位置固定 T 重定位多次结果不同时, 用此脚本验证 odom 开机原点是否漂移:
+
+```bash
+# 终端 A: 已启动 unitree-go2-relocalization
+# 终端 B: 狗站定, 开机后尽快录
+.venv/bin/python jiangtao/scripts/record_boot_consistency.py record \
+  --mode lcm --duration 25 --tag boot1
+
+# 需要 IMU / Unitree 原始 frame_id 时 (不要同时开 blueprint)
+.venv/bin/python jiangtao/scripts/record_boot_consistency.py record \
+  --mode webrtc --robot-ip 192.168.12.1 --duration 20 --tag boot1
+
+# 对比多次
+.venv/bin/python jiangtao/scripts/record_boot_consistency.py compare \
+  jiangtao/cache/boot_consistency/boot1_* \
+  jiangtao/cache/boot_consistency/boot2_*
+```
+
+输出目录: `jiangtao/cache/boot_consistency/<tag>_<time>_<mode>/`
+关键看 `summary.json` 的 `odom_first` / `lidar_base_*` / `global_map_first`.
+
+分析报告（含 odom 来源、0.31°/s 漂移、对建图/固定 T 的影响）:
+`jiangtao/20260706-开机odom一致性与yaw漂移分析报告.md`
+
 ## odom txt 格式
 
 每行一个值，共 11 行：

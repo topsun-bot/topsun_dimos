@@ -21,8 +21,13 @@ from dimos.mapping.relocalization.module import RelocalizationModule
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
 
 
-def _T_map_world(x: float = 1.0) -> np.ndarray:
+def _T_map_world(x: float = 1.0, yaw_deg: float = 0.0) -> np.ndarray:
     matrix = np.eye(4)
+    yaw = np.radians(yaw_deg)
+    matrix[0, 0] = np.cos(yaw)
+    matrix[0, 1] = -np.sin(yaw)
+    matrix[1, 0] = np.sin(yaw)
+    matrix[1, 1] = np.cos(yaw)
     matrix[0, 3] = x
     return matrix
 
@@ -137,12 +142,13 @@ def test_fast_icp_uses_cached_matrix_and_50_iterations(
     local_map = mocker.sentinel.local_map
     module._premap = mocker.MagicMock(pointcloud=premap)
     initial = _T_map_world(3.0)
-    refined = _T_map_world(3.1)
+    refined = _T_map_world(3.05)
     module._last_T_map_world = initial
+    module._json_init_T_map_world = initial.copy()
     module._loaded_T_map_world_from_json = True
     fast_icp = mocker.patch(
         "dimos.mapping.relocalization.module._relocalize_with_initial",
-        return_value=(refined, 0.83),
+        return_value=(refined, 0.86, mocker.MagicMock()),
     )
     msg = mocker.MagicMock(pointcloud=local_map)
     msg.__len__.return_value = 10_000
@@ -154,9 +160,9 @@ def test_fast_icp_uses_cached_matrix_and_50_iterations(
         premap,
         local_map,
         initial,
-        max_correspondence_distance=0.3,
-        max_iteration=50,
-        crop_radius=8.0,
+        max_correspondence_distance=0.10,
+        max_iteration=80,
+        crop_radius=None,
     )
     assert np.array_equal(module._last_T_map_world, refined)
 
@@ -204,3 +210,94 @@ def test_fast_icp_failure_defers_global_fallback_below_50k_points(
     assert result is None
     fast.assert_called_once_with(msg)
     global_relocalize.assert_not_called()
+
+
+def test_cached_start_fast_icp_does_not_write_json(
+    relocalization_module_factory,
+    tmp_path,
+) -> None:
+    module = relocalization_module_factory()
+    global_matrix = _T_map_world(1.25)
+    global_tf = module._tf_from_T_map_world(global_matrix)
+    module._record_relocalization_success(global_matrix, global_tf, 0.89, 52_000, "global")
+    module._publish_tf(global_tf)
+
+    cache_dir = tmp_path / "recording_go2"
+    latest = cache_dir / "latest.json"
+    global_payload = json.loads(latest.read_text(encoding="utf-8"))
+    assert global_payload["match_mode"] == "global"
+
+    cached_matrix = _T_map_world(2.0)
+    cached_tf = module._tf_from_T_map_world(cached_matrix)
+    module._record_relocalization_success(
+        cached_matrix,
+        cached_tf,
+        0.91,
+        12_000,
+        "cached_start_fast_icp",
+    )
+    module._publish_tf(cached_tf)
+
+    unchanged_payload = json.loads(latest.read_text(encoding="utf-8"))
+    assert unchanged_payload["T_map_world"] == global_matrix.tolist()
+    assert len(list(cache_dir.glob("*-first-tf.json"))) == 1
+
+
+def test_cached_start_rejected_on_large_pose_delta(
+    relocalization_module_factory,
+    mocker,
+) -> None:
+    module = relocalization_module_factory(save_first_transform_json=False)
+    premap = mocker.sentinel.premap
+    local_map = mocker.sentinel.local_map
+    module._premap = mocker.MagicMock(pointcloud=premap)
+    initial = _T_map_world(3.0)
+    bad_result = _T_map_world(4.0, yaw_deg=20.0)
+    module._last_T_map_world = initial
+    module._json_init_T_map_world = initial.copy()
+    module._loaded_T_map_world_from_json = True
+    mocker.patch(
+        "dimos.mapping.relocalization.module._relocalize_with_initial",
+        return_value=(bad_result, 0.90, mocker.MagicMock()),
+    )
+    msg = mocker.MagicMock(pointcloud=local_map)
+    msg.__len__.return_value = 12_000
+
+    result = module._try_fast_icp_relocalize(msg)
+
+    assert result is None
+    assert np.array_equal(module._last_T_map_world, initial)
+
+
+def test_cached_start_uses_stricter_fitness(
+    relocalization_module_factory,
+    mocker,
+) -> None:
+    module = relocalization_module_factory(
+        save_first_transform_json=False,
+        fast_icp_min_fitness=0.75,
+        subsequent_relocalization_mode="fast_icp",
+    )
+    premap = mocker.sentinel.premap
+    local_map = mocker.sentinel.local_map
+    module._premap = mocker.MagicMock(pointcloud=premap)
+    initial = _T_map_world(3.0)
+    refined = _T_map_world(3.05)
+    module._last_T_map_world = initial
+    module._json_init_T_map_world = initial.copy()
+    module._loaded_T_map_world_from_json = True
+    mocker.patch(
+        "dimos.mapping.relocalization.module._relocalize_with_initial",
+        return_value=(refined, 0.80, mocker.MagicMock()),
+    )
+    cached_msg = mocker.MagicMock(pointcloud=local_map)
+    cached_msg.__len__.return_value = 12_000
+
+    cached_result = module._try_fast_icp_relocalize(cached_msg)
+    assert cached_result is None
+
+    module._has_published_tf_this_run = True
+    subsequent_msg = mocker.MagicMock(pointcloud=local_map)
+    subsequent_msg.__len__.return_value = 12_000
+    subsequent_result = module._try_fast_icp_relocalize(subsequent_msg)
+    assert subsequent_result is not None

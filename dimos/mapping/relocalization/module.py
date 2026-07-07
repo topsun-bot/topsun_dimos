@@ -56,6 +56,19 @@ MIN_LOCAL_POINTS = 50_000
 # premap 文件后缀；CLI 里传 stem 时会自动补这个后缀。
 MAP_SUFFIX = ".pc2.lcm"
 
+# TEMP: 强制用 164235 保存的 T 发布 merge，用于目测同位置/同朝向；测完改 False
+_TEMP_FORCE_PUBLISH_SAVED_T = False
+_TEMP_SAVED_T_MAP_WORLD = np.array(
+    [
+        [0.9194149735730963, -0.3930164767278935, 0.014634048994581473, 3.419856103840564],
+        [0.3930968325501314, 0.919492275439645, -0.002972481434171337, -2.892316081505829],
+        [-0.01228766082852587, 0.008485542246398504, 0.9998884982657558, -0.02912935839156226],
+        [0.0, 0.0, 0.0, 1.0],
+    ],
+    dtype=float,
+)
+# 来源: jiangtao/cache/.../20260703-194056-304379-first-tf.json
+
 
 class Config(ModuleConfig):
     # 离线 premap 的文件名或路径，例如通过
@@ -63,36 +76,45 @@ class Config(ModuleConfig):
     map_file: str | None = (
         None  # e.g. `-o relocalizationmodule.map_file=go2_hongkong_office_twopass_map`
     )
+    # 快速 ICP 总开关；关闭后所有重定位都保持原全局 RANSAC 流程。
+    fast_icp_enabled: bool = True
+    # 有跨运行 JSON 初值时，1 万点即可开始本次运行的第一次快速匹配。
+    cached_start_min_local_points: int = 10_000
+    # 快速 ICP 的最大对应距离，单位为米。
+    fast_icp_max_dist: float = 0.10
+    # 冷启动 fast ICP 专用 fitness 门槛，高于全局 0.45。
+    cached_start_min_fitness: float = 0.65
+
     # 是否把加载的原始 premap 也发布出去，主要用于调试/可视化。
     publish_loaded_map: bool = False
     # relocalize() 返回的匹配质量阈值；低于该值说明候选配准不可信。
     fitness_threshold: float = 0.45
     # merge 时是否用列雕刻：local 当前观测覆盖 premap 的同 XY 列旧点。
     use_carving: bool = True
-    # 快速 ICP 总开关；关闭后所有重定位都保持原全局 RANSAC 流程。
-    fast_icp_enabled: bool = True
     # 启动时是否读取上一次独立运行保存的 latest.json。
     load_cached_transform_on_start: bool = True
     # 每次运行是否把第一次成功发布的 TF 持久化到 JSON。
-    save_first_transform_json: bool = True
+    save_first_transform_json: bool = False
     # 相对路径按仓库根目录解析，并按 map_file 再分子目录。
     cached_transform_dir: str = "jiangtao/cache/relocalization_tf"
     # 可选显式 latest 文件；为空时使用 cached_transform_dir/map/latest.json。
     cached_transform_latest_file: str | None = None
     # 同一次运行第一次发布之后，选择快速 ICP 或原全局匹配。
-    subsequent_relocalization_mode: Literal["fast_icp", "global"] = "fast_icp"
+    subsequent_relocalization_mode: Literal["fast_icp", "global"] = "global"
     # 快速 ICP 拒绝后是否允许回退到全局 RANSAC。
     fast_icp_fallback_global: bool = True
-    # 快速 ICP 的最大对应距离，单位为米。
-    fast_icp_max_dist: float = 0.3
     # 按需求与当前 final ICP 一致，默认最多迭代 50 次。
-    fast_icp_max_iter: int = 50
+    fast_icp_max_iter: int = 80
+    # 快速 ICP 估计方式: point_to_point 或 point_to_plane (TukeyLoss, 与全局 relocalize 一致)。
+    fast_icp_estimation: Literal["point_to_point", "point_to_plane"] = "point_to_point"
     # 按缓存初值裁剪 premap 时，在 local AABB 外扩的距离，单位为米。
-    fast_icp_crop_radius: float = 8.0
-    # 为空时复用 fitness_threshold，便于先保持统一验收标准。
-    fast_icp_min_fitness: float | None = None
-    # 有跨运行 JSON 初值时，1 万点即可开始本次运行的第一次快速匹配。
-    cached_start_min_local_points: int = 10_000
+    fast_icp_crop_radius: float | None = None
+    # 为空时复用 fitness_threshold；仅用于 subsequent_fast_icp。
+    fast_icp_min_fitness: float | None = 0.9
+    # 冷启动 fast ICP 结果相对 JSON 初值的最大平移偏差，单位为米。
+    cached_start_max_translation_m: float = 1.0
+    # 冷启动 fast ICP 结果相对 JSON 初值的最大 yaw 偏差，单位为度。
+    cached_start_max_yaw_deg: float = 5.0
     # 同一次运行后续选择快速 ICP 时使用的点数门槛。
     fast_icp_min_local_points: int = 10_000
     # 没有缓存或选择全局 RANSAC 时仍保持原来的 5 万点门槛。
@@ -131,6 +153,12 @@ class RelocalizationModule(Module):
         self._pending_cache_record: tuple[np.ndarray, float, int, str] | None = None
         # 连续失败次数只用于日志诊断，不自动清空缓存。
         self._fast_icp_fail_count = 0
+        # 启动时从 JSON 加载的 map<-world 快照，用于 cached_start 偏差校验。
+        self._json_init_T_map_world: np.ndarray | None = None
+        # latest.json 元数据，用于启动日志对照上次 global 的 fitness / 时间。
+        self._json_cache_meta: dict[str, Any] | None = None
+        # cached_start 本轮已尝试 fast ICP 次数，仅用于诊断日志。
+        self._cached_start_attempts = 0
 
     @rpc
     def start(self) -> None:
@@ -191,10 +219,12 @@ class RelocalizationModule(Module):
             .subscribe(self._publish_periodic)
         )
 
+        premap_pts = self._premap_point_count()
         logger.info(
-            f"Relocalization module started: map_file={self.config.map_file!r}  "
-            f"loaded_map.frame_id={self._premap.frame_id!r}"
+            f"Relocalization module started: map_file={self.config.map_file!r} "
+            f"premap_pts={premap_pts} loaded_map.frame_id={self._premap.frame_id!r}"
         )
+        self._log_relocalization_config()
 
     @staticmethod
     def _sanitize_map_key(map_file: str) -> str:
@@ -245,7 +275,7 @@ class RelocalizationModule(Module):
             raise ValueError("T_map_world must have a homogeneous last row")
         return matrix
 
-    def _load_latest_T_map_world(self) -> np.ndarray | None:
+    def _load_latest_T_map_world(self) -> tuple[np.ndarray, dict[str, Any]] | None:
         """Load a map-specific cached transform; invalid files are ignored."""
         path = self._latest_transform_path()
         # 第一次运行没有 latest 是正常状态，随后会自然进入全局 RANSAC。
@@ -271,7 +301,8 @@ class RelocalizationModule(Module):
                     f"cache map_key={cached_key!r} does not match "
                     f"current map_key={self._map_cache_key()!r}"
                 )
-            return self._validate_T_map_world(payload.get("T_map_world"))
+            matrix = self._validate_T_map_world(payload.get("T_map_world"))
+            return matrix, payload
         except (OSError, json.JSONDecodeError, ValueError):
             # 缓存损坏不能影响机器人启动；记录原因后退回原全局定位。
             logger.exception(f"Failed to load relocalization transform cache: path={path}")
@@ -281,14 +312,95 @@ class RelocalizationModule(Module):
         # 任一开关关闭时都不读取磁盘，确保可以一键恢复旧行为。
         if not self.config.fast_icp_enabled or not self.config.load_cached_transform_on_start:
             return
-        matrix = self._load_latest_T_map_world()
-        if matrix is None:
+        loaded = self._load_latest_T_map_world()
+        if loaded is None:
             return
+        matrix, payload = loaded
         self._last_T_map_world = matrix
+        self._json_init_T_map_world = matrix.copy()
+        self._json_cache_meta = payload
         self._loaded_T_map_world_from_json = True
+        reloc_t, yaw_deg = self._reloc_t_and_yaw_deg(matrix)
         logger.info(
-            f"Loaded relocalization transform cache: path={self._latest_transform_path()} "
-            f"cached_start_min_local_points={self.config.cached_start_min_local_points}"
+            "Loaded relocalization transform cache: "
+            f"path={self._latest_transform_path()} "
+            f"json_created_at={payload.get('created_at')!r} "
+            f"json_match_mode={payload.get('match_mode')!r} "
+            f"json_fitness={payload.get('fitness')} json_n_pts={payload.get('n_pts')} "
+            f"json_init_reloc_t={reloc_t} json_init_yaw_deg={yaw_deg:.1f}"
+        )
+
+    def _premap_point_count(self) -> int | str:
+        """Return premap point count for logs; '?' if unavailable (e.g. unit-test mocks)."""
+        if self._premap is None:
+            return 0
+        points = getattr(self._premap.pointcloud, "points", None)
+        if points is None:
+            return "?"
+        return len(points)
+
+    def _log_relocalization_config(self) -> None:
+        """Log resolved relocalization thresholds once at startup."""
+        logger.info(
+            "Relocalization config: "
+            f"fast_icp_enabled={self.config.fast_icp_enabled} "
+            f"load_cached_transform_on_start={self.config.load_cached_transform_on_start} "
+            f"cached_start_min_local_points={self.config.cached_start_min_local_points} "
+            f"cached_start_min_fitness={self.config.cached_start_min_fitness} "
+            f"cached_start_max_translation_m={self.config.cached_start_max_translation_m} "
+            f"cached_start_max_yaw_deg={self.config.cached_start_max_yaw_deg} "
+            f"min_local_points={self.config.min_local_points} "
+            f"fitness_threshold={self.config.fitness_threshold} "
+            f"fast_icp_max_dist={self.config.fast_icp_max_dist} "
+            f"fast_icp_max_iter={self.config.fast_icp_max_iter} "
+            f"fast_icp_crop_radius={self.config.fast_icp_crop_radius} "
+            f"subsequent_relocalization_mode={self.config.subsequent_relocalization_mode!r} "
+            f"json_loaded={self._loaded_T_map_world_from_json}"
+        )
+
+    @staticmethod
+    def _reloc_t_and_yaw_deg(T_map_world: np.ndarray) -> tuple[list[float], float]:
+        """Extract map<-world translation and planar yaw for logs."""
+        reloc_t = T_map_world[:3, 3].round(3).tolist()
+        yaw_deg = float(np.degrees(np.arctan2(T_map_world[1, 0], T_map_world[0, 0])))
+        return reloc_t, yaw_deg
+
+    @staticmethod
+    def _format_T_map_world_log(T_map_world: np.ndarray) -> str:
+        """Serialize map<-world 4x4 matrix for structured logs."""
+        matrix = np.asarray(T_map_world, dtype=float).round(6).tolist()
+        return f"T_map_world={json.dumps(matrix, ensure_ascii=False)}"
+
+    @staticmethod
+    def _format_T_world_map_log(world_to_map_tf: Transform) -> str:
+        """Serialize world<-map 4x4 matrix used by merge / PointCloud2.transform."""
+        matrix = np.asarray(world_to_map_tf.to_matrix(), dtype=float).round(6).tolist()
+        return f"T_world_map={json.dumps(matrix, ensure_ascii=False)}"
+
+    @staticmethod
+    def _pose_delta_m_and_yaw_deg(
+        T_result: np.ndarray,
+        T_init: np.ndarray,
+    ) -> tuple[float, float]:
+        """Return translation norm and yaw delta between two map<-world poses."""
+        T_delta = T_result @ np.linalg.inv(T_init)
+        trans_m = float(np.linalg.norm(T_delta[:3, 3]))
+        yaw_deg = float(np.degrees(np.arctan2(T_delta[1, 0], T_delta[0, 0])))
+        return trans_m, yaw_deg
+
+    def _pose_delta_log_suffix(
+        self,
+        T_result: np.ndarray,
+        T_ref: np.ndarray,
+        ref_label: str,
+    ) -> str:
+        """Format result pose and delta vs a reference transform for diagnostic logs."""
+        reloc_t, yaw_deg = self._reloc_t_and_yaw_deg(T_result)
+        trans_delta_m, yaw_delta_deg = self._pose_delta_m_and_yaw_deg(T_result, T_ref)
+        return (
+            f"result_reloc_t={reloc_t} result_yaw_deg={yaw_deg:.1f} "
+            f"vs_{ref_label}_trans_delta_m={trans_delta_m:.3f} "
+            f"vs_{ref_label}_yaw_delta_deg={yaw_delta_deg:.1f}"
         )
 
     @staticmethod
@@ -314,9 +426,12 @@ class RelocalizationModule(Module):
         n_pts: int,
         match_mode: str,
     ) -> None:
-        """Persist only the first successful TF publication of this run."""
+        """Persist only the first global relocalization TF publication of this run."""
         # 已成功保存过或用户关闭保存时，不进行任何磁盘写入。
         if self._first_published_tf_saved or not self.config.save_first_transform_json:
+            return
+        # 仅全局 RANSAC 结果写入跨运行缓存，fast ICP 只更新内存 TF。
+        if match_mode != "global":
             return
 
         created_at = datetime.now().astimezone()
@@ -408,8 +523,15 @@ class RelocalizationModule(Module):
         return len(msg) >= self._required_local_points()
 
     def _publish_tf(self, tf: Transform | None) -> None:
-        # _try_relocalize 失败时返回 None，这里直接忽略，保留上一成功 TF。
-        if tf is None:
+        # TEMP: ICP 成败都强制用保存的 T 发布，用于判断狗是否同位置+同朝向
+        if _TEMP_FORCE_PUBLISH_SAVED_T:
+            tf = self._tf_from_T_map_world(_TEMP_SAVED_T_MAP_WORLD)
+            self._pending_cache_record = None
+            logger.info(
+                "TEMP force publish saved T: "
+                f"reloc_t={_TEMP_SAVED_T_MAP_WORLD[:3, 3].round(3).tolist()}"
+            )
+        elif tf is None:
             return
         # 将新的 world<-map 变换推给 merge 流和周期 TF 发布流。
         self._world_to_map.on_next(tf)
@@ -421,6 +543,21 @@ class RelocalizationModule(Module):
         self._pending_cache_record = None
         if pending is not None:
             T_map_world, fitness, n_pts, match_mode = pending
+            reloc_t, yaw_deg = self._reloc_t_and_yaw_deg(T_map_world)
+            delta_suffix = ""
+            if self._json_init_T_map_world is not None:
+                delta_suffix = " " + self._pose_delta_log_suffix(
+                    T_map_world,
+                    self._json_init_T_map_world,
+                    "json_init",
+                )
+            logger.info(
+                f"relocalization TF published: match_mode={match_mode} fitness={fitness:.3f} "
+                f"n_pts={n_pts} reloc_t={reloc_t} yaw_deg={yaw_deg:.1f} "
+                f"merge_tf={FRAME_WORLD!r}->{FRAME_MAP!r} "
+                f"{self._format_T_map_world_log(T_map_world)} "
+                f"{self._format_T_world_map_log(tf)}{delta_suffix}"
+            )
             self._save_first_transform_json_if_needed(
                 T_map_world,
                 tf,
@@ -454,8 +591,12 @@ class RelocalizationModule(Module):
         self._last_T_map_world = np.asarray(T_map_world, dtype=float).copy()
         self._last_world_to_map_tf = world_to_map_tf
         self._fast_icp_fail_count = 0
-        # 保存必须发生在 _publish_tf 的 on_next 之后，这里只暂存本次成功元数据。
-        if self.config.save_first_transform_json and not self._first_published_tf_saved:
+        # 保存必须发生在 _publish_tf 的 on_next 之后；仅 global 结果写磁盘。
+        if (
+            self.config.save_first_transform_json
+            and not self._first_published_tf_saved
+            and match_mode == "global"
+        ):
             self._pending_cache_record = (
                 self._last_T_map_world.copy(),
                 fitness,
@@ -491,20 +632,38 @@ class RelocalizationModule(Module):
         assert self._premap is not None
         assert self._last_T_map_world is not None
         match_mode = self._current_relocalization_mode()
-        threshold = self.config.fast_icp_min_fitness
-        if threshold is None:
-            threshold = self.config.fitness_threshold
+        is_cached_start = match_mode == "cached_start_fast_icp"
+        if is_cached_start:
+            threshold = self.config.cached_start_min_fitness
+            self._cached_start_attempts += 1
+            init_reloc_t, init_yaw_deg = self._reloc_t_and_yaw_deg(self._last_T_map_world)
+            premap_pts = self._premap_point_count()
+            if self._cached_start_attempts == 1:
+                logger.info(
+                    "fast ICP cached_start attempt #1: "
+                    f"n_pts={len(msg)} premap_pts={premap_pts} "
+                    f"init_reloc_t={init_reloc_t} init_yaw_deg={init_yaw_deg:.1f} "
+                    f"fitness_threshold={threshold} "
+                    f"max_dist={self.config.fast_icp_max_dist} "
+                    f"max_iter={self.config.fast_icp_max_iter} "
+                    f"crop_radius={self.config.fast_icp_crop_radius}"
+                )
+        else:
+            threshold = self.config.fast_icp_min_fitness
+            if threshold is None:
+                threshold = self.config.fitness_threshold
 
         t0 = time.monotonic()
         try:
-            # 仅做墙面 ICP + final ICP；max_iteration 默认并显式传入 50。
-            T_map_world, fitness = _relocalize_with_initial(
+            # 仅做墙面 ICP + final ICP；max_iteration 由 config 传入。
+            T_map_world, fitness, icp_diag = _relocalize_with_initial(
                 self._premap.pointcloud,
                 msg.pointcloud,
                 self._last_T_map_world,
                 max_correspondence_distance=self.config.fast_icp_max_dist,
                 max_iteration=self.config.fast_icp_max_iter,
                 crop_radius=self.config.fast_icp_crop_radius,
+                icp_estimation=self.config.fast_icp_estimation,
             )
         except Exception:
             self._fast_icp_fail_count += 1
@@ -514,16 +673,51 @@ class RelocalizationModule(Module):
             return None
         dt = time.monotonic() - t0
         n_pts = len(msg)
+        logger.info(
+            f"fast ICP diagnostics: mode={match_mode} attempt={self._cached_start_attempts} "
+            f"{icp_diag.to_log_line()}"
+        )
 
         # 快配低于阈值时不更新内存矩阵，随后由主流程决定是否 fallback。
         if fitness < threshold:
             self._fast_icp_fail_count += 1
+            diag = self._pose_delta_log_suffix(
+                T_map_world,
+                self._last_T_map_world,
+                "icp_init",
+            )
+            if is_cached_start and self._json_init_T_map_world is not None:
+                diag += " " + self._pose_delta_log_suffix(
+                    T_map_world,
+                    self._json_init_T_map_world,
+                    "json_init",
+                )
             logger.warning(
-                f"fast ICP rejected: mode={match_mode} fitness={fitness:.3f} "
-                f"< threshold={threshold} time_cost={dt:.3f}s n_pts={n_pts} "
-                f"fail_count={self._fast_icp_fail_count}"
+                f"fast ICP rejected (fitness): mode={match_mode} fitness={fitness:.3f} "
+                f"< threshold={threshold} limiting_stage={icp_diag.limiting_stage} "
+                f"time_cost={dt:.3f}s n_pts={n_pts} "
+                f"fail_count={self._fast_icp_fail_count} attempt={self._cached_start_attempts} "
+                f"{diag}"
             )
             return None
+
+        if is_cached_start and self._json_init_T_map_world is not None:
+            trans_delta_m, yaw_delta_deg = self._pose_delta_m_and_yaw_deg(
+                T_map_world,
+                self._json_init_T_map_world,
+            )
+            max_trans = self.config.cached_start_max_translation_m
+            max_yaw = self.config.cached_start_max_yaw_deg
+            if trans_delta_m > max_trans or abs(yaw_delta_deg) > max_yaw:
+                self._fast_icp_fail_count += 1
+                logger.warning(
+                    f"fast ICP rejected cached_start: fitness={fitness:.3f} "
+                    f"trans_delta={trans_delta_m:.3f}m yaw_delta={yaw_delta_deg:.1f}deg "
+                    f"threshold fitness>={threshold} trans<={max_trans}m yaw<={max_yaw}deg "
+                    f"time_cost={dt:.3f}s n_pts={n_pts} "
+                    f"fail_count={self._fast_icp_fail_count}"
+                )
+                return None
 
         try:
             new_tf = self._tf_from_T_map_world(T_map_world)
@@ -542,7 +736,20 @@ class RelocalizationModule(Module):
         logger.info(
             f"fast ICP accepted: mode={match_mode} fitness={fitness:.3f} "
             f"time_cost={dt:.3f}s n_pts={n_pts} "
-            f"reloc_t={T_map_world[:3, 3].round(3).tolist()}"
+            f"reloc_t={T_map_world[:3, 3].round(3).tolist()} "
+            f"merge_tf={FRAME_WORLD!r}->{FRAME_MAP!r} "
+            f"{self._format_T_map_world_log(T_map_world)} "
+            f"{self._format_T_world_map_log(new_tf)}"
+            + (
+                " "
+                + self._pose_delta_log_suffix(
+                    T_map_world,
+                    self._json_init_T_map_world,
+                    "json_init",
+                )
+                if is_cached_start and self._json_init_T_map_world is not None
+                else ""
+            )
         )
         return new_tf
 
@@ -584,11 +791,21 @@ class RelocalizationModule(Module):
             "global",
         )
         T_world_map = new_tf.to_matrix()
+        global_diag = ""
+        if self._json_init_T_map_world is not None:
+            global_diag = " " + self._pose_delta_log_suffix(
+                T_map_world,
+                self._json_init_T_map_world,
+                "json_init",
+            )
         logger.info(
             f"relocalize: fitness={fitness:.3f} time_cost={dt:.1f}s n_pts={n_pts} "
             f"reloc_t={T_map_world[:3, 3].round(3).tolist()} "
-            f"TF {FRAME_WORLD!r} -> {FRAME_MAP!r} "
-            f"published_t={T_world_map[:3, 3].round(3).tolist()} "
+            f"merge_tf={FRAME_WORLD!r}->{FRAME_MAP!r} "
+            f"{self._format_T_map_world_log(T_map_world)} "
+            f"{self._format_T_world_map_log(new_tf)} "
+            f"published_t={T_world_map[:3, 3].round(3).tolist()}"
+            f"{global_diag}"
         )
         return new_tf
 

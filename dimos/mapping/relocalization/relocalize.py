@@ -18,7 +18,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 import numpy as np
 import open3d as o3d  # type: ignore[import-untyped]
@@ -127,30 +128,171 @@ def _wall_subset(cloud: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
     return subset
 
 
+@dataclass(frozen=True)
+class IcpStageMetrics:
+    """Point-to-plane registration quality at one ICP stage."""
+
+    fitness: float
+    rmse: float
+    inlier_count: int
+    source_pts: int
+
+
+@dataclass(frozen=True)
+class FastIcpDiagnostics:
+    """Diagnostic snapshot for fast ICP (cached-start) root-cause analysis."""
+
+    voxel_size_m: float
+    max_correspondence_distance: float
+    max_iteration: int
+    icp_estimation: str
+    source_raw_pts: int
+    source_fine_pts: int
+    source_wall_pts: int
+    target_full_fine_pts: int
+    target_roi_pts: int
+    crop_enabled: bool
+    crop_radius_m: float | None
+    crop_fallback_full_target: bool
+    crop_aabb_min: list[float] | None
+    crop_aabb_max: list[float] | None
+    wall_before: IcpStageMetrics
+    full_before: IcpStageMetrics
+    wall_after: IcpStageMetrics
+    full_after: IcpStageMetrics
+    init_vs_result_trans_delta_m: float
+    init_vs_result_yaw_delta_deg: float
+    limiting_stage: str
+    combined_fitness: float
+
+    def to_log_line(self) -> str:
+        """Single-line summary for structured logs."""
+        crop = (
+            f"crop_enabled={self.crop_enabled} crop_radius_m={self.crop_radius_m} "
+            f"crop_fallback_full={self.crop_fallback_full_target} "
+            f"crop_aabb_min={self.crop_aabb_min} crop_aabb_max={self.crop_aabb_max}"
+        )
+        return (
+            f"voxel_size_m={self.voxel_size_m} max_dist={self.max_correspondence_distance} "
+            f"max_iter={self.max_iteration} icp_estimation={self.icp_estimation} "
+            f"src_raw={self.source_raw_pts} src_fine={self.source_fine_pts} "
+            f"src_wall={self.source_wall_pts} "
+            f"tgt_full_fine={self.target_full_fine_pts} tgt_roi={self.target_roi_pts} "
+            f"{crop} "
+            f"wall_before fitness={self.wall_before.fitness:.4f} rmse={self.wall_before.rmse:.4f} "
+            f"inliers={self.wall_before.inlier_count}/{self.wall_before.source_pts} "
+            f"full_before fitness={self.full_before.fitness:.4f} rmse={self.full_before.rmse:.4f} "
+            f"inliers={self.full_before.inlier_count}/{self.full_before.source_pts} "
+            f"wall_after fitness={self.wall_after.fitness:.4f} rmse={self.wall_after.rmse:.4f} "
+            f"inliers={self.wall_after.inlier_count}/{self.wall_after.source_pts} "
+            f"full_after fitness={self.full_after.fitness:.4f} rmse={self.full_after.rmse:.4f} "
+            f"inliers={self.full_after.inlier_count}/{self.full_after.source_pts} "
+            f"T_delta trans_m={self.init_vs_result_trans_delta_m:.3f} "
+            f"yaw_deg={self.init_vs_result_yaw_delta_deg:.1f} "
+            f"limiting_stage={self.limiting_stage} combined_fitness={self.combined_fitness:.4f}"
+        )
+
+
+def _inlier_count(result: Any, source_pts: int) -> int:
+    correspondence_set = getattr(result, "correspondence_set", None)
+    if correspondence_set is not None and len(correspondence_set) > 0:
+        return len(correspondence_set)
+    return round(float(result.fitness) * source_pts)
+
+
+def _evaluate_stage(
+    source: o3d.geometry.PointCloud,
+    target: o3d.geometry.PointCloud,
+    max_dist: float,
+    transform: np.ndarray,
+) -> IcpStageMetrics:
+    source_pts = len(source.points)
+    if source_pts == 0:
+        return IcpStageMetrics(0.0, float("nan"), 0, 0)
+    # 当前 Open3D 版 evaluate_registration 无 estimation_method 参数, 默认 point-to-point。
+    evaluated = _reg.evaluate_registration(source, target, max_dist, transform)
+    return IcpStageMetrics(
+        fitness=float(evaluated.fitness),
+        rmse=float(evaluated.inlier_rmse),
+        inlier_count=_inlier_count(evaluated, source_pts),
+        source_pts=source_pts,
+    )
+
+
+IcpEstimation = Literal["point_to_point", "point_to_plane"]
+
+
+def _icp_estimation_method(
+    icp_estimation: IcpEstimation,
+    max_correspondence_distance: float,
+) -> Any:
+    """Build Open3D ICP estimation; point-to-plane matches global relocalize() TukeyLoss."""
+    if icp_estimation == "point_to_point":
+        return _reg.TransformationEstimationPointToPoint()
+    return _reg.TransformationEstimationPointToPlane(
+        _reg.TukeyLoss(k=max_correspondence_distance),
+    )
+
+
+def _metrics_from_icp_result(result: Any, source_pts: int) -> IcpStageMetrics:
+    return IcpStageMetrics(
+        fitness=float(result.fitness),
+        rmse=float(result.inlier_rmse),
+        inlier_count=_inlier_count(result, source_pts),
+        source_pts=source_pts,
+    )
+
+
+def _pose_delta_m_and_yaw_deg(
+    T_result: np.ndarray,
+    T_init: np.ndarray,
+) -> tuple[float, float]:
+    T_delta = T_result @ np.linalg.inv(T_init)
+    trans_m = float(np.linalg.norm(T_delta[:3, 3]))
+    yaw_deg = float(np.degrees(np.arctan2(T_delta[1, 0], T_delta[0, 0])))
+    return trans_m, yaw_deg
+
+
 def _crop_target_around_source(
     source: o3d.geometry.PointCloud,
     target: o3d.geometry.PointCloud,
     init_T_map_world: np.ndarray,
     crop_radius: float,
-) -> o3d.geometry.PointCloud:
+) -> tuple[o3d.geometry.PointCloud, dict[str, Any]]:
     """Crop the target around the source transformed by the cached pose."""
+    meta: dict[str, Any] = {
+        "crop_enabled": True,
+        "crop_radius_m": crop_radius,
+        "crop_fallback_full_target": False,
+        "crop_aabb_min": None,
+        "crop_aabb_max": None,
+        "target_full_fine_pts": len(target.points),
+    }
     source_points = np.asarray(source.points)
     # 空 source 无法形成裁剪框，保留完整 target 交给 ICP 报告真实结果。
     if len(source_points) == 0:
-        return target
+        meta["crop_fallback_full_target"] = True
+        meta["target_roi_pts"] = len(target.points)
+        return target, meta
 
     # 直接用矩阵变换 numpy 点，不复制 Open3D 点云，减少一次内存分配。
     transformed = (init_T_map_world[:3, :3] @ source_points.T).T
     transformed += init_T_map_world[:3, 3]
     min_bound = transformed.min(axis=0) - crop_radius
     max_bound = transformed.max(axis=0) + crop_radius
+    meta["crop_aabb_min"] = min_bound.round(3).tolist()
+    meta["crop_aabb_max"] = max_bound.round(3).tolist()
     crop_box = o3d.geometry.AxisAlignedBoundingBox(min_bound, max_bound)
     cropped = target.crop(crop_box)
 
     # 缓存初值偏差较大时裁剪区可能没有地图点；此时退回完整 premap。
     if len(cropped.points) < 100:
-        return target
-    return cropped
+        meta["crop_fallback_full_target"] = True
+        meta["target_roi_pts"] = len(target.points)
+        return target, meta
+
+    meta["target_roi_pts"] = len(cropped.points)
+    return cropped, meta
 
 
 def _ransac(
@@ -285,7 +427,7 @@ def relocalize(
     # Wall correspondences drive yaw and xy; the rerank then picks the
     # candidate whose walls actually align (not the one whose floors agree).
     # TukeyLoss 降低离群对应点权重，减少动态物体/错误墙面点对 ICP 的影响。
-    tukey = _reg.TransformationEstimationPointToPlane(_reg.TukeyLoss(k=RERANK_DIST))
+    tukey = _icp_estimation_method("point_to_plane", RERANK_DIST)
     polished: list[tuple[float, np.ndarray]] = []
     for T0 in top_k:
         # 以 RANSAC 候选 T0 为初值，只在墙面子集上做中等迭代数 ICP。
@@ -324,7 +466,8 @@ def relocalize_with_initial(
     max_correspondence_distance: float = RERANK_DIST,
     max_iteration: int = 50,
     crop_radius: float | None = 8.0,
-) -> tuple[np.ndarray, float]:
+    icp_estimation: IcpEstimation = "point_to_point",
+) -> tuple[np.ndarray, float, FastIcpDiagnostics]:
     """Refine ``map <- world`` from a cached transform without global RANSAC."""
     # JSON 或调用方传入的初值必须是有限的 4x4 刚体变换矩阵。
     initial = np.asarray(init_T_map_world, dtype=float)
@@ -335,45 +478,101 @@ def relocalize_with_initial(
     if max_correspondence_distance <= 0:
         raise ValueError("max_correspondence_distance must be positive")
 
+    source_raw_pts = len(local_map.points)
     # local 每次都重新下采样；premap 继续使用进程内 fine cache。
     src_fine = _prepare_fine_cloud(local_map)
     tgt_fine = _global_fine(global_map, FINE_VOXEL)
 
+    crop_meta: dict[str, Any] = {
+        "crop_enabled": False,
+        "crop_radius_m": None,
+        "crop_fallback_full_target": False,
+        "crop_aabb_min": None,
+        "crop_aabb_max": None,
+        "target_full_fine_pts": len(tgt_fine.points),
+        "target_roi_pts": len(tgt_fine.points),
+    }
     # 有缓存姿态时只取附近 premap，减少 ICP KD-tree 搜索的 target 点数。
     target_for_icp = tgt_fine
     if crop_radius is not None and crop_radius > 0:
-        target_for_icp = _crop_target_around_source(
+        target_for_icp, crop_meta = _crop_target_around_source(
             src_fine,
             tgt_fine,
             initial,
             crop_radius,
         )
 
-    # 第一段用墙面 ICP 优先纠正 xy/yaw，避免地面高 fitness 掩盖错朝向。
+    # point_to_point: 地面点过多时法向不可靠; point_to_plane: 与全局 relocalize() 一致 TukeyLoss。
+    icp_method = _icp_estimation_method(icp_estimation, max_correspondence_distance)
+    # 第一段用墙面 ICP 优先纠正 xy/yaw。
     src_walls = _wall_subset(src_fine)
     tgt_walls = _wall_subset(target_for_icp)
-    robust_plane = _reg.TransformationEstimationPointToPlane(
-        _reg.TukeyLoss(k=max_correspondence_distance)
+    wall_before = _evaluate_stage(
+        src_walls,
+        tgt_walls,
+        max_correspondence_distance,
+        initial,
+    )
+    full_before = _evaluate_stage(
+        src_fine,
+        target_for_icp,
+        max_correspondence_distance,
+        initial,
     )
     wall_result = _reg.registration_icp(
         src_walls,
         tgt_walls,
         max_correspondence_distance,
         initial,
-        robust_plane,
+        icp_method,
         _reg.ICPConvergenceCriteria(max_iteration=max_iteration),
     )
 
-    # 第二段回到完整点云，用地面/天花板等约束做 final ICP。
+    # 第二段回到完整点云做 final ICP。
     final_result = _reg.registration_icp(
         src_fine,
         target_for_icp,
         max_correspondence_distance,
         wall_result.transformation,
-        robust_plane,
+        icp_method,
         _reg.ICPConvergenceCriteria(max_iteration=max_iteration),
     )
 
+    final_T = np.asarray(final_result.transformation)
+    wall_after = _metrics_from_icp_result(wall_result, len(src_walls.points))
+    full_after = _metrics_from_icp_result(final_result, len(src_fine.points))
     # 取墙面和全点云 fitness 中较小值，两道约束任一不可靠就拒绝。
-    fitness = min(float(wall_result.fitness), float(final_result.fitness))
-    return np.asarray(final_result.transformation), fitness
+    wall_fit = float(wall_result.fitness)
+    final_fit = float(final_result.fitness)
+    # fitness = min(wall_fit, final_fit)
+    # 墙面点匹配数较低，若原premap中该区域墙面点少，则fit值较低，采用大的匹配值
+    fitness = max(wall_fit, final_fit)
+
+    limiting_stage = "wall" if wall_fit <= final_fit else "full"
+    trans_delta_m, yaw_delta_deg = _pose_delta_m_and_yaw_deg(final_T, initial)
+
+    diagnostics = FastIcpDiagnostics(
+        voxel_size_m=FINE_VOXEL,
+        max_correspondence_distance=max_correspondence_distance,
+        max_iteration=max_iteration,
+        icp_estimation=icp_estimation,
+        source_raw_pts=source_raw_pts,
+        source_fine_pts=len(src_fine.points),
+        source_wall_pts=len(src_walls.points),
+        target_full_fine_pts=int(crop_meta["target_full_fine_pts"]),
+        target_roi_pts=int(crop_meta["target_roi_pts"]),
+        crop_enabled=bool(crop_meta["crop_enabled"]),
+        crop_radius_m=crop_meta["crop_radius_m"],
+        crop_fallback_full_target=bool(crop_meta["crop_fallback_full_target"]),
+        crop_aabb_min=crop_meta["crop_aabb_min"],
+        crop_aabb_max=crop_meta["crop_aabb_max"],
+        wall_before=wall_before,
+        full_before=full_before,
+        wall_after=wall_after,
+        full_after=full_after,
+        init_vs_result_trans_delta_m=trans_delta_m,
+        init_vs_result_yaw_delta_deg=yaw_delta_deg,
+        limiting_stage=limiting_stage,
+        combined_fitness=fitness,
+    )
+    return final_T, fitness, diagnostics

@@ -48,7 +48,7 @@ def test_relocalize_with_initial_refines_without_global_ransac() -> None:
     initial = expected.copy()
     initial[:3, 3] += [0.05, -0.04, 0.02]
 
-    result, fitness = relocalize_with_initial(
+    result, fitness, _diag = relocalize_with_initial(
         target,
         source,
         initial,
@@ -56,5 +56,40 @@ def test_relocalize_with_initial_refines_without_global_ransac() -> None:
         crop_radius=2.0,
     )
 
+    assert fitness == pytest.approx(1.0)
+    assert result[:3, 3] == pytest.approx(expected[:3, 3], abs=0.02)
+
+
+def test_relocalize_with_initial_point_to_plane() -> None:
+    rng = np.random.default_rng(7)
+    point_count = 1_200
+    yz = rng.uniform(-2.0, 2.0, (point_count, 2))
+    xz = rng.uniform(-2.0, 2.0, (point_count, 2))
+    xy = rng.uniform(-2.0, 2.0, (point_count, 2))
+    target_points = np.vstack(
+        (
+            np.column_stack((np.zeros(point_count), yz)),
+            np.column_stack((xz[:, 0], np.zeros(point_count), xz[:, 1])),
+            np.column_stack((xy, np.zeros(point_count))),
+        )
+    )
+    expected = np.eye(4)
+    expected[:3, 3] = [0.4, -0.25, 0.0]
+    source_points = target_points - expected[:3, 3]
+    target = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(target_points))
+    source = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(source_points))
+    initial = expected.copy()
+    initial[:3, 3] += [0.05, -0.04, 0.02]
+
+    result, fitness, diag = relocalize_with_initial(
+        target,
+        source,
+        initial,
+        max_iteration=50,
+        crop_radius=2.0,
+        icp_estimation="point_to_plane",
+    )
+
+    assert diag.icp_estimation == "point_to_plane"
     assert fitness == pytest.approx(1.0)
     assert result[:3, 3] == pytest.approx(expected[:3, 3], abs=0.02)
