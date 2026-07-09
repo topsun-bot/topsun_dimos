@@ -21,9 +21,11 @@ try:
 except ImportError:
     CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "dimos"
+    CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "dimos"
 else:
     CONFIG_DIR = Path(GLib.get_user_config_dir())
     STATE_DIR = Path(GLib.get_user_state_dir()) / "dimos"
+    CACHE_DIR = Path(GLib.get_user_cache_dir()) / "dimos"
 
 DIMOS_PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -57,10 +59,13 @@ and frozen *before* the first frame is received.
 Therefore, a maximum capacity for color image and depth image transfer should be defined
 ahead of time.
 """
+# Headroom for pickle/encoding framing on top of raw pixels (~263 B observed),
+# so a full frame doesn't overflow the frozen SHM buffer.
+_SHM_ENCODING_OVERHEAD = 4096
 # Default color image size: 1920x1080 frame x 3 (RGB) x uint8
-DEFAULT_CAPACITY_COLOR_IMAGE = 1920 * 1080 * 3
+DEFAULT_CAPACITY_COLOR_IMAGE = 1920 * 1080 * 3 + _SHM_ENCODING_OVERHEAD
 # Default depth image size: 1280x720 frame * 4 (float32 size)
-DEFAULT_CAPACITY_DEPTH_IMAGE = 1280 * 720 * 4
+DEFAULT_CAPACITY_DEPTH_IMAGE = 1280 * 720 * 4 + _SHM_ENCODING_OVERHEAD
 
 # From https://github.com/lcm-proj/lcm.git
 LCM_MAX_CHANNEL_NAME_LENGTH = 63
