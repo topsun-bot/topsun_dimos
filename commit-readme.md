@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 合并 upstream/main fdf3cb7d（Zenoh/spy/WebRTC/scene） | `77ca3291c` |
 | fast ICP 诊断 / point-to-plane / 开机 odom 分析 | `bacc407a` |
 | Go2 启动 foxglove_config TypeError | `792a4c4d` |
 | relocalize 离线逐步调试脚本 | `58cfbe41` |
@@ -35,6 +36,56 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 77ca3291c — merge: integrate upstream/main fdf3cb7d on 7d2affd7d baseline
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-09 11:15:50 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/core/transport.py` 等 500+ 文件 | 合入 upstream 75 commits（Zenoh、spy、WebRTC、scene、多层导航等） |
+| `dimos/mapping/relocalization/module.py` | 保留 topsun fast ICP / point-to-plane 增强 |
+| `dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py` | 保留 Mid-360 Rerun 配置 |
+| `dimos/robot/unitree/go2/connection.py` | 合并 upstream rage mode + topsun FreeAvoid |
+| `uv.lock` | 依赖锁同步 upstream |
+| `docs/cursor/20260709-upstream-merge-fdf3cb7d说明.md` | 合并说明文档（dimos 模板） |
+
+**改进点**
+
+1. 在 `7d2affd7d` 文件同步基线上合入 upstream `fdf3cb7d`（75 commits），获得 Zenoh 传输、dimos spy、WebRTC SFU、Scene 包、多层导航等新能力。
+2. 采用 `merge -X theirs` + topsun 补丁策略，避免 Git 历史分叉导致的 100+ 假冲突；实际手工处理 17 个文件。
+3. 完整保留 topsun 重定位增强、Mid-360 blueprint、FreeAvoid 接线、examples/mapping-go2。
+
+**用法**
+
+```bash
+# 确认合并结果
+git log -1 --oneline   # 77ca3291c
+wc -l dimos/mapping/relocalization/module.py   # 应为 850
+
+# 更新依赖后启动
+uv sync --extra all
+dimos run unitree-go2 --robot-ip <GO2_IP> --viewer rerun
+
+# 查看合并说明
+cat docs/cursor/20260709-upstream-merge-fdf3cb7d说明.md
+```
+
+**回滚**
+
+```bash
+git reset --hard cadd99364
+# 或仅回滚单个上游文件
+git checkout cadd99364 -- dimos/core/transport.py
+```
+
+---
 
 ### bacc407a — feat(relocalization): fast ICP diagnostics and point-to-plane option
 
