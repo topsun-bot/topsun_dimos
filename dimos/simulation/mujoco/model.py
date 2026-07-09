@@ -80,7 +80,7 @@ def load_model(
         "policy_path": (_get_data_dir() / f"{robot}_policy.onnx").as_posix(),
         "default_angles": np.array(model.keyframe("home").qpos[7:]),
         "n_substeps": n_substeps,
-        "action_scale": 0.5,
+        "action_scale": 1.0,
         "input_controller": input_device,
         "ctrl_dt": ctrl_dt,
     }

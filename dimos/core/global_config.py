@@ -49,6 +49,8 @@ class GlobalConfig(BaseSettings):
     rerun_web: bool = RERUN_ENABLE_WEB
     rerun_host: str | None = None
     rerun_websocket_server_port: int = 3030
+    rerun_save: bool = False
+    rerun_save_dir: str = "~/.local/share/dimos/rrd"
     n_workers: int = 2
     memory_limit: str = "auto"
     mujoco_camera_position: str | None = None
@@ -58,6 +60,7 @@ class GlobalConfig(BaseSettings):
     mujoco_global_map_from_pointcloud: str | None = None
     mujoco_start_pos: str = "-1.0, 1.0"
     mujoco_steps_per_frame: int = 7
+    mujoco_real_time: bool = False  # False = run sim as fast as possible
     robot_model: str | None = None
     robot_id: str | None = None
     robot_width: float = 0.3

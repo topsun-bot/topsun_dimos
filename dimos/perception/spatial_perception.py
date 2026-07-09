@@ -18,6 +18,8 @@ Spatial Memory module for creating a semantic map of the environment.
 
 from datetime import datetime
 import os
+import shutil
+from threading import RLock
 import time
 from typing import TYPE_CHECKING, Any
 import uuid
@@ -52,17 +54,56 @@ _VISUAL_MEMORY_PATH = _SPATIAL_MEMORY_DIR / "visual_memory.pkl"
 logger = setup_logger()
 
 
+_MAX_ROBOT_LOCATIONS = 1000
+
+
+def _wipe_chromadb_directory(db_path: str) -> None:
+    """Remove all Chroma/SQLite files under *db_path*."""
+    if not os.path.isdir(db_path):
+        return
+    for item in os.listdir(db_path):
+        item_path = os.path.join(db_path, item)
+        if os.path.isfile(item_path) or os.path.islink(item_path):
+            os.unlink(item_path)
+        elif os.path.isdir(item_path):
+            shutil.rmtree(item_path)
+
+
+def _create_persistent_chroma_client(db_path: str) -> Any:
+    """Open Chroma persistent store; recreate on corruption."""
+    import chromadb
+    from chromadb.config import Settings
+
+    os.makedirs(db_path, exist_ok=True)
+    settings = Settings(anonymized_telemetry=False, allow_reset=True)
+
+    def _open() -> Any:
+        client = chromadb.PersistentClient(path=db_path, settings=settings)
+        client.heartbeat()  # type: ignore[attr-defined]
+        return client
+
+    try:
+        return _open()
+    except Exception as exc:
+        logger.warning("ChromaDB open failed (%s); wiping and recreating at %s", exc, db_path)
+        _wipe_chromadb_directory(db_path)
+        os.makedirs(db_path, exist_ok=True)
+        return _open()
+
+
 class SpatialConfig(ModuleConfig):
     collection_name: str = "spatial_memory"
     embedding_model: str = "clip"
     embedding_dimensions: int = 512
     min_distance_threshold: float = 0.01  # Min distance in meters to store a new frame
     min_time_threshold: float = 1.0  # Min time in seconds to record a new frame
+    max_stored_frames: int = 500  # FIFO cap on stored frames (0 = unlimited)
+    max_room_images: int = 100  # Max room reference images; oldest evicted when exceeded
     db_path: str | None = str(_DB_PATH)  # Path for ChromaDB persistence
     visual_memory_path: str | None = str(
         _VISUAL_MEMORY_PATH
     )  # Path for saving/loading visual memory
-    new_memory: bool = True  # Whether to create a new memory from scratch
+    new_memory: bool = False  # Whether to create a new memory from scratch
     output_dir: str | None = str(_SPATIAL_MEMORY_DIR)  # Directory for storing visual memory data
     chroma_client: Any = None  # Optional ChromaDB client for persistence
     visual_memory: VisualMemory | None = None  # Optional VisualMemory instance for storing images
@@ -108,35 +149,10 @@ class SpatialMemory(Module):
         self.db_path = self.config.db_path
         self.visual_memory_path = self.config.visual_memory_path
 
-        # Setup ChromaDB client if not provided
         self._chroma_client = self.config.chroma_client
-        if self._chroma_client is None and self.db_path is not None:
-            # Create db directory if needed
-            os.makedirs(self.db_path, exist_ok=True)
-
-            # Clean up existing DB if creating new memory
-            if self.config.new_memory and os.path.exists(self.db_path):
-                try:
-                    logger.info("Creating new ChromaDB database (new_memory=True)")
-                    # Try to delete any existing database files
-                    import shutil
-
-                    for item in os.listdir(self.db_path):
-                        item_path = os.path.join(self.db_path, item)
-                        if os.path.isfile(item_path):
-                            os.unlink(item_path)
-                        elif os.path.isdir(item_path):
-                            shutil.rmtree(item_path)
-                    logger.info(f"Removed existing ChromaDB files from {self.db_path}")
-                except Exception as e:
-                    logger.error(f"Error clearing ChromaDB directory: {e}")
-
-            import chromadb
-            from chromadb.config import Settings
-
-            self._chroma_client = chromadb.PersistentClient(
-                path=self.db_path, settings=Settings(anonymized_telemetry=False)
-            )
+        if self.config.new_memory and self.db_path:
+            logger.info("Creating new ChromaDB database (new_memory=True)")
+            _wipe_chromadb_directory(self.db_path)
 
         # Initialize or load visual memory
         self._visual_memory = self.config.visual_memory
@@ -160,18 +176,19 @@ class SpatialMemory(Module):
             model_name=self.embedding_model, dimensions=self.embedding_dimensions
         )
 
-        self.vector_db: SpatialVectorDB = SpatialVectorDB(
-            collection_name=self.collection_name,
-            chroma_client=self._chroma_client,
-            visual_memory=self._visual_memory,
-            embedding_provider=self.embedding_provider,
-        )
+        self._chroma_lock = RLock()
+        self._chroma_recover_cooldown_until: float = 0.0
+        self.max_stored_frames: int = self.config.max_stored_frames
+        self.max_room_images: int = self.config.max_room_images
+        self._room_image_ids: list[str] = []  # FIFO order for room image eviction
+        self._setup_chromadb()
 
         self.last_position: Vector3 | None = None
         self.last_record_time: float | None = None
 
         self.frame_count: int = 0
         self.stored_frame_count: int = 0
+        self._stored_frame_ids: list[str] = []  # FIFO order for eviction
 
         # List to store robot locations
         self.robot_locations: list[RobotLocation] = []
@@ -181,6 +198,67 @@ class SpatialMemory(Module):
         self._process_interval = 1
 
         logger.info(f"SpatialMemory initialized with model {self.embedding_model}")
+
+    def _setup_chromadb(self, *, wipe: bool = False) -> None:
+        """Create or recreate Chroma client, vector DB, and room collection."""
+        if wipe and self.db_path:
+            _wipe_chromadb_directory(self.db_path)
+
+        if self._chroma_client is None and self.db_path is not None:
+            self._chroma_client = _create_persistent_chroma_client(self.db_path)
+
+        self.vector_db = SpatialVectorDB(
+            collection_name=self.collection_name,
+            chroma_client=self._chroma_client,
+            visual_memory=self._visual_memory,
+            embedding_provider=self.embedding_provider,
+            max_stored_frames=self.max_stored_frames,
+        )
+
+        room_collection_name = f"{self.collection_name}_room_images"
+        if self._chroma_client is not None:
+            self.room_collection = self._chroma_client.get_or_create_collection(
+                name=room_collection_name, metadata={"hnsw:space": "cosine"}
+            )
+        else:
+            import chromadb
+
+            self.room_collection = chromadb.Client().get_or_create_collection(
+                name=room_collection_name, metadata={"hnsw:space": "cosine"}
+            )
+
+    def _chroma_error_recoverable(self, exc: BaseException) -> bool:
+        msg = str(exc).lower()
+        return any(
+            token in msg
+            for token in (
+                "readonly database",
+                "no such table",
+                "failed to get segments",
+                "database error",
+            )
+        )
+
+    def _recover_chromadb_if_needed(self, exc: BaseException) -> bool:
+        if not self._chroma_error_recoverable(exc) or self.db_path is None:
+            return False
+        now = time.time()
+        if now < self._chroma_recover_cooldown_until:
+            return False
+        self._chroma_recover_cooldown_until = now + 30.0
+        logger.warning(
+            "ChromaDB appears corrupt; resetting and re-binding collections at %s", self.db_path
+        )
+        try:
+            with self._chroma_lock:
+                if self._chroma_client is not None:
+                    self._chroma_client.reset()
+                    self._chroma_client = None
+                self._setup_chromadb(wipe=False)
+            return True
+        except Exception:
+            logger.exception("ChromaDB recovery failed")
+            return False
 
     @rpc
     def start(self) -> None:
@@ -275,23 +353,38 @@ class SpatialMemory(Module):
                 "frame_id": frame_id,
             }
 
-            # Store in vector database
-            self.vector_db.add_image_vector(
-                vector_id=frame_id,
-                image=self._latest_video_frame,
-                embedding=frame_embedding,
-                metadata=metadata,
-            )
+            # Store in vector database. Chroma recovery may recreate collections,
+            # so serialize DB access with recovery and room-image queries.
+            with self._chroma_lock:
+                self.vector_db.add_image_vector(
+                    vector_id=frame_id,
+                    image=self._latest_video_frame,
+                    embedding=frame_embedding,
+                    metadata=metadata,
+                )
 
-            # Update tracking variables
-            self.last_position = current_pose.position
-            self.last_record_time = current_time
-            self.stored_frame_count += 1
+                # Update tracking variables only after the DB write succeeds.
+                self.last_position = current_pose.position
+                self.last_record_time = current_time
+                self.stored_frame_count += 1
+                self._stored_frame_ids.append(frame_id)
+
+                # Evict oldest frames when exceeding the max cap (0 = unlimited)
+                if self.max_stored_frames > 0:
+                    while len(self._stored_frame_ids) > self.max_stored_frames:
+                        evict_id = self._stored_frame_ids.pop(0)
+                        try:
+                            self.vector_db.image_collection.delete(ids=[evict_id])
+                        except Exception:
+                            pass
+                        if self._visual_memory is not None:
+                            self._visual_memory.images.pop(evict_id, None)
 
             logger.info(
                 f"Stored frame at position ({current_pose.position.x:.2f}, {current_pose.position.y:.2f}, {current_pose.position.z:.2f}), "
                 f"rotation ({euler.x:.2f}, {euler.y:.2f}, {euler.z:.2f}) "
-                f"stored {self.stored_frame_count}/{self.frame_count} frames"
+                f"stored {self.stored_frame_count}/{self.frame_count} frames "
+                f"(mem={len(self._stored_frame_ids)}/{self.max_stored_frames})"
             )
 
             # Periodically save visual memory to disk
@@ -300,7 +393,10 @@ class SpatialMemory(Module):
                     self.save()
 
         except Exception as e:
-            logger.error(f"Error processing frame: {e}")
+            if self._recover_chromadb_if_needed(e):
+                logger.warning("ChromaDB recovered after frame error; skipping this frame")
+            else:
+                logger.error(f"Error processing frame: {e}")
 
     @rpc
     def query_by_location(
@@ -410,12 +506,30 @@ class SpatialMemory(Module):
             self.last_position = position_v3
             self.last_record_time = current_time
             self.stored_frame_count += 1
+            self._stored_frame_ids.append(frame_id)
+
+            # Evict oldest frames when exceeding the max cap (0 = unlimited)
+            if self.max_stored_frames > 0:
+                while len(self._stored_frame_ids) > self.max_stored_frames:
+                    evict_id = self._stored_frame_ids.pop(0)
+                    try:
+                        self.vector_db.image_collection.delete(ids=[evict_id])
+                    except Exception:
+                        pass
+                    if self._visual_memory is not None:
+                        self._visual_memory.images.pop(evict_id, None)
 
             logger.info(
                 f"Stored frame at position ({position_v3.x:.2f}, {position_v3.y:.2f}, {position_v3.z:.2f}), "
                 f"rotation ({rotation_vec.x:.2f}, {rotation_vec.y:.2f}, {rotation_vec.z:.2f}) "
-                f"stored {self.stored_frame_count}/{self.frame_count} frames"
+                f"stored {self.stored_frame_count}/{self.frame_count} frames "
+                f"(mem={len(self._stored_frame_ids)}/{self.max_stored_frames})"
             )
+
+            # Periodically save visual memory to disk
+            if self._visual_memory is not None and self.visual_memory_path is not None:
+                if self.stored_frame_count % 100 == 0:
+                    self.save()
 
             # Create return dictionary with primitive-compatible values
             return {
@@ -475,8 +589,20 @@ class SpatialMemory(Module):
             True if successfully added, False otherwise
         """
         try:
-            # Add to our list of robot locations
-            self.robot_locations.append(location)
+            # Dedup by name: replace existing entry with the same name
+            existing_idx = None
+            for i, loc in enumerate(self.robot_locations):
+                if loc.name.lower() == location.name.lower():
+                    existing_idx = i
+                    break
+            if existing_idx is not None:
+                self.robot_locations[existing_idx] = location
+            else:
+                self.robot_locations.append(location)
+                # Cap the list; drop the oldest entry when exceeded
+                while len(self.robot_locations) > _MAX_ROBOT_LOCATIONS:
+                    self.robot_locations.pop(0)
+
             logger.info(f"Added robot location '{location.name}' at position {location.position}")
             return True
 
@@ -557,7 +683,66 @@ class SpatialMemory(Module):
                 - frame_count: Total number of frames processed
                 - stored_frame_count: Number of frames actually stored
         """
-        return {"frame_count": self.frame_count, "stored_frame_count": self.stored_frame_count}
+        return {
+            "frame_count": self.frame_count,
+            "stored_frame_count": self.stored_frame_count,
+            "retained_frame_count": len(self.vector_db._frame_ids),
+            "max_stored_frames": self.max_stored_frames,
+        }
+
+    @rpc
+    def clear_all(self) -> dict[str, int]:
+        """Clear ChromaDB collections, visual memory, and tagged locations."""
+        room_n = 0
+        frame_n = 0
+        loc_n = 0
+        try:
+            room_ids = self.room_collection.get(include=[])["ids"] or []
+            room_n = len(room_ids)
+            if room_ids:
+                self.room_collection.delete(ids=room_ids)
+        except Exception:
+            logger.debug("room_collection unreadable during clear_all", exc_info=True)
+
+        try:
+            img_ids = self.vector_db.image_collection.get(include=[])["ids"] or []
+            frame_n = len(img_ids)
+            if img_ids:
+                self.vector_db.image_collection.delete(ids=img_ids)
+        except Exception:
+            logger.debug("image_collection unreadable during clear_all", exc_info=True)
+
+        try:
+            loc_ids = self.vector_db.location_collection.get(include=[])["ids"] or []
+            loc_n = len(loc_ids)
+            if loc_ids:
+                self.vector_db.location_collection.delete(ids=loc_ids)
+        except Exception:
+            logger.debug("location_collection unreadable during clear_all", exc_info=True)
+
+        self.robot_locations.clear()
+        self._room_image_ids.clear()
+        self._stored_frame_ids.clear()
+        self.vector_db._frame_ids.clear()
+        self.frame_count = 0
+        self.stored_frame_count = 0
+
+        if self._visual_memory:
+            self._visual_memory.clear()
+
+        if self.visual_memory_path and os.path.isfile(self.visual_memory_path):
+            try:
+                os.unlink(self.visual_memory_path)
+            except OSError:
+                pass
+
+        logger.info(
+            "Spatial memory cleared: room_images=%d frames=%d tagged_locations=%d",
+            room_n,
+            frame_n,
+            loc_n,
+        )
+        return {"room_images": room_n, "frames": frame_n, "tagged_locations": loc_n}
 
     @rpc
     def tag_location(self, robot_location: RobotLocation) -> bool:
@@ -573,6 +758,225 @@ class SpatialMemory(Module):
         if semantic_distance < 0.3:
             return location
         return None
+
+    @rpc
+    def tag_location_with_image(self, robot_location: RobotLocation, image: np.ndarray) -> bool:
+        """Tag a location with both a text label and a reference image.
+
+        Stores the camera frame's CLIP embedding in the room_images collection
+        so the room can later be recognized visually, even after coordinate shifts.
+
+        Multiple images can be stored for the same room — record from different
+        angles / positions to improve recognition robustness.
+
+        Args:
+            robot_location: Location with at minimum name and position/rotation.
+            image: Camera frame (numpy array, BGR) captured at this location.
+
+        Returns:
+            True on success.
+        """
+        if self._visual_memory is None:
+            logger.error("tag_location_with_image: visual memory not initialized")
+            return False
+
+        for attempt in range(2):
+            try:
+                with self._chroma_lock:
+                    self.vector_db.tag_location(robot_location)
+
+                    embedding = self.embedding_provider.get_embedding(image)
+                    metadata = robot_location.to_vector_metadata()
+
+                    self._visual_memory.add(robot_location.location_id, image)
+
+                    self.room_collection.add(
+                        ids=[robot_location.location_id],
+                        embeddings=[embedding.tolist()],
+                        metadatas=[metadata],
+                    )
+                    self._room_image_ids.append(robot_location.location_id)
+
+                    while len(self._room_image_ids) > self.max_room_images:
+                        evict_id = self._room_image_ids.pop(0)
+                        try:
+                            self.room_collection.delete(ids=[evict_id])
+                        except Exception:
+                            pass
+                        self._visual_memory.images.pop(evict_id, None)
+
+                logger.info(
+                    "Stored room reference image for '%s' (id=%s, room_images=%d/%d)",
+                    robot_location.name,
+                    robot_location.location_id,
+                    len(self._room_image_ids),
+                    self.max_room_images,
+                )
+                return True
+            except Exception as exc:
+                if attempt == 0 and self._recover_chromadb_if_needed(exc):
+                    logger.warning(
+                        "Retrying tag_location_with_image for '%s' after ChromaDB recovery",
+                        robot_location.name,
+                    )
+                    continue
+                logger.exception(
+                    "Failed to tag location with image for '%s' (%s)",
+                    robot_location.name,
+                    type(exc).__name__,
+                )
+                return False
+        return False
+
+    @rpc
+    def query_location_by_image(self, image: np.ndarray) -> RobotLocation | None:
+        """Recognize the current location by comparing the camera view against
+        stored room reference images.
+
+        Uses CLIP image-to-image similarity — no coordinates involved.
+        Queries the top-3 closest reference images (a room may have multiple
+        reference photos from different angles) and returns the best match.
+
+        Args:
+            image: Current camera frame (numpy array, BGR).
+
+        Returns:
+            Best-matching RobotLocation, or None if no rooms stored or confidence too low.
+            The ``metadata`` dict will contain a ``"distance"`` key (float, lower = better).
+        """
+        try:
+            embedding = self.embedding_provider.get_embedding(image)
+            with self._chroma_lock:
+                results = self.room_collection.query(
+                    query_embeddings=[embedding.tolist()],
+                    n_results=3,
+                    include=["metadatas", "distances"],
+                )
+            if not results["ids"] or not results["ids"][0]:
+                return None
+
+            # Pick the best match across all reference images (lowest distance)
+            best_idx = 0
+            best_distance = float("inf")
+            for i, dist in enumerate(results["distances"][0]):  # type: ignore[arg-type]
+                if dist < best_distance:
+                    best_distance = float(dist)
+                    best_idx = i
+
+            metadata = results["metadatas"][0][best_idx]  # type: ignore[index]
+            location = RobotLocation.from_vector_metadata(metadata)  # type: ignore[arg-type]
+            location.metadata["distance"] = best_distance
+            logger.info(
+                "Visual room match: '%s' (distance=%.4f, top-%d results checked)",
+                location.name,
+                best_distance,
+                len(results["ids"][0]),
+            )
+            return location
+        except Exception as exc:
+            if self._recover_chromadb_if_needed(exc):
+                logger.warning("ChromaDB recovered after image query error")
+            else:
+                logger.exception("query_location_by_image failed")
+            return None
+
+    @rpc
+    def get_room_images(self) -> list[dict[str, object]]:
+        """Return stored room reference images, grouped by room name with counts.
+
+        Returns:
+            List of dicts with keys: name, count, images (list of {id, timestamp}).
+        """
+        try:
+            data = self.room_collection.get(include=["metadatas"])
+            rooms: dict[str, list[dict[str, object]]] = {}
+            for meta in data.get("metadatas", []) or []:
+                name = meta.get("location_name", "?")
+                rooms.setdefault(name, []).append(
+                    {
+                        "location_id": meta.get("location_id", ""),
+                        "timestamp": meta.get("timestamp", 0),
+                    }
+                )
+            result: list[dict[str, object]] = []
+            for name, images in sorted(rooms.items()):
+                result.append({"name": name, "count": len(images), "images": images})
+            return result
+        except Exception:
+            logger.exception("get_room_images failed")
+            return []
+
+    @rpc
+    def get_room_image(self, location_id: str) -> np.ndarray | None:
+        """Retrieve a raw room reference image by its location_id.
+
+        Args:
+            location_id: The location_id from get_room_images() or query_location_by_image().
+
+        Returns:
+            Numpy array (BGR) of the stored image, or None if not found.
+        """
+        if self._visual_memory is None:
+            return None
+        return self._visual_memory.get(location_id)
+
+    @rpc
+    def get_image_by_id(self, frame_id: str) -> np.ndarray | None:
+        """Retrieve a stored spatial-memory frame by its frame_id.
+
+        Args:
+            frame_id: The frame_id from query_by_text or query_by_text_with_images results.
+
+        Returns:
+            Numpy array (BGR) of the stored frame, or None if not found.
+        """
+        if self._visual_memory is None:
+            return None
+        return self._visual_memory.get(frame_id)
+
+    @rpc
+    def query_by_text_with_images(self, text: str, limit: int = 3) -> list[dict[str, Any]]:
+        """Query spatial memory by text, returning results WITH decoded images.
+
+        Like query_by_text but also retrieves the actual pixel data from
+        VisualMemory so VLM can re-analyze them. Only top-K results include
+        images to keep the payload manageable.
+
+        Args:
+            text: Text query to search for.
+            limit: Maximum number of results (images attached).
+
+        Returns:
+            List of dicts with keys: metadata, id, distance, image (np.ndarray|None).
+        """
+        try:
+            txt_embedding = self.embedding_provider.get_text_embedding(text)
+            results = self.vector_db.image_collection.query(
+                query_embeddings=[txt_embedding.tolist()],
+                n_results=limit,
+                include=["metadatas", "distances"],
+            )
+            if not results or not results["ids"] or not results["ids"][0]:
+                return []
+
+            out: list[dict[str, Any]] = []
+            for i in range(len(results["ids"][0])):
+                vid = results["ids"][0][i]
+                meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+                dist = float(results["distances"][0][i]) if results.get("distances") else 1.0
+                img = self._visual_memory.get(vid) if self._visual_memory is not None else None
+                out.append(
+                    {
+                        "id": vid,
+                        "metadata": meta,
+                        "distance": dist,
+                        "image": img,
+                    }
+                )
+            return out
+        except Exception:
+            logger.exception("query_by_text_with_images failed")
+            return []
 
 
 def deploy(  # type: ignore[no-untyped-def]

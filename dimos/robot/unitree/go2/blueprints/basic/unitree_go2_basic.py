@@ -159,13 +159,23 @@ rerun_config = {
         "world/merged_map": _convert_global_map,
         "world/navigation_costmap": _convert_navigation_costmap,
     },
+    # Throttle high-volume entities. ``0`` would mean "no limit" in the bridge,
+    # which lets the live in-memory ring buffer grow as fast as the source
+    # publishes — the main cause of long-run viewer/bridge memory bloat. The
+    # values below are well below source rates (color ~14 Hz, maps ~7-8 Hz)
+    # but high enough that the viewer still feels live.
     "max_hz": {
         "world/lidar": 2,  # source ~7.8 Hz; default layer was hidden in blueprint
         "world/global_map": 2,  # source ~7.8 Hz
         "world/color_image": 5,  # source ~14 Hz
         "world/global_costmap": 2,  # source ~7.6 Hz
     },
+    # Cap the bridge/viewer in-memory ring buffer. The default ``"25%"`` of
+    # system RAM is plenty large to compete with MuJoCo + perception workers
+    # for memory in long sims. ``"2GB"`` is enough to keep ~minute(s) of
+    # history at the throttled rates above.
     "memory_limit": "2GB",
+    # slapping a go2 shaped box on top of tf/base_link
     "static": {
         "world/tf/base_link": _static_base_link,
     },

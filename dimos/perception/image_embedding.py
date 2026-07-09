@@ -75,7 +75,8 @@ class ImageEmbeddingProvider:
             )
 
             if self.model_name == "clip":
-                model_id = get_data("models_clip") / "model.onnx"
+                clip_data_dir = get_data("models_clip")
+                model_id = clip_data_dir / "model.onnx"
                 self.model_path = str(model_id)  # type: ignore[assignment]  # Store for pickling
                 processor_id = "openai/clip-vit-base-patch32"
 
@@ -90,7 +91,15 @@ class ImageEmbeddingProvider:
                 self.model = ort.InferenceSession(str(model_id), providers=providers)
 
                 actual_providers = self.model.get_providers()  # type: ignore[attr-defined]
-                self.processor = CLIPProcessor.from_pretrained(processor_id)
+                # Prefer bundled tokenizer/processor (avoids HF hub + SOCKS proxy issues).
+                if (clip_data_dir / "preprocessor_config.json").exists():
+                    self.processor = CLIPProcessor.from_pretrained(
+                        str(clip_data_dir), local_files_only=True
+                    )
+                    logger.info("Loaded CLIP processor from local %s", clip_data_dir)
+                else:
+                    self.processor = CLIPProcessor.from_pretrained(processor_id)
+                    logger.info("Loaded CLIP processor from HuggingFace %s", processor_id)
                 logger.info(f"Loaded CLIP model: {model_id} with providers: {actual_providers}")
             elif self.model_name == "resnet":
                 model_id = "microsoft/resnet-50"  # type: ignore[assignment]

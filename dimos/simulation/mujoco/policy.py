@@ -84,6 +84,11 @@ class Go1OnnxController(OnnxController):
         gravity = imu_xmat.T @ np.array([0, 0, -1])
         joint_angles = data.qpos[7:] - self._default_angles
         joint_velocities = data.qvel[6:]
+        command = self._input_controller.get_command().copy()
+        # Boost velocity commands so the ONNX policy tracks them more aggressively.
+        command[0] = command[0] * 2.0  # forward
+        command[1] = command[1] * 2.0  # lateral
+        command[2] = command[2] * 3.0  # rotational — policy is very conservative here
         obs = np.hstack(
             [
                 linvel,
@@ -92,7 +97,7 @@ class Go1OnnxController(OnnxController):
                 joint_angles,
                 joint_velocities,
                 self._last_action,
-                self._input_controller.get_command(),
+                command,
             ]
         )
         return obs.astype(np.float32)

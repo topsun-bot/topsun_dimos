@@ -212,6 +212,28 @@ class RelocalizationModule(Module):
         # start() 只有 map_file 非空才调用缓存逻辑，这里保留 default 便于单测和容错。
         return self._sanitize_map_key(self.config.map_file or "default")
 
+    @rpc
+    def get_current_map_key(self) -> str | None:
+        """Return the stable key for the configured preloaded map."""
+        if not self.config.map_file:
+            return None
+        return self._map_cache_key()
+
+    @rpc
+    def get_current_map_file(self) -> str | None:
+        """Return the configured map file/stem used by this relocalization module."""
+        return self.config.map_file
+
+    @rpc
+    def get_world_to_map(self) -> Transform | None:
+        """Return the latest validated world<-map transform, if available."""
+        return self._last_world_to_map_tf
+
+    @rpc
+    def is_relocalized(self) -> bool:
+        """Whether this run has published a validated world<-map transform."""
+        return self._last_world_to_map_tf is not None and self._has_published_tf_this_run
+
     @staticmethod
     def _resolve_cache_path(value: str) -> Path:
         # 用户给绝对路径时原样使用；相对路径固定相对仓库根目录，而非启动 cwd。

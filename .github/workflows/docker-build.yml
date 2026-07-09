@@ -95,8 +95,8 @@ jobs:
         needs.ros.result != 'error'
         }}
 
-      from-image: ghcr.io/dimensionalos/ros:${{ needs.ros.result == 'success' && needs.check-changes.outputs.branch-tag || 'latest' }}
-      to-image: ghcr.io/dimensionalos/ros-python:${{ needs.check-changes.outputs.branch-tag }}
+      from-image: ghcr.io/topsun-bot/ros:${{ needs.ros.result == 'success' && needs.check-changes.outputs.branch-tag || 'latest' }}
+      to-image: ghcr.io/topsun-bot/ros-python:${{ needs.check-changes.outputs.branch-tag }}
       dockerfile:  python
 
   python:
@@ -107,7 +107,7 @@ jobs:
       should-run: true
       dockerfile:  python
       from-image: ubuntu:22.04
-      to-image: ghcr.io/dimensionalos/python:${{ needs.check-changes.outputs.branch-tag }}
+      to-image: ghcr.io/topsun-bot/python:${{ needs.check-changes.outputs.branch-tag }}
 
   dev:
     needs: [check-changes, python]
@@ -120,9 +120,60 @@ jobs:
         ((needs.python.result == 'success') ||
         (needs.python.result == 'skipped' &&
         needs.check-changes.outputs.dev == 'true')) }}
-      from-image: ghcr.io/dimensionalos/python:${{ needs.python.result == 'success' && needs.check-changes.outputs.branch-tag || 'latest' }}
-      to-image: ghcr.io/dimensionalos/dev:${{ needs.check-changes.outputs.branch-tag }}
+      from-image: ghcr.io/topsun-bot/python:${{ needs.python.result == 'success' && needs.check-changes.outputs.branch-tag || 'latest' }}
+      to-image: ghcr.io/topsun-bot/dev:${{ needs.check-changes.outputs.branch-tag }}
       dockerfile: dev
+
+  navigation:
+    needs: [check-changes]
+    if: needs.check-changes.outputs.navigation == 'true'
+    runs-on: [self-hosted, Linux]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Fix permissions
+        run: |
+          sudo chown -R $USER:$USER ${{ github.workspace }} || true
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Checkout ros-navigation-autonomy-stack
+        uses: actions/checkout@v5
+        with:
+          repository: dimensionalOS/ros-navigation-autonomy-stack
+          ref: fastlio2
+          path: docker/navigation/ros-navigation-autonomy-stack
+          fetch-depth: 1
+          lfs: false
+          token: ${{ secrets.NAV_REPO_READ_TOKEN }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: crazy-max/ghaction-github-runtime@v3
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          install: true
+          use: true
+
+      - uses: docker/build-push-action@v6
+        with:
+          push: true
+          context: .
+          file: docker/navigation/Dockerfile
+          tags: ghcr.io/topsun-bot/navigation:${{ needs.check-changes.outputs.branch-tag }}
+          cache-from: type=gha,scope=navigation
+          cache-to: type=gha,mode=max,scope=navigation
+          build-args: |
+            ROS_DISTRO=humble
 
   ros-dev:
     needs: [check-changes, ros-python]
@@ -134,8 +185,8 @@ jobs:
         (needs.check-changes.outputs.dev == 'true' ||
          (needs.ros-python.result == 'success' && (needs.check-changes.outputs.python == 'true' || needs.check-changes.outputs.ros == 'true')))
         }}
-      from-image: ghcr.io/dimensionalos/ros-python:${{ needs.ros-python.result == 'success' && needs.check-changes.outputs.branch-tag || 'latest' }}
-      to-image: ghcr.io/dimensionalos/ros-dev:${{ needs.check-changes.outputs.branch-tag }}
+      from-image: ghcr.io/topsun-bot/ros-python:${{ needs.ros-python.result == 'success' && needs.check-changes.outputs.branch-tag || 'latest' }}
+      to-image: ghcr.io/topsun-bot/ros-dev:${{ needs.check-changes.outputs.branch-tag }}
       dockerfile: dev
 
   build-complete:

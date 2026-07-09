@@ -18,6 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import field
+from datetime import datetime
+import os
+from pathlib import Path
 import signal
 import socket
 import subprocess
@@ -181,6 +184,14 @@ class Config(ModuleConfig):
     web_port: int = RERUN_WEB_VIEWER_PORT
     blueprint: BlueprintFactory | None = _default_blueprint
 
+    # When True, the bridge also writes everything it logs to a local .rrd file.
+    # The file lives for the lifetime of this run; replay it later with
+    # ``rerun <file>.rrd`` or ``dimos-viewer <file>.rrd``. The live in-memory
+    # buffer is still subject to ``memory_limit`` — saving to disk is an
+    # additional sink, not a replacement.
+    save_to_disk: bool = False
+    save_dir: str = "~/.local/share/dimos/rrd"
+
 
 Config.model_rebuild(_types_namespace={"Archetype": Archetype, "Blueprint": Blueprint})
 
@@ -274,6 +285,8 @@ class RerunBridgeModule(Module):
 
     def _on_message(self, msg: Any, topic: Any) -> None:
         """Handle incoming message - log to rerun."""
+        if not getattr(self, "_rerun_active", False):
+            return
 
         entity_path: str = self._get_entity_path(topic)
 
@@ -289,19 +302,26 @@ class RerunBridgeModule(Module):
         if not rerun_data:
             return
 
-        # TFMessage for example returns list of (entity_path, archetype) tuples
-        if is_rerun_multi(rerun_data):
-            for path, archetype in rerun_data:
-                rr.log(path, archetype)
-        else:
-            rr.log(entity_path, cast("Archetype", rerun_data))
-            # if source msg carries a frame_id, attach the entity to that TF frame
-            # should skip if archetype is a Transform3D
-            if not isinstance(rerun_data, rr.Transform3D):
-                frame_id = getattr(msg, "frame_id", None)
-                if frame_id and self._frame_attached.get(entity_path) != frame_id:
-                    rr.log(entity_path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))
-                    self._frame_attached[entity_path] = frame_id
+        try:
+            # TFMessage for example returns list of (entity_path, archetype) tuples
+            if is_rerun_multi(rerun_data):
+                for path, archetype in rerun_data:
+                    rr.log(path, archetype)
+            else:
+                rr.log(entity_path, cast("Archetype", rerun_data))
+                # if source msg carries a frame_id, attach the entity to that TF frame
+                # should skip if archetype is a Transform3D
+                if not isinstance(rerun_data, rr.Transform3D):
+                    frame_id = getattr(msg, "frame_id", None)
+                    if frame_id and self._frame_attached.get(entity_path) != frame_id:
+                        rr.log(entity_path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))
+                        self._frame_attached[entity_path] = frame_id
+        except RuntimeError:
+            logger.warning(
+                "Rerun log failed (gRPC disconnected) — disabling Rerun bridge",
+                exc_info=True,
+            )
+            self._rerun_active = False
 
     @rpc
     def start(self) -> None:
@@ -309,12 +329,56 @@ class RerunBridgeModule(Module):
 
         logger.info("Rerun bridge starting")
 
+        self._rerun_active = False
         self._last_log = {}
         self._frame_attached = {}
         self._min_intervals: dict[str, float] = {
             entity: 1.0 / hz for entity, hz in self.config.max_hz.items() if hz > 0
         }
 
+        try:
+            self._start_rerun_recording()
+            self._rerun_active = True
+        except Exception:
+            self._rerun_active = False
+            logger.warning(
+                "Rerun bridge failed to start (viewer/SDK mismatch?). "
+                "Continuing without Rerun — use --viewer none to silence this.",
+                exc_info=True,
+            )
+
+        for pubsub in self.config.pubsubs:
+            logger.info(f"bridge listening on {pubsub.__class__.__name__}")
+            if hasattr(pubsub, "start"):
+                pubsub.start()
+            unsub = pubsub.subscribe_all(self._on_message)
+            self.register_disposable(Disposable(unsub))
+
+        for pubsub in self.config.pubsubs:
+            if hasattr(pubsub, "stop"):
+                self.register_disposable(Disposable(pubsub.stop))  # type: ignore[union-attr]
+
+        self._log_static()
+
+    def _log_static(self) -> None:
+        if not getattr(self, "_rerun_active", False):
+            return
+        try:
+            for entity_path, factory in self.config.static.items():
+                data = factory(rr)
+                if isinstance(data, list):
+                    for archetype in data:
+                        rr.log(entity_path, archetype, static=True)
+                else:
+                    rr.log(entity_path, data, static=True)
+        except RuntimeError:
+            logger.warning(
+                "Rerun static logging failed (gRPC disconnected) — disabling Rerun bridge",
+                exc_info=True,
+            )
+            self._rerun_active = False
+
+    def _start_rerun_recording(self) -> None:
         connect_url = self.config.connect_url
         if connect_url is None:
             connect_url = f"rerun+http://{self.host}:{RERUN_GRPC_PORT}/proxy"
@@ -327,6 +391,9 @@ class RerunBridgeModule(Module):
             },
         )
         assert server_uri is not None  # start_grpc=True guarantees a URI
+
+        if self.config.save_to_disk:
+            self._enable_disk_sink()
 
         parsed = urlparse(connect_url.replace("rerun+", "", 1))
         grpc_port = parsed.port or RERUN_GRPC_PORT
@@ -390,18 +457,35 @@ class RerunBridgeModule(Module):
         if self.config.blueprint:
             rr.send_blueprint(_with_graph_tab(self.config.blueprint()))
 
-        for pubsub in self.config.pubsubs:
-            logger.info(f"bridge listening on {pubsub.__class__.__name__}")
-            if hasattr(pubsub, "start"):
-                pubsub.start()
-            unsub = pubsub.subscribe_all(self._on_message)
-            self.register_disposable(Disposable(unsub))
+    def _enable_disk_sink(self) -> None:
+        """Add a .rrd file sink so the recording is persisted to disk.
 
-        for pubsub in self.config.pubsubs:
-            if hasattr(pubsub, "stop"):
-                self.register_disposable(Disposable(pubsub.stop))  # type: ignore[union-attr]
+        Coexists with the live gRPC server — both receive every ``rr.log()``.
+        Saving does NOT relieve memory pressure (the in-memory ring buffer is
+        still bounded by ``memory_limit``); it only lets you replay the run
+        later with ``rerun <file>.rrd``.
+        """
+        save_dir = Path(os.path.expanduser(self.config.save_dir))
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning(
+                f"Could not create rerun save dir {save_dir!r}, skipping disk sink",
+                exc_info=True,
+            )
+            return
 
-        self._log_static()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = save_dir / f"dimos_{timestamp}.rrd"
+
+        try:
+            rr.save(str(save_path))
+        except Exception:
+            logger.warning(f"Failed to enable rerun disk sink at {save_path}", exc_info=True)
+            return
+
+        self._save_path = save_path
+        logger.info(f"Rerun bridge also writing to {save_path}")
 
     def _log_connect_hints(self, grpc_port: int) -> None:
         """Log CLI commands for connecting a viewer to this bridge."""
@@ -429,15 +513,6 @@ class RerunBridgeModule(Module):
         lines.append("")
 
         logger.info("\n".join(lines))
-
-    def _log_static(self) -> None:
-        for entity_path, factory in self.config.static.items():
-            data = factory(rr)
-            if isinstance(data, list):
-                for archetype in data:
-                    rr.log(entity_path, archetype, static=True)
-            else:
-                rr.log(entity_path, data, static=True)
 
     @rpc
     def log_blueprint_graph(self, dot_code: str, module_names: list[str]) -> None:

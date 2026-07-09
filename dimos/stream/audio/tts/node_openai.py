@@ -15,6 +15,7 @@
 
 from enum import Enum
 import io
+import os
 import threading
 import time
 
@@ -73,9 +74,8 @@ class OpenAITTSNode(AbstractTextConsumer, AbstractAudioEmitter, AbstractTextEmit
         self.model = model
         self.speed = speed
         self.buffer_size = buffer_size
-
-        # Initialize OpenAI client
-        self.client = OpenAI(api_key=api_key)
+        self._api_key = (api_key or os.getenv("OPENAI_API_KEY") or "").strip() or None
+        self._client: OpenAI | None = None
 
         # Initialize state
         self.audio_subject = Subject()  # type: ignore[var-annotated]
@@ -85,6 +85,17 @@ class OpenAITTSNode(AbstractTextConsumer, AbstractAudioEmitter, AbstractTextEmit
         self.is_running = True
         self.text_queue = []  # type: ignore[var-annotated]
         self.queue_lock = threading.Lock()
+
+    @property
+    def client(self) -> OpenAI:
+        if self._client is None:
+            if not self._api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY is required for TTS (set env var or pass api_key=)"
+                )
+            # Explicit base_url so we don't inherit OPENAI_BASE_URL (e.g. DeepSeek).
+            self._client = OpenAI(api_key=self._api_key, base_url="https://api.openai.com/v1")
+        return self._client
 
     def emit_audio(self) -> Observable:  # type: ignore[type-arg]
         """
