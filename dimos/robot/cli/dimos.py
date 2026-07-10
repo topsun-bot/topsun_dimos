@@ -191,6 +191,14 @@ def load_config_args(config: type[BaseModel], args: Iterable[str], path: Path) -
         parts = k.lower().split("__")
         if parts[0] not in config.model_fields:
             continue
+        # Single-segment env vars that target a BaseModel field (e.g. SPEAKSKILL="")
+        # cannot be meaningfully coerced — skip them to avoid validation errors.
+        if len(parts) == 1:
+            field_type = config.model_fields[parts[0]].annotation
+            origin = get_origin(field_type)
+            type_args = get_args(field_type) if origin in {Union, types.UnionType} else (field_type,)
+            if any(inspect.isclass(t) and issubclass(t, BaseModel) for t in type_args if t is not type(None)):
+                continue
         d = kwargs
         for p in parts[:-1]:
             d = d.setdefault(p, {})

@@ -112,6 +112,12 @@ class UnitreeWebRTCConnection(Resource):
         if not aes_128_key:
             aes_128_key = os.environ.get("UNITREE_AES_128_KEY")
         extra: dict[str, Any] = {"aes_128_key": aes_128_key} if aes_128_key else {}
+        # 如果库版本不支持 aes_128_key 参数则忽略（旧固件机器人不需要）
+        import inspect
+
+        _sig = inspect.signature(LegionConnection.__init__)
+        if "aes_128_key" not in _sig.parameters:
+            extra.pop("aes_128_key", None)
         self.conn = LegionConnection(WebRTCConnectionMethod.LocalSTA, ip=self.ip, **extra)
         self.connect()
 

@@ -86,3 +86,7 @@ htmlcov/
 
 # Memory2 autorecord
 recording*.db
+
+# Local-only config (may contain secrets) and runtime logs
+/a.json
+MUJOCO_LOG.TXT

@@ -180,6 +180,14 @@ class McpClient(Module):
                 if time.monotonic() >= deadline:
                     return None
                 time.sleep(interval)
+            except httpx.HTTPStatusError as e:
+                # 5xx means server is up but not ready yet (e.g. 502 during startup)
+                if e.response.status_code >= 500:
+                    if time.monotonic() >= deadline:
+                        return None
+                    time.sleep(interval)
+                else:
+                    raise
 
         return self._mcp_request("tools/list")
 
