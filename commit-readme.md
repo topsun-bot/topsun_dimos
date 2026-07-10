@@ -86,6 +86,44 @@ git checkout cadd99364 -- dimos/core/transport.py
 ```
 
 ---
+### adfaf2ffe - docs: add upstream merge fdf3cb7d report and update commit-readme
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-09 11:19:14 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `docs/cursor/20260709-upstream-merge-fdf3cb7d说明.md` | 按 dimos 模板重写 upstream merge 说明（传输层/学习管线/Go2增强/建图导航/冲突解决，995 行） |
+| `docs/cursor/20260709-upstream-merge-fdf3cb7d说明.pdf` | PDF 重生成（29 页 / 1.77 MB） |
+| `commit-readme.md` | 追加 77ca3291c merge 记录 |
+
+**改进点**
+
+1. 按 dimos 文档模板重写 upstream merge 说明, 从「只列 PR」升级为「通俗篇 + 总览图 + 分主题详解（问题->答案->代码片段->对比表）+ 冲突解决 + 端到端实战 + cheatsheet」。
+2. 深度调研三个方向（传输层、学习管线、LIO/Go2）, 引用实际源码路径和类名, 解释「为什么改」和「怎么落地」。
+
+**用法**
+
+```bash
+# 查看重写后的文档
+cat docs/cursor/20260709-upstream-merge-fdf3cb7d说明.md
+# 或看 PDF
+xdg-open docs/cursor/20260709-upstream-merge-fdf3cb7d说明.pdf
+```
+
+**回滚**
+
+```bash
+git checkout adfaf2ffe~1 -- docs/cursor/20260709-upstream-merge-fdf3cb7d说明.md
+```
+
+---
+
 
 ### bacc407a — feat(relocalization): fast ICP diagnostics and point-to-plane option
 

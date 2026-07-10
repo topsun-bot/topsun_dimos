@@ -16,6 +16,8 @@
 | 2026-06-30 | max_hz 不影响录制 | [§8](#8-max_hz-不影响录制) |
 | 2026-06-30 | venv 路径、gitlab/dimos editable | [§9](#9-环境与路径备忘) |
 | 2026-06-30 | gtsam、map global、PGO、mapping extra | [§11](#11-dimos-map-global-缺少-gtsam) |
+| 2026-07-10 | uv.lock 重复包、uv sync 失败 | [§12](#12-uvlock-合并冲突导致重复包) |
+| 2026-07-10 | zenoh、activate 指向 gitlab venv | [§13](#13-source-activate-后仍用-gitlab-venvzenoh-缺失) |
 
 ---
 
@@ -279,10 +281,21 @@ GO2Connection ──► LCM /lidar ──┬──► Go2Memory（recording_go2.
 | 项 | 值 |
 |----|-----|
 | 工作目录 | `topsun_dimos` |
-| venv 实际路径 | `gitlab/dimos/.venv`（`.venv` 可能指向此处） |
-| editable 安装源 | `gitlab/dimos`（`__editable__.dimos-*.pth`） |
-| 改 blueprint 后 | 需改 `gitlab/dimos` 下对应文件，或重装 editable 指向 `topsun_dimos` |
+| venv 路径 | `topsun_dimos/.venv`（**必须用这个**，不要用 `gitlab/dimos/.venv`） |
+| editable 安装源 | `topsun_dimos`（`__editable__.dimos-*.pth` 指向本仓库） |
+| 依赖安装 | `uv sync --extra all`（在 `topsun_dimos` 根目录） |
 | 日志目录 | `topsun_dimos/logs/<run-id>/main.jsonl`（在 `topsun_dimos` 目录下 `dimos run` 时；见 `resolve_log_dir()`） |
+
+### 激活后自检（每次换机 / 合并上游后建议跑一遍）
+
+```bash
+cd /home/jiangtao/huazhijian/topsun-bot/topsun_dimos
+deactivate 2>/dev/null || true   # 若之前激活过 gitlab venv，先退出
+source .venv/bin/activate
+echo "$VIRTUAL_ENV"              # 应输出 .../topsun_dimos/.venv
+which python dimos               # 两个都应在 topsun_dimos/.venv/bin 下
+python -c "import zenoh; print('zenoh ok')"
+```
 
 ### 常用运维命令
 
@@ -299,10 +312,13 @@ dimos show-config
 
 ```bash
 cd /home/jiangtao/huazhijian/topsun-bot/topsun_dimos
+deactivate 2>/dev/null || true
 source .venv/bin/activate
+# 确认用的是 topsun venv，不是 gitlab/dimos
+test "$VIRTUAL_ENV" = "$(pwd)/.venv"
 
 # 1. 确认 numpy 版本（若刚升级过 webrtc 包）
-python3 -c "import numpy; print(numpy.__version__)"   # 应 < 2.4
+python3 -c "import numpy; print(numpy.__version__)"   # 当前 lock 为 2.3.x
 
 # 2. 确认 LCM 多播（首次或重启后）
 ip route show 224.0.0.0/4
@@ -358,4 +374,83 @@ dimos map global recording_go2 --export --device CPU:0
 
 ---
 
-> 本文档对应一次真机联调会话中的问题与修复，后续固件 / 依赖升级后细节可能变化，但整体链路应保持稳定。
+## 12. `uv.lock` 合并冲突导致重复包
+
+### 现象
+
+```bash
+uv sync
+# error: Failed to parse `uv.lock`
+# Caused by: Dependency `pin-pink` has missing `source` field but has more than one matching package
+```
+
+### 原因
+
+合并 `upstream/main` 时 `uv.lock` 里同一 `name+version` 的 `[[package]]` 块被重复写入（`pin-pink`、`curl-cffi`、`msgspec` 等 6 组）。
+
+### 修复
+
+删除重复块后 `uv lock` 校验，再重装：
+
+```bash
+cd /home/jiangtao/huazhijian/topsun-bot/topsun_dimos
+uv lock    # 应 Resolved ... in 1ms
+unset VIRTUAL_ENV
+rm -rf .venv
+uv sync --extra all
+```
+
+### 验证
+
+```bash
+uv lock
+python3 -c "import zenoh; print('ok')"
+```
+
+---
+
+## 13. `source activate` 后仍用 gitlab venv（zenoh 缺失）
+
+### 现象
+
+在 `topsun_dimos` 里 `source .venv/bin/activate` 后运行：
+
+```bash
+dimos --robot-ip 192.168.12.1 run unitree-go2-memory
+# ModuleNotFoundError: No module named 'zenoh'
+```
+
+`which python` 显示 `/home/jiangtao/huazhijian/gitlab/dimos/.venv/bin/python`。
+
+### 原因
+
+`topsun_dimos/.venv` 曾从 `gitlab/dimos/.venv` 复制而来，`activate` 脚本和 150+ 个 bin shebang 仍硬编码 `gitlab/dimos/.venv` 路径。激活后 PATH 指向旧 venv，而旧 venv 没有 `eclipse-zenoh`（上游 merge 后新增依赖）。
+
+### 修复
+
+**彻底重建本仓库 venv**（不要复制 gitlab 的）：
+
+```bash
+cd /home/jiangtao/huazhijian/topsun-bot/topsun_dimos
+deactivate 2>/dev/null || true
+unset VIRTUAL_ENV
+rm -rf .venv
+uv sync --extra all
+```
+
+### 验证
+
+```bash
+source .venv/bin/activate
+echo "$VIRTUAL_ENV"    # .../topsun_dimos/.venv
+which dimos            # .../topsun_dimos/.venv/bin/dimos
+python -c "import zenoh; print('ok')"
+dimos --replay --replay-db go2_short --viewer none run unitree-go2-basic --daemon
+dimos stop
+```
+
+> **注意**：`gitlab/dimos/.venv` 与 `topsun_dimos/.venv` 是两套环境。在 topsun 仓库工作时只用后者；若 shell 里已激活 gitlab venv，先 `deactivate` 再激活 topsun。
+
+---
+
+> 本文档对应真机联调与环境踩坑记录，后续固件 / 依赖升级后细节可能变化，但整体链路应保持稳定。

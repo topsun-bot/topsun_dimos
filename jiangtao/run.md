@@ -1,5 +1,7 @@
 # Go2 录制与导航流程
 
+> 环境：在 `topsun_dimos` 根目录执行 `deactivate 2>/dev/null; source .venv/bin/activate`，确认 `echo $VIRTUAL_ENV` 以 `topsun_dimos/.venv` 结尾。详见 `jiangtao/bugfix.md` §9/§13。
+
 ## Step 1: 录制（真机遛一圈）
 
 ```bash

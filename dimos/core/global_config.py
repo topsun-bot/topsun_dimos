@@ -92,7 +92,7 @@ class GlobalConfig(BaseSettings):
     # hidden in Unitree's official SDK and not exposed by the app or remote.
     # Independent from `obstacle_avoidance` (ObstaclesAvoidClient.SwitchSet
     # api_id=1001) — both can be enabled simultaneously.
-    free_avoid: bool = True
+    free_avoid: bool = False
     detection_model: VlModelName = "moondream"
     listen_host: str = "127.0.0.1"
     dimsim_scene: str = "apt"

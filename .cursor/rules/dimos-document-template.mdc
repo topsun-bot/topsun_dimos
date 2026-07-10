@@ -12,9 +12,9 @@ alwaysApply: true
 
 | 内容 | 位置 |
 |------|------|
-| Markdown 源文件 | `docs/cursor/<topic>.md`（kebab-case，比如 `dimos-perception-tutorial.md`） |
+| Markdown 源文件 | `jiangtao/cursor/<topic>.md`（kebab-case，比如 `dimos-perception-tutorial.md`） |
 | PDF 输出 | 同目录同名 `.pdf` |
-| PDF 生成命令 | `python3 .cursor/scripts/md_to_pdf.py docs/cursor/<topic>.md` |
+| PDF 生成命令 | `python3 .cursor/scripts/md_to_pdf.py jiangtao/cursor/<topic>.md` |
 
 写完 markdown 后**立刻调用脚本生成 PDF**，并验证页数 / 大小合理（用 `pdfinfo` 抽页用 `pdftoppm` 截 PNG 抽查关键页面，特别是 mermaid 图所在页）。
 
