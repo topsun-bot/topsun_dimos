@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| uv.lock 去重 / bugfix §12-13 / free_avoid 默认关 | `94b2cf002` |
 | 合并 upstream/main fdf3cb7d（Zenoh/spy/WebRTC/scene） | `77ca3291c` |
 | fast ICP 诊断 / point-to-plane / 开机 odom 分析 | `bacc407a` |
 | Go2 启动 foxglove_config TypeError | `792a4c4d` |
@@ -37,11 +38,50 @@ git reset --hard <sha>
 
 ## 提交记录
 
-### 77ca3291c — merge: integrate upstream/main fdf3cb7d on 7d2affd7d baseline
+### 94b2cf002 — chore: post-merge uv.lock fix, docs, and Go2 defaults
 
 | 字段 | 内容 |
 |---|---|
-| **时间** | 2026-07-09 11:15:50 +0800 |
+| **时间** | 2026-07-10 10:40:43 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `uv.lock` | 合并后去除重复 `[[package]]` 块，恢复 `uv lock` / `uv sync` |
+| `jiangtao/bugfix.md` | 新增 §12 uv.lock 重复包、§13 gitlab venv/zenoh 踩坑 |
+| `jiangtao/run.md` | 启动前 topsun_dimos venv 自检说明 |
+| `dimos/core/global_config.py` | `free_avoid` 默认改为 `False` |
+| `docs/cursor/20260709-upstream-merge-fdf3cb7d说明.md/.pdf` | 扩充 upstream merge 说明与 PDF |
+| `commit-readme.md` | 补记 `adfaf2ffe` 文档提交 |
+| `.cursor/rules/dimos-document-template.mdc` | 文档落点改为 `jiangtao/cursor/` |
+
+**改进点**
+
+1. 修复合并 upstream 后 `uv sync` 因 lock 重复包失败的问题。
+2. 明确必须用 `topsun_dimos/.venv`，避免误用 gitlab venv 缺 zenoh。
+3. Go2 默认关闭 FreeAvoid，与现场联调偏好一致。
+
+**用法**
+
+```bash
+cd /home/jiangtao/huazhijian/topsun-bot/topsun_dimos
+deactivate 2>/dev/null; source .venv/bin/activate
+uv lock && uv sync --extra all
+python -c "import zenoh; print('ok')"
+```
+
+**回滚**
+
+```bash
+git checkout 94b2cf002^ -- uv.lock jiangtao/bugfix.md dimos/core/global_config.py
+```
+
+---
+
+### 77ca3291c — merge: integrate upstream/main fdf3cb7d on 7d2affd7d baseline
 | **分支** | `jtlinux` |
 | **作者** | `jiangtao-huazhijian` |
 
