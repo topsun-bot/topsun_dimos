@@ -123,6 +123,7 @@ all_blueprints = {
     "unitree-go2-relocalization": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2:unitree_go2_relocalization",
     "unitree-go2-relocalization-memory": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial:unitree_go2_relocalization_memory",
     "unitree-go2-relocalization-memory-agentic": "dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_relocalization_memory_agentic:unitree_go2_relocalization_memory_agentic",
+    "unitree-go2-relocalization-memory-agentic-deepseek": "dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_relocalization_memory_agentic_deepseek:unitree_go2_relocalization_memory_agentic_deepseek",
     "unitree-go2-ros": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_ros:unitree_go2_ros",
     "unitree-go2-security": "dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_security:unitree_go2_security",
     "unitree-go2-spatial": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial:unitree_go2_spatial",
