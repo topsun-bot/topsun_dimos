@@ -256,6 +256,9 @@ class UnitreeSkillContainer(Module):
         accumulated = 0.0
         last_yaw = start_yaw
 
+        # 调试: 每秒打印一次状态, 便于排查旋转不转的问题
+        _last_debug_log = time.monotonic()
+
         deadline = time.monotonic() + timeout_s
         try:
             while time.monotonic() < deadline:
@@ -279,11 +282,28 @@ class UnitreeSkillContainer(Module):
                 if global_config.simulation and abs(omega) < 0.8:
                     omega = 0.8 if remaining >= 0 else -0.8
 
+                # 真机模式下设最小角速度, 避免 omega 太小电机不响应导致卡在死区
+                min_omega = float(os.getenv("DIMOS_ROTATE_MIN_RAD_S", "0.4"))
+                if not global_config.simulation and abs(omega) < min_omega:
+                    omega = min_omega if remaining >= 0 else -min_omega
+
                 self._connection.move(
                     Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, omega)),
                     duration=0.0,
                 )
                 time.sleep(1.0 / control_hz)
+
+                # 调试: 每秒打印一次 yaw/accumulated/omega
+                _now = time.monotonic()
+                if _now - _last_debug_log >= 1.0:
+                    logger.info(
+                        "rotate_in_place: DEBUG yaw=%.1f° accumulated=%.1f° remaining=%.1f° omega=%.3f",
+                        math.degrees(current_yaw),
+                        math.degrees(accumulated),
+                        math.degrees(remaining),
+                        omega,
+                    )
+                    _last_debug_log = _now
             else:
                 logger.warning("rotate_in_place: timed out (commanded %.1f°)", degrees)
                 return False

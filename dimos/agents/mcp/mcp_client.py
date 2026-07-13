@@ -348,14 +348,14 @@ class McpClient(Module):
                     raise ValueError("No state graph initialized")
                 try:
                     self._process_message(self._state_graph, message)
-                except Exception:
+                except Exception as e:
                     logger.exception("McpClient-thread error processing message; skipping")
                     # Roll back the message appended in _process_message before stream failed
                     if self._history and self._history[-1] is message:
                         self._history.pop()
                     self.agent.publish(
                         HumanMessage(
-                            content="An error occurred while processing. Please try again."
+                            content=f"An error occurred while processing: {type(e).__name__}: {e}"
                         )
                     )
 
