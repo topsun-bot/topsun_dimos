@@ -223,6 +223,29 @@ def _create_vl_model() -> Any:
         model = OpenAIVlModel()
         if model_name:
             model.config.model_name = model_name
+
+        # 检查是否配置了云端 fallback (本地不可用时自动切换)
+        cloud_api_key = os.getenv("DIMOS_VLM_CLOUD_API_KEY")
+        cloud_base_url = os.getenv("DIMOS_VLM_CLOUD_BASE_URL")
+        if cloud_api_key and cloud_base_url:
+            from dimos.models.vl.fallback import FallbackVlModel
+
+            cloud_model = OpenAIVlModel()
+            cloud_model.config.api_key = cloud_api_key
+            cloud_model.config.base_url = cloud_base_url
+            cloud_model.config.model_name = os.getenv(
+                "DIMOS_VLM_CLOUD_MODEL_NAME", model_name
+            )
+
+            cooldown = float(os.getenv("DIMOS_VLM_FALLBACK_COOLDOWN", "60"))
+            model = FallbackVlModel(model, cloud_model, cooldown_seconds=cooldown)
+            logger.info(
+                "[VLM] fallback enabled: local=%s cloud=%s cooldown=%.0fs",
+                os.getenv("DIMOS_VLM_BASE_URL", "default"),
+                cloud_base_url,
+                cooldown,
+            )
+
         return model
 
     if provider == "moondream":
