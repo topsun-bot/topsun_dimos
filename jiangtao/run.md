@@ -85,3 +85,64 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 | 9   | yaw       | 偏航角 (rad)  |
 | 10  | pitch     | 俯仰角 (rad)  |
 | 11  | roll      | 翻滚角 (rad)  |
+
+---
+
+## Step 4: 空间找物（单次会话, 无 premap）
+
+环境变量：
+
+```bash
+export UNITREE_AES_128_KEY='0a7d97828984ec332984571244318f30'
+export OPENAI_API_KEY="sk-fb774f182a3c4c28aaa8b6878ee32b60"
+export OPENAI_BASE_URL="https://api.deepseek.com"
+export DIMOS_VLM_API_KEY="EMPTY"
+export DIMOS_VLM_BASE_URL="http://10.10.153.172:8080/v1"
+export DIMOS_VLM_MODEL_NAME="/Users/dijia/models/Qwen3-VL-8B-4bit"
+export DIMOS_ROTATION_STEP_DEG=60   # 每次旋转角度
+export DIMOS_ROOM_SCAN_ROTATIONS=3  # 旋转次数
+
+# 云端 VLM fallback (本地不可用时自动切换)
+export DIMOS_VLM_CLOUD_API_KEY="sk-ws-H.EDDREER.p3xq.MEUCIQDdBEwnddKuZEg2EXYSeqpWRBGlATod78ixRpzjHrew8wIgH0sJMDzpuZJdyORYcnsOQLDuP5gpF5ZDqfnW_WDpbto"
+export DIMOS_VLM_CLOUD_BASE_URL="https://ws-sy431890c06kqcoz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+export DIMOS_VLM_CLOUD_MODEL_NAME="qwen3-vl-plus"
+export DIMOS_VLM_FALLBACK_COOLDOWN=60
+
+# unset 代理是为了避免局域网请求(Go2 WebRTC信令 / 本地VLM)走代理导致连接失败
+# 云端VLM走公网, 如果机器没有直连能力需要保留代理, 改用 NO_PROXY 排除局域网IP即可
+unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy
+```
+
+真机：
+
+```bash
+dimos --robot-ip 10.206.176.64 run unitree-go2-agentic-deepseek --disable security-module
+```
+
+找物交互：
+
+```bash
+dimos tell '标记一下当前是办公室'
+dimos tell '去找饮水机'
+```
+
+## Step 5: 重定位空间找物（基于 premap, 跨 session 复用空间记忆）
+
+前置：已完成 Step 1 ~ Step 2, 生成了 `recording_go2.pc2.lcm`。
+
+环境变量同 Step 4。
+
+真机：
+
+```bash
+dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+找物交互：
+
+```bash
+dimos tell '标记一下当前是办公室'
+dimos tell '去找饮水机'
+```
