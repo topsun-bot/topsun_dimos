@@ -86,6 +86,7 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 | 10  | pitch     | 俯仰角 (rad)  |
 | 11  | roll      | 翻滚角 (rad)  |
 
+
 ---
 
 ## Step 4: 空间找物（单次会话, 无 premap）
@@ -99,8 +100,8 @@ export OPENAI_BASE_URL="https://api.deepseek.com"
 export DIMOS_VLM_API_KEY="EMPTY"
 export DIMOS_VLM_BASE_URL="http://10.10.153.172:8080/v1"
 export DIMOS_VLM_MODEL_NAME="/Users/dijia/models/Qwen3-VL-8B-4bit"
-export DIMOS_ROTATION_STEP_DEG=60   # 每次旋转角度
-export DIMOS_ROOM_SCAN_ROTATIONS=3  # 旋转次数
+export DIMOS_ROTATION_STEP_DEG=60
+export DIMOS_ROOM_SCAN_ROTATIONS=6
 
 # 云端 VLM fallback (本地不可用时自动切换)
 export DIMOS_VLM_CLOUD_API_KEY="sk-ws-H.EDDREER.p3xq.MEUCIQDdBEwnddKuZEg2EXYSeqpWRBGlATod78ixRpzjHrew8wIgH0sJMDzpuZJdyORYcnsOQLDuP5gpF5ZDqfnW_WDpbto"
@@ -146,3 +147,4 @@ dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-dee
 dimos tell '标记一下当前是办公室'
 dimos tell '去找饮水机'
 ```
+

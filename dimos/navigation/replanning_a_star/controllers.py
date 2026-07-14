@@ -41,7 +41,9 @@ class PController:
     _control_frequency: float
 
     _min_linear_velocity: float = 0.2
-    _min_angular_velocity: float = 0.2
+    # 真机最小角速度: 0.2 rad/s 时 Go2 运动控制层响应不明显, 旋转过慢
+    # 导致 initial_rotation 阶段在 8s stuck 窗口内无法完成对齐, 提高到 0.4 rad/s
+    _min_angular_velocity: float = 0.4
     _sim_min_linear_velocity: float = 0.5
     _sim_min_angular_velocity: float = 0.5
     _k_angular: float = 0.5

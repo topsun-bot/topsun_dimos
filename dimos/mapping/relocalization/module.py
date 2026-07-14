@@ -66,11 +66,11 @@ class Config(ModuleConfig):
     # 是否把加载的原始 premap 也发布出去，主要用于调试/可视化。
     publish_loaded_map: bool = False
     # relocalize() 返回的匹配质量阈值；低于该值说明候选配准不可信。
-    fitness_threshold: float = 0.45
+    fitness_threshold: float = 0.75
     # merge 时是否用列雕刻：local 当前观测覆盖 premap 的同 XY 列旧点。
     use_carving: bool = True
     # 快速 ICP 总开关；关闭后所有重定位都保持原全局 RANSAC 流程。
-    fast_icp_enabled: bool = True
+    fast_icp_enabled: bool = False
     # 启动时是否读取上一次独立运行保存的 latest.json。
     load_cached_transform_on_start: bool = True
     # 每次运行是否把第一次成功发布的 TF 持久化到 JSON。
@@ -80,7 +80,7 @@ class Config(ModuleConfig):
     # 可选显式 latest 文件；为空时使用 cached_transform_dir/map/latest.json。
     cached_transform_latest_file: str | None = None
     # 同一次运行第一次发布之后，选择快速 ICP 或原全局匹配。
-    subsequent_relocalization_mode: Literal["fast_icp", "global"] = "fast_icp"
+    subsequent_relocalization_mode: Literal["fast_icp", "global"] = "global"
     # 快速 ICP 拒绝后是否允许回退到全局 RANSAC。
     fast_icp_fallback_global: bool = True
     # 快速 ICP 的最大对应距离，单位为米。
