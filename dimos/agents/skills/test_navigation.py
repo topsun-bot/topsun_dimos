@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from types import SimpleNamespace
 import time
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+import numpy as np
 import pytest
 
-from dimos.agents.skills.navigation import NavigationSkillContainer
+from dimos.agents.skills.navigation import (
+    NavigationSkillContainer,
+    _ObjectSearchContext,
+    _SearchFrameSnapshot,
+    _SearchHit,
+)
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import Out
@@ -218,6 +224,11 @@ def _nav_container() -> NavigationSkillContainer:
     nav = object.__new__(NavigationSkillContainer)
     nav._skill_started = True
     nav._sweep_skip_rooms = set()
+    nav._latest_image = None
+    nav._latest_odom = None
+    nav._memory_session_id = "test_session"
+    nav._relocalization = None
+    nav._ensure_search_runtime()
     return nav
 
 
@@ -290,6 +301,299 @@ def test_nav_fallback_default_is_object_room(monkeypatch: pytest.MonkeyPatch) ->
     assert nav._nav_fallback_strategy() == "object_room"
 
 
+def test_search_snapshot_uses_odom_nearest_to_image_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_POSE_SYNC_TOLERANCE_S", "0.2")
+    nav = _nav_container()
+    now = time.time()
+    nav._on_odom(
+        PoseStamped(
+            ts=now - 0.15,
+            position=make_vector3(1.0, 0.0, 0.0),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+        )
+    )
+    nav._on_odom(
+        PoseStamped(
+            ts=now + 0.04,
+            position=make_vector3(2.0, 0.0, 0.0),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+        )
+    )
+    nav._on_color_image(Image.from_numpy(np.zeros((40, 60, 3), dtype=np.uint8), ts=now))
+    context = _ObjectSearchContext(search_id="search_sync", query="垃圾桶", active_leg_id=3)
+
+    snapshot = nav._build_search_snapshot(context, leg_id=3)
+
+    assert snapshot is not None
+    assert snapshot.capture_pose_world.position.x == pytest.approx(2.0)
+    assert snapshot.image_ts == pytest.approx(now)
+
+
+def test_enroute_vlm_waits_for_navigation_displacement_before_detecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_START_DISPLACEMENT_M", "0.2")
+    monkeypatch.setenv("DIMOS_SEARCH_VLM_INTERVAL_S", "0.1")
+    calls: list[str] = []
+
+    def fake_bbox(_model: Any, _image: Image, query: str):
+        calls.append(query)
+        return (40.0, 10.0, 60.0, 35.0)
+
+    monkeypatch.setattr("dimos.agents.skills.navigation.get_object_bbox_from_image", fake_bbox)
+    nav = _nav_container()
+    nav._vl_model = object()
+    now = time.time()
+    nav._on_odom(_pose(0.0, 0.0))
+    nav._on_color_image(Image.from_numpy(np.zeros((50, 100, 3), dtype=np.uint8), ts=now))
+    context = nav._new_object_search_context("垃圾桶")
+    nav._begin_search_leg(context, "历史位置")
+
+    nav._maybe_submit_enroute_vlm(context)
+    assert calls == []
+    assert context.vlm_in_flight is False
+
+    moved_at = time.time()
+    nav._on_odom(
+        PoseStamped(
+            ts=moved_at,
+            position=make_vector3(0.3, 0.0, 0.0),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+        )
+    )
+    nav._on_color_image(Image.from_numpy(np.zeros((50, 100, 3), dtype=np.uint8), ts=moved_at))
+    nav._maybe_submit_enroute_vlm(context)
+
+    assert context.hit_event.wait(timeout=1.0)
+    assert calls == ["垃圾桶"]
+    assert context.hit is not None
+    assert context.hit.snapshot.capture_pose_world.position.x == pytest.approx(0.3)
+
+
+def test_stale_leg_vlm_result_cannot_interrupt_current_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation.get_object_bbox_from_image",
+        lambda _model, _image, _query: (10.0, 10.0, 30.0, 30.0),
+    )
+    nav = _nav_container()
+    nav._vl_model = object()
+    now = time.time()
+    image = Image.from_numpy(np.zeros((50, 100, 3), dtype=np.uint8), ts=now)
+    snapshot = _SearchFrameSnapshot(
+        search_id="search_stale",
+        leg_id=1,
+        image=image,
+        image_ts=now,
+        capture_pose_world=_pose(0.5, 0.0),
+        map_metadata={"relocalization_bound": False},
+        submitted_at=now,
+    )
+    context = _ObjectSearchContext(
+        search_id="search_stale",
+        query="饮水机",
+        active_leg_id=2,
+        monitor_enabled=True,
+        vlm_in_flight=True,
+    )
+
+    nav._run_enroute_vlm(context, snapshot)
+
+    assert context.hit is None
+    assert context.hit_event.is_set() is False
+    assert context.vlm_in_flight is False
+
+
+def test_same_leg_vlm_result_remains_valid_after_route_stops_submitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation.get_object_bbox_from_image",
+        lambda _model, _image, _query: (10.0, 10.0, 30.0, 30.0),
+    )
+    nav = _nav_container()
+    nav._vl_model = object()
+    now = time.time()
+    snapshot = _SearchFrameSnapshot(
+        search_id="search_late",
+        leg_id=4,
+        image=Image.from_numpy(np.zeros((50, 100, 3), dtype=np.uint8), ts=now),
+        image_ts=now,
+        capture_pose_world=_pose(0.5, 0.0),
+        map_metadata={"relocalization_bound": False},
+        submitted_at=now,
+    )
+    context = _ObjectSearchContext(
+        search_id="search_late",
+        query="饮水机",
+        active_leg_id=4,
+        monitor_enabled=False,
+        vlm_in_flight=True,
+    )
+
+    nav._run_enroute_vlm(context, snapshot)
+
+    assert context.hit_event.is_set()
+    assert context.hit is not None
+    assert context.hit.snapshot.capture_pose_world.position.x == pytest.approx(0.5)
+
+
+def test_enroute_hit_returns_to_capture_pose_faces_and_greets_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_CANCEL_WAIT_S", "0")
+    monkeypatch.setenv("DIMOS_SEARCH_REWIND_THRESHOLD_M", "0.4")
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda _seconds: None)
+    nav = _nav_container()
+    nav._navigation = _FakeNavigation()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_odom = _pose(2.0, 0.0, yaw=0.0)
+    recorded: list[SpatialRecord] = []
+    nav._landmark_memory = SimpleNamespace(
+        query_by_type=lambda _record_type: [],
+        record=lambda record: recorded.append(record) or record.record_id,
+    )
+    now = time.time()
+    image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=now)
+    snapshot = _SearchFrameSnapshot(
+        search_id="search_return",
+        leg_id=1,
+        image=image,
+        image_ts=now,
+        capture_pose_world=_pose(0.0, 0.0, yaw=0.0),
+        map_metadata={"relocalization_bound": False},
+        submitted_at=now - 2.0,
+    )
+    object_yaw_world, _ = nav._object_yaws_from_bbox(
+        snapshot,
+        (70.0, 10.0, 90.0, 50.0),
+    )
+    hit = _SearchHit(
+        snapshot=snapshot,
+        bbox=(70.0, 10.0, 90.0, 50.0),
+        detected_at=now,
+        object_yaw_world=object_yaw_world,
+        object_yaw_map=None,
+    )
+    context = _ObjectSearchContext(search_id="search_return", query="灭火器", hit=hit)
+    context.hit_event.set()
+
+    result = nav._finish_enroute_hit(context)
+
+    assert "returned to the capture viewpoint" in result
+    assert len(nav._navigation.goals) == 1
+    assert nav._navigation.goals[0].position.x == pytest.approx(0.0)
+    assert nav._unitree_skill_container.rotations[0] < 0.0
+    assert nav._unitree_skill_container.commands == ["Hello", "RecoveryStand"]
+    assert len(recorded) == 1
+    assert recorded[0].name == "灭火器"
+    assert recorded[0].position[0] == pytest.approx(0.0)
+    assert recorded[0].metadata["position_semantics"] == "observation_viewpoint"
+
+
+def test_enroute_hit_reprojects_map_capture_pose_with_current_relocalization() -> None:
+    nav = _nav_container()
+    current_world_from_map = np.eye(4)
+    current_world_from_map[0, 3] = 10.0
+    nav._relocalization = SimpleNamespace(
+        is_relocalized=lambda: True,
+        get_current_map_key=lambda: "office_map",
+        get_current_map_file=lambda: "office_map.pc2.lcm",
+        get_world_to_map=lambda: SimpleNamespace(to_matrix=lambda: current_world_from_map),
+    )
+    now = time.time()
+    snapshot = _SearchFrameSnapshot(
+        search_id="search_map",
+        leg_id=1,
+        image=Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=now),
+        image_ts=now,
+        capture_pose_world=_pose(99.0, 99.0, yaw=0.0),
+        map_metadata={
+            "relocalization_bound": True,
+            "map_key": "office_map",
+            "pose_map": {
+                "position": [1.0, 2.0, 0.0],
+                "rotation": [0.0, 0.0, 0.2],
+            },
+        },
+        submitted_at=now,
+    )
+    hit = _SearchHit(
+        snapshot=snapshot,
+        bbox=(40.0, 10.0, 60.0, 50.0),
+        detected_at=now,
+        object_yaw_world=0.3,
+        object_yaw_map=0.7,
+    )
+
+    capture_pose = nav._capture_pose_for_hit(hit)
+
+    assert capture_pose is not None
+    assert capture_pose.position.x == pytest.approx(11.0)
+    assert capture_pose.position.y == pytest.approx(2.0)
+    assert capture_pose.orientation.to_euler().z == pytest.approx(0.7)
+
+
+def test_room_sweep_forwards_enroute_search_and_stops_after_terminal_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    room = SpatialRecord(
+        name="会议室B",
+        record_type=RecordType.ROOM,
+        position=(4.0, 0.0, 0.0),
+    )
+    nav._landmark_memory = SimpleNamespace(
+        query_by_type=lambda _record_type: [room],
+        resolve_by_query=lambda _query: None,
+    )
+    context = _ObjectSearchContext(search_id="search_rooms", query="灭火器")
+    scanned_rooms: list[str] = []
+
+    def fake_navigation(target: SpatialRecord, **kwargs: Any) -> str:
+        assert kwargs["search_context"] is context
+        context.terminal_result = "Found '灭火器' en route"
+        return context.terminal_result
+
+    monkeypatch.setattr(nav, "_navigate_to_landmark", fake_navigation)
+    monkeypatch.setattr(
+        nav,
+        "_scan_room_for_object",
+        lambda query, **_kwargs: scanned_rooms.append(query) or None,
+    )
+
+    result = nav._room_anchor_sweep_for_object("灭火器", search_context=context)
+
+    assert result == "Found '灭火器' en route"
+    assert scanned_rooms == []
+
+
+def test_search_context_skips_current_frame_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    nav = _nav_container()
+    context = _ObjectSearchContext(search_id="search_no_current", query="木箱")
+    current_frame_calls: list[str] = []
+    monkeypatch.setattr(nav, "_nav_fallback_strategy", lambda: "semantic")
+    monkeypatch.setattr(nav, "_nav_fallback_step_landmark", lambda _query, _ctx=None: None)
+    monkeypatch.setattr(
+        nav,
+        "_nav_fallback_step_in_frame",
+        lambda query: current_frame_calls.append(query) or "unexpected hit",
+    )
+    monkeypatch.setattr(
+        nav,
+        "_nav_fallback_step_room_sweep",
+        lambda _query, _ctx=None: "room search started",
+    )
+
+    result = nav._run_navigate_fallback_chain("木箱", context)
+
+    assert result == "room search started"
+    assert current_frame_calls == []
+
+
 class _FakeTracker:
     def __init__(self) -> None:
         self.stopped = False
@@ -339,6 +643,62 @@ def test_navigate_with_text_stops_after_known_object_landmark() -> None:
 
     assert nav.navigate_with_text("fire extinguisher") == "Arrived near landmark."
     assert object_attempts == []
+
+
+def test_navigate_with_text_keeps_arrival_only_search_when_enroute_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED", raising=False)
+    monkeypatch.setenv("DIMOS_NAV_FALLBACK", "object_room")
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="垃圾桶",
+        record_type=RecordType.LANDMARK,
+        position=(2.0, 0.0, 0.0),
+    )
+    received_contexts: list[_ObjectSearchContext | None] = []
+    monkeypatch.setattr(nav, "_resolve_landmark_from_query", lambda _query: target)
+
+    def fake_navigation(_target: SpatialRecord, **kwargs: Any) -> str:
+        received_contexts.append(kwargs.get("search_context"))
+        return "Arrived near landmark."
+
+    monkeypatch.setattr(nav, "_navigate_to_landmark", fake_navigation)
+
+    result = nav.navigate_with_text("垃圾桶")
+
+    assert result == "Arrived near landmark."
+    assert received_contexts == [None]
+    assert nav._active_object_search is None
+
+
+def test_navigate_with_text_enables_enroute_search_only_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("DIMOS_NAV_FALLBACK", "object_room")
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="垃圾桶",
+        record_type=RecordType.LANDMARK,
+        position=(2.0, 0.0, 0.0),
+    )
+    received_contexts: list[_ObjectSearchContext | None] = []
+    monkeypatch.setattr(nav, "_resolve_landmark_from_query", lambda _query: target)
+
+    def fake_navigation(_target: SpatialRecord, **kwargs: Any) -> str:
+        received_contexts.append(kwargs.get("search_context"))
+        return "Arrived near landmark."
+
+    monkeypatch.setattr(nav, "_navigate_to_landmark", fake_navigation)
+
+    result = nav.navigate_with_text("垃圾桶")
+
+    assert result == "Arrived near landmark."
+    assert len(received_contexts) == 1
+    assert isinstance(received_contexts[0], _ObjectSearchContext)
+    assert received_contexts[0].cancel_event.is_set()
+    assert nav._active_object_search is None
 
 
 def test_scan_room_rotation_uses_list_recognition_not_query(

@@ -12,20 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import deque
+from dataclasses import dataclass, field, replace
 import math
 import os
 import threading
 import time
-from dataclasses import replace
 from typing import Any, cast
+import uuid
 
 import numpy as np
 from reactivex.disposable import Disposable
 
 # skill 装饰器: 将方法暴露给 LLM agent 作为可调用工具
 from dimos.agents.annotation import skill
+
 # 能力常量, 用于声明该 skill container 提供移动能力
 from dimos.agents.capabilities import CAP_MOVEMENT
+
 # rpc 装饰器: 让方法可通过模块间 RPC 调用, 但不暴露给 LLM
 from dimos.core.core import rpc
 from dimos.core.module import Module
@@ -41,6 +45,7 @@ from dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector impo
 )
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.navigation.topology import TopologyGraph
+
 # 视觉查询工具: bbox 缩放, 物体检测, bbox 解析, 偏航角计算
 from dimos.navigation.visual.query import (
     _scale_bbox_to_image,
@@ -91,6 +96,7 @@ _NAV_FALLBACK_STRATEGIES = {
     "room_first": _NAV_FALLBACK_ROOM_FIRST,
 }
 
+
 # 旋转步长: tag_room 全景拍摄和房间内 360 度扫描共用.
 # 真实 Go2 硬件对小角度旋转不精确 - 较大步长 (如 90 度) 比小步长更可靠.
 # 可通过 DIMOS_ROTATION_STEP_DEG 环境变量覆盖.
@@ -123,6 +129,7 @@ def _search_rotation_step_deg() -> float:
         return max(1.0, float(override))
     return max(10.0, _rotation_step_deg() - 20.0)
 
+
 # VLM 物体检测 prompt: 强制要求输出中文物体名, 避免后续 CLIP 匹配时中英文不一致.
 # 要求返回 JSON 数组, 每项包含名称/描述/bbox, 用于后续的物体定位和空间记忆.
 _VLM_OBJECT_LIST_PROMPT = (
@@ -138,6 +145,62 @@ _VLM_OBJECT_LIST_PROMPT = (
 # 相机水平视场角 (度), 用于将 bbox 中心转换为物体相对机器人的方位角.
 # Go2 默认相机 HFOV 约 69 度, 可通过 DIMOS_CAMERA_HFOV_DEG 环境变量覆盖.
 _CAMERA_HFOV_DEG = float(__import__("os").getenv("DIMOS_CAMERA_HFOV_DEG", "69"))
+
+
+def _search_float_env(name: str, default: float, *, minimum: float = 0.0) -> float:
+    """Read a non-negative object-search tuning value from the environment."""
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _enroute_object_search_enabled() -> bool:
+    """Return whether the opt-in en-route object-search behavior is enabled."""
+    value = os.getenv("DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED", "false")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class _SearchFrameSnapshot:
+    search_id: str
+    leg_id: int
+    image: Image
+    image_ts: float
+    capture_pose_world: PoseStamped
+    map_metadata: dict[str, Any]
+    submitted_at: float
+
+
+@dataclass(frozen=True)
+class _SearchHit:
+    snapshot: _SearchFrameSnapshot
+    bbox: BBox
+    detected_at: float
+    object_yaw_world: float
+    object_yaw_map: float | None
+
+
+@dataclass
+class _ObjectSearchContext:
+    search_id: str
+    query: str
+    created_at: float = field(default_factory=time.time)
+    hit_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    hit: _SearchHit | None = None
+    active_leg_id: int = 0
+    leg_origin: tuple[float, float] | None = None
+    monitor_enabled: bool = False
+    vlm_in_flight: bool = False
+    last_request_at: float = 0.0
+    terminal_result: str | None = None
+
+
+class _EnrouteObjectHitError(Exception):
+    """Internal control-flow signal raised when an en-route VLM request hits."""
+
 
 # VLM 仍返回英文物体名时的兜底映射表 (遗留标签或 VLM 遵循指令不严格时使用).
 _VLM_NAME_EN_TO_ZH: dict[str, str] = {
@@ -252,9 +315,11 @@ def _create_vl_model() -> Any:
             cloud_model = OpenAIVlModel()
             cloud_model.config.api_key = cloud_api_key
             cloud_model.config.base_url = cloud_base_url
-            cloud_model.config.model_name = os.getenv(
-                "DIMOS_VLM_CLOUD_MODEL_NAME", model_name
-            )
+            cloud_model_name = os.getenv("DIMOS_VLM_CLOUD_MODEL_NAME")
+            if cloud_model_name:
+                cloud_model.config.model_name = cloud_model_name
+            elif model_name:
+                cloud_model.config.model_name = model_name
 
             cooldown = float(os.getenv("DIMOS_VLM_FALLBACK_COOLDOWN", "60"))
             model = FallbackVlModel(model, cloud_model, cooldown_seconds=cooldown)
@@ -309,6 +374,7 @@ class NavigationSkillContainer(Module):
     该模块订阅相机图像和里程计数据, 提供位置标记, 物体搜索, 房间扫描等 skill.
     通过 Spec 协议注入空间记忆, 地标记忆, 重定位, 导航, 物体跟踪等依赖模块.
     """
+
     # 最新一帧相机图像 (由 _on_color_image 回调持续更新)
     _latest_image: Image | None = None
     # 最新里程计位姿 (由 _on_odom 回调持续更新)
@@ -340,10 +406,15 @@ class NavigationSkillContainer(Module):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._skill_started = False
+        self._latest_image = None
+        self._latest_odom = None
         # 用时间戳生成唯一 session ID, 用于关联同一次运行中的所有空间记录
         self._memory_session_id = f"session_{int(time.time())}"
         # room_sweep 时跳过的房间集合, 避免重复扫描已确认无目标物体的房间
         self._sweep_skip_rooms: set[str] = set()
+        self._sensor_lock = threading.Lock()
+        self._odom_history: deque[PoseStamped] = deque(maxlen=512)
+        self._active_object_search: _ObjectSearchContext | None = None
 
         # 在初始化时创建 VLM 实例, 而非延迟到首次使用, 以便尽早发现配置错误
         self._vl_model = _create_vl_model()
@@ -361,11 +432,14 @@ class NavigationSkillContainer(Module):
     @rpc
     def stop(self) -> None:
         """停止模块, 由父类负责清理 disposable."""
+        self._cancel_active_object_search()
         super().stop()
 
     def _on_color_image(self, image: Image) -> None:
-        """相机图像回调 - 仅缓存最新帧, 由各 skill 按需读取."""
-        self._latest_image = image
+        """相机图像回调 - 缓存最新帧, VLM 提交前再复制冻结."""
+        self._ensure_search_runtime()
+        with self._sensor_lock:
+            self._latest_image = image
 
     def _odom_euler_tuple(self) -> tuple[float, float, float] | None:
         """将最新里程计的四元数姿态转换为欧拉角元组 (roll, pitch, yaw)."""
@@ -375,8 +449,16 @@ class NavigationSkillContainer(Module):
         return (float(euler.x), float(euler.y), float(euler.z))
 
     def _on_odom(self, odom: PoseStamped) -> None:
-        """里程计回调 - 仅缓存最新位姿, 由各 skill 按需读取."""
-        self._latest_odom = odom
+        """里程计回调 - 缓存最新位姿并保留覆盖 VLM 延迟的短时历史."""
+        self._ensure_search_runtime()
+        with self._sensor_lock:
+            self._latest_odom = odom
+            self._odom_history.append(odom)
+            cutoff = float(odom.ts) - _search_float_env(
+                "DIMOS_SEARCH_ODOM_BUFFER_S", 15.0, minimum=1.0
+            )
+            while self._odom_history and self._odom_history[0].ts < cutoff:
+                self._odom_history.popleft()
 
     @staticmethod
     def _pose_tuple_to_matrix(
@@ -400,7 +482,11 @@ class NavigationSkillContainer(Module):
 
         _pose_tuple_to_matrix 的逆操作.
         """
-        position = tuple(float(v) for v in matrix[:3, 3])
+        position = (
+            float(matrix[0, 3]),
+            float(matrix[1, 3]),
+            float(matrix[2, 3]),
+        )
         euler = Quaternion.from_rotation_matrix(matrix[:3, :3]).to_euler()
         rotation = (float(euler.x), float(euler.y), float(euler.z))
         return position, rotation
@@ -507,8 +593,16 @@ class NavigationSkillContainer(Module):
             return record
 
         try:
-            position_map = tuple(float(v) for v in raw_position)
-            rotation_map = tuple(float(v) for v in raw_rotation)
+            position_map = (
+                float(raw_position[0]),
+                float(raw_position[1]),
+                float(raw_position[2]),
+            )
+            rotation_map = (
+                float(raw_rotation[0]),
+                float(raw_rotation[1]),
+                float(raw_rotation[2]),
+            )
             # map -> world: 用 world_to_map 矩阵将 map 坐标位姿转到当前世界坐标系
             T_world_pose = world_to_map.to_matrix() @ self._pose_tuple_to_matrix(
                 position_map,
@@ -516,7 +610,9 @@ class NavigationSkillContainer(Module):
             )
             position_world, rotation_world = self._matrix_to_pose_tuple(T_world_pose)
         except Exception:
-            logger.warning("Failed to transform record '%s' from map pose", record.name, exc_info=True)
+            logger.warning(
+                "Failed to transform record '%s' from map pose", record.name, exc_info=True
+            )
             return record
 
         new_metadata = dict(metadata)
@@ -541,6 +637,510 @@ class NavigationSkillContainer(Module):
             if current is not None:
                 resolved.append(current)
         return resolved
+
+    def _ensure_search_runtime(self) -> None:
+        """Initialize search-only state for normal construction and lightweight tests."""
+        if "_sensor_lock" not in self.__dict__:
+            self._sensor_lock = threading.Lock()
+        if "_odom_history" not in self.__dict__:
+            self._odom_history = deque(maxlen=512)
+        if "_active_object_search" not in self.__dict__:
+            self._active_object_search = None
+
+    @staticmethod
+    def _copy_pose(pose: PoseStamped) -> PoseStamped:
+        return PoseStamped(
+            ts=float(pose.ts),
+            frame_id=pose.frame_id,
+            position=make_vector3(
+                float(pose.position.x),
+                float(pose.position.y),
+                float(pose.position.z),
+            ),
+            orientation=Quaternion(
+                float(pose.orientation.x),
+                float(pose.orientation.y),
+                float(pose.orientation.z),
+                float(pose.orientation.w),
+            ),
+        )
+
+    def _new_object_search_context(self, query: str) -> _ObjectSearchContext:
+        self._ensure_search_runtime()
+        context = _ObjectSearchContext(
+            search_id=f"search_{uuid.uuid4().hex[:10]}",
+            query=query.strip(),
+        )
+        self._active_object_search = context
+        logger.info(
+            "[search:%s] started query=%r; current-position target detection disabled",
+            context.search_id,
+            context.query,
+        )
+        return context
+
+    def _cancel_active_object_search(self) -> None:
+        self._ensure_search_runtime()
+        context = self._active_object_search
+        if context is None:
+            return
+        context.cancel_event.set()
+        with context.lock:
+            context.monitor_enabled = False
+        if self._active_object_search is context:
+            self._active_object_search = None
+
+    def _begin_search_leg(
+        self,
+        context: _ObjectSearchContext | None,
+        target_name: str,
+    ) -> None:
+        if context is None or context.cancel_event.is_set():
+            return
+        origin: tuple[float, float] | None = None
+        if self._latest_odom is not None:
+            origin = (
+                float(self._latest_odom.position.x),
+                float(self._latest_odom.position.y),
+            )
+        with context.lock:
+            context.active_leg_id += 1
+            context.leg_origin = origin
+            context.monitor_enabled = True
+            context.last_request_at = 0.0
+            leg_id = context.active_leg_id
+        logger.info(
+            "[search:%s] leg=%d navigation started target=%r origin=%s",
+            context.search_id,
+            leg_id,
+            target_name,
+            origin,
+        )
+
+    @staticmethod
+    def _end_search_leg(context: _ObjectSearchContext | None) -> None:
+        if context is None:
+            return
+        with context.lock:
+            context.monitor_enabled = False
+
+    def _build_search_snapshot(
+        self,
+        context: _ObjectSearchContext,
+        leg_id: int,
+    ) -> _SearchFrameSnapshot | None:
+        self._ensure_search_runtime()
+        with self._sensor_lock:
+            image = self._latest_image
+            if image is None or not hasattr(image, "data"):
+                return None
+            image_copy = image.copy()
+            candidates = list(self._odom_history)
+            if not candidates and self._latest_odom is not None:
+                candidates = [self._latest_odom]
+
+        if not candidates:
+            return None
+        nearest = min(candidates, key=lambda pose: abs(float(pose.ts) - float(image_copy.ts)))
+        sync_error = abs(float(nearest.ts) - float(image_copy.ts))
+        tolerance = _search_float_env("DIMOS_SEARCH_POSE_SYNC_TOLERANCE_S", 0.20, minimum=0.01)
+        if sync_error > tolerance:
+            logger.debug(
+                "[search:%s] frame skipped: image/odom skew %.3fs > %.3fs",
+                context.search_id,
+                sync_error,
+                tolerance,
+            )
+            return None
+
+        capture_pose = self._copy_pose(nearest)
+        capture_euler = capture_pose.orientation.to_euler()
+        position = (
+            float(capture_pose.position.x),
+            float(capture_pose.position.y),
+            float(capture_pose.position.z),
+        )
+        rotation = (
+            float(capture_euler.x),
+            float(capture_euler.y),
+            float(capture_euler.z),
+        )
+        return _SearchFrameSnapshot(
+            search_id=context.search_id,
+            leg_id=leg_id,
+            image=image_copy,
+            image_ts=float(image_copy.ts),
+            capture_pose_world=capture_pose,
+            map_metadata=self._map_metadata_for_pose(
+                position,
+                rotation,
+                observation_source="enroute_vlm_capture",
+            ),
+            submitted_at=time.time(),
+        )
+
+    @staticmethod
+    def _object_yaws_from_bbox(
+        snapshot: _SearchFrameSnapshot,
+        bbox: BBox,
+    ) -> tuple[float, float | None]:
+        _height, width = snapshot.image.data.shape[:2]
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+        offset = yaw_offset_from_bbox(
+            x1 / width * 1000.0,
+            y1,
+            x2 / width * 1000.0,
+            y2,
+            _CAMERA_HFOV_DEG,
+        )
+        capture_yaw = float(snapshot.capture_pose_world.orientation.to_euler().z)
+        object_yaw_world = math.atan2(
+            math.sin(capture_yaw - offset),
+            math.cos(capture_yaw - offset),
+        )
+
+        object_yaw_map: float | None = None
+        pose_map = snapshot.map_metadata.get("pose_map")
+        if isinstance(pose_map, dict):
+            raw_rotation = pose_map.get("rotation")
+            if isinstance(raw_rotation, (list, tuple)) and len(raw_rotation) == 3:
+                map_capture_yaw = float(raw_rotation[2])
+                object_yaw_map = math.atan2(
+                    math.sin(map_capture_yaw - offset),
+                    math.cos(map_capture_yaw - offset),
+                )
+        return object_yaw_world, object_yaw_map
+
+    def _run_enroute_vlm(
+        self,
+        context: _ObjectSearchContext,
+        snapshot: _SearchFrameSnapshot,
+    ) -> None:
+        bbox: BBox | None = None
+        try:
+            bbox = get_object_bbox_from_image(self._vl_model, snapshot.image, context.query)
+        except Exception:
+            logger.exception(
+                "[search:%s] VLM request failed leg=%d",
+                context.search_id,
+                snapshot.leg_id,
+            )
+
+        detected_at = time.time()
+        result_age = detected_at - snapshot.image_ts
+        hit: _SearchHit | None = None
+        if bbox is not None:
+            object_yaw_world, object_yaw_map = self._object_yaws_from_bbox(snapshot, bbox)
+            hit = _SearchHit(
+                snapshot=snapshot,
+                bbox=bbox,
+                detected_at=detected_at,
+                object_yaw_world=object_yaw_world,
+                object_yaw_map=object_yaw_map,
+            )
+
+        with context.lock:
+            context.vlm_in_flight = False
+            valid = (
+                hit is not None
+                and not context.cancel_event.is_set()
+                and context.hit is None
+                and snapshot.search_id == context.search_id
+                and snapshot.leg_id == context.active_leg_id
+                and result_age
+                <= _search_float_env("DIMOS_SEARCH_MAX_RESULT_AGE_S", 8.0, minimum=0.5)
+            )
+            if valid:
+                context.hit = hit
+                context.monitor_enabled = False
+                context.hit_event.set()
+
+        logger.info(
+            "[search:%s] VLM result leg=%d hit=%s latency=%.2fs age=%.2fs valid=%s",
+            context.search_id,
+            snapshot.leg_id,
+            bbox is not None,
+            detected_at - snapshot.submitted_at,
+            result_age,
+            valid,
+        )
+
+    def _maybe_submit_enroute_vlm(self, context: _ObjectSearchContext | None) -> None:
+        if context is None or context.cancel_event.is_set() or context.hit_event.is_set():
+            return
+        now = time.time()
+        with context.lock:
+            if not context.monitor_enabled or context.vlm_in_flight:
+                return
+            if now - context.last_request_at < _search_float_env(
+                "DIMOS_SEARCH_VLM_INTERVAL_S", 0.8, minimum=0.1
+            ):
+                return
+            leg_id = context.active_leg_id
+            origin = context.leg_origin
+
+        if origin is None or self._latest_odom is None:
+            return
+        displacement = math.hypot(
+            float(self._latest_odom.position.x) - origin[0],
+            float(self._latest_odom.position.y) - origin[1],
+        )
+        start_displacement = _search_float_env(
+            "DIMOS_SEARCH_START_DISPLACEMENT_M", 0.20, minimum=0.0
+        )
+        if displacement < start_displacement:
+            return
+
+        snapshot = self._build_search_snapshot(context, leg_id)
+        if snapshot is None:
+            return
+        if now - snapshot.image_ts > _search_float_env(
+            "DIMOS_SEARCH_MAX_RESULT_AGE_S", 8.0, minimum=0.5
+        ):
+            return
+
+        with context.lock:
+            if (
+                not context.monitor_enabled
+                or context.vlm_in_flight
+                or context.active_leg_id != leg_id
+            ):
+                return
+            context.vlm_in_flight = True
+            context.last_request_at = now
+
+        logger.info(
+            "[search:%s] VLM request leg=%d image_ts=%.3f capture=(%.2f, %.2f)",
+            context.search_id,
+            leg_id,
+            snapshot.image_ts,
+            snapshot.capture_pose_world.position.x,
+            snapshot.capture_pose_world.position.y,
+        )
+        threading.Thread(
+            target=self._run_enroute_vlm,
+            args=(context, snapshot),
+            name=f"enroute-vlm-{context.search_id}",
+            daemon=True,
+        ).start()
+
+    def _poll_enroute_search(self, context: _ObjectSearchContext | None) -> None:
+        if context is None:
+            return
+        if context.hit_event.is_set():
+            raise _EnrouteObjectHitError
+        self._maybe_submit_enroute_vlm(context)
+        if context.hit_event.is_set():
+            raise _EnrouteObjectHitError
+
+    def _capture_pose_for_hit(self, hit: _SearchHit) -> PoseStamped | None:
+        metadata = hit.snapshot.map_metadata
+        pose_map = metadata.get("pose_map")
+        if metadata.get("relocalization_bound") and isinstance(pose_map, dict):
+            raw_position = pose_map.get("position")
+            raw_rotation = pose_map.get("rotation")
+            if not isinstance(raw_position, (list, tuple)) or not isinstance(
+                raw_rotation, (list, tuple)
+            ):
+                return None
+            if len(raw_position) != 3 or len(raw_rotation) != 3:
+                return None
+            position_map = (
+                float(raw_position[0]),
+                float(raw_position[1]),
+                float(raw_position[2]),
+            )
+            rotation_map = [
+                float(raw_rotation[0]),
+                float(raw_rotation[1]),
+                float(raw_rotation[2]),
+            ]
+            if hit.object_yaw_map is not None:
+                rotation_map[2] = hit.object_yaw_map
+            capture_record = SpatialRecord(
+                name="enroute_capture_pose",
+                record_type=RecordType.UNKNOWN,
+                position=position_map,
+                rotation=(rotation_map[0], rotation_map[1], rotation_map[2]),
+                metadata={
+                    "map_key": metadata.get("map_key"),
+                    "pose_map": {
+                        "position": list(raw_position),
+                        "rotation": rotation_map,
+                    },
+                },
+                session_id=self._memory_session_id,
+            )
+            current = self._record_for_current_world(capture_record)
+            if current is None:
+                return None
+            return PoseStamped(
+                position=make_vector3(*current.position),
+                orientation=Quaternion.from_euler(Vector3(*current.rotation)),
+                frame_id="map",
+            )
+
+        capture = hit.snapshot.capture_pose_world
+        return PoseStamped(
+            position=make_vector3(
+                float(capture.position.x),
+                float(capture.position.y),
+                float(capture.position.z),
+            ),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, hit.object_yaw_world)),
+            frame_id="map",
+        )
+
+    def _store_enroute_search_hit(self, context: _ObjectSearchContext, hit: _SearchHit) -> str:
+        capture_pose = self._capture_pose_for_hit(hit)
+        if capture_pose is None:
+            return ""
+        euler = capture_pose.orientation.to_euler()
+        position = (
+            float(capture_pose.position.x),
+            float(capture_pose.position.y),
+            float(capture_pose.position.z),
+        )
+        rotation = (float(euler.x), float(euler.y), float(euler.z))
+        metadata = dict(hit.snapshot.map_metadata)
+        pose_map = metadata.get("pose_map")
+        if isinstance(pose_map, dict) and hit.object_yaw_map is not None:
+            metadata["pose_map"] = dict(pose_map)
+            raw_rotation = list(metadata["pose_map"].get("rotation", [0.0, 0.0, 0.0]))
+            if len(raw_rotation) == 3:
+                raw_rotation[2] = hit.object_yaw_map
+                metadata["pose_map"]["rotation"] = raw_rotation
+        metadata.update(
+            {
+                "observation_source": "enroute_vlm",
+                "position_semantics": "observation_viewpoint",
+                "search_id": context.search_id,
+                "image_ts": hit.snapshot.image_ts,
+                "vlm_result_ts": hit.detected_at,
+                "vlm_latency_s": hit.detected_at - hit.snapshot.submitted_at,
+                "bbox": [float(v) for v in hit.bbox],
+            }
+        )
+        room_name = self._room_name_at_position(position[0], position[1])
+        if room_name:
+            metadata["room_name"] = room_name
+        record = SpatialRecord(
+            name=context.query,
+            record_type=RecordType.LANDMARK,
+            position=position,
+            rotation=rotation,
+            state="enroute VLM observation",
+            confidence=1.0,
+            metadata=metadata,
+            session_id=self._memory_session_id,
+        )
+        return self._landmark_memory.record(record)
+
+    def _finish_enroute_hit(self, context: _ObjectSearchContext) -> str:
+        with context.lock:
+            if context.terminal_result is not None:
+                return context.terminal_result
+            hit = context.hit
+            context.monitor_enabled = False
+        context.cancel_event.set()
+        if hit is None:
+            result = f"Search for '{context.query}' was interrupted without a valid VLM hit."
+            context.terminal_result = result
+            return result
+
+        self._navigation.cancel_goal()
+        cancel_deadline = time.time() + _search_float_env(
+            "DIMOS_SEARCH_CANCEL_WAIT_S", 2.0, minimum=0.0
+        )
+        while (
+            time.time() < cancel_deadline and self._navigation.get_state() != NavigationState.IDLE
+        ):
+            time.sleep(0.05)
+        if self._navigation.get_state() != NavigationState.IDLE:
+            result = (
+                f"Recognized '{context.query}' en route, but the previous navigation goal "
+                "did not release control after cancellation."
+            )
+            context.terminal_result = result
+            return result
+
+        capture_pose = self._capture_pose_for_hit(hit)
+        if capture_pose is None:
+            result = (
+                f"Recognized '{context.query}' en route, but its capture pose does not belong "
+                "to the current relocalized map."
+            )
+            context.terminal_result = result
+            return result
+
+        rewind_distance = self._planar_distance_to_pose(capture_pose)
+        rewind_threshold = _search_float_env("DIMOS_SEARCH_REWIND_THRESHOLD_M", 0.40, minimum=0.05)
+        logger.info(
+            "[search:%s] hit accepted capture=(%.2f, %.2f) current_distance=%.2fm bbox=%s",
+            context.search_id,
+            capture_pose.position.x,
+            capture_pose.position.y,
+            rewind_distance,
+            hit.bbox,
+        )
+        if rewind_distance > rewind_threshold:
+            if not self._navigation.set_goal(capture_pose):
+                result = (
+                    f"Recognized '{context.query}' en route, but navigation rejected the "
+                    "return-to-capture goal."
+                )
+                context.terminal_result = result
+                return result
+            rewind_deadline = time.time() + _search_float_env(
+                "DIMOS_SEARCH_REWIND_TIMEOUT_S", 120.0, minimum=1.0
+            )
+            while time.time() < rewind_deadline:
+                if self._navigation.is_goal_reached():
+                    break
+                if self._planar_distance_to_pose(capture_pose) <= rewind_threshold:
+                    break
+                time.sleep(0.2)
+            else:
+                self._navigation.cancel_goal()
+                result = (
+                    f"Recognized '{context.query}' en route, but failed to return to the "
+                    f"capture viewpoint (distance was {rewind_distance:.2f}m)."
+                )
+                context.terminal_result = result
+                return result
+
+        self._navigation.cancel_goal()
+        target_yaw = float(capture_pose.orientation.to_euler().z)
+        current_euler = self._odom_euler_tuple()
+        if current_euler is not None:
+            yaw_delta = math.atan2(
+                math.sin(target_yaw - current_euler[2]),
+                math.cos(target_yaw - current_euler[2]),
+            )
+            if abs(math.degrees(yaw_delta)) > 3.0:
+                self._rotate_in_place_degrees(math.degrees(yaw_delta))
+
+        record_id = ""
+        try:
+            record_id = self._store_enroute_search_hit(context, hit)
+        except Exception:
+            logger.exception(
+                "[search:%s] failed to update landmark memory after en-route hit",
+                context.search_id,
+            )
+        action_result = self._run_arrival_action("point", context.query)
+        result = (
+            f"Found '{context.query}' en route, returned to the capture viewpoint, and faced "
+            f"the object. {action_result}"
+        )
+        context.terminal_result = result
+        logger.info(
+            "[search:%s] finished FOUND rewind_distance=%.2fm record_id=%s",
+            context.search_id,
+            rewind_distance,
+            record_id or "not-stored",
+        )
+        return result
 
     @skill
     def tag_location(self, location_name: str, num_photos: int = -1) -> str:
@@ -604,14 +1204,14 @@ class NavigationSkillContainer(Module):
             self._spatial_memory.tag_location(location)
 
             image_saved = False
-            has_frame = self._latest_image is not None and hasattr(self._latest_image, "data")
-            if has_frame:
+            latest_image = self._latest_image
+            if latest_image is not None and hasattr(latest_image, "data"):
                 # 复制图像数据, 避免异步线程读取时被后续帧覆盖
-                img_copy = self._latest_image.data.copy()
+                img_copy = latest_image.data.copy()
                 pos_tuple = (float(pos.x), float(pos.y), float(pos.z))
                 captured_frames.append(
                     (
-                        self._latest_image.data.copy(),  # type: ignore[union-attr]
+                        img_copy.copy(),
                         (float(pos.x), float(pos.y), float(pos.z)),
                         rot_tuple,
                     )
@@ -620,7 +1220,7 @@ class NavigationSkillContainer(Module):
                     # 将图像存入 CLIP 向量库作为房间参考图像, 用于后续视觉重定位
                     image_saved = self._spatial_memory.tag_location_with_image(
                         location,
-                        self._latest_image.data,  # type: ignore[union-attr]
+                        img_copy,
                     )
                 except Exception:
                     logger.exception("Failed to store room reference image for '%s'", name)
@@ -850,7 +1450,11 @@ class NavigationSkillContainer(Module):
             logger.info("[in_frame] ✗ MISS")
         return msg
 
-    def _nav_fallback_step_landmark(self, query: str) -> str | None:
+    def _nav_fallback_step_landmark(
+        self,
+        query: str,
+        search_context: _ObjectSearchContext | None = None,
+    ) -> str | None:
         """fallback 步骤: 通过 landmark 记忆导航到已知坐标并视觉确认.
 
         查询 landmark 记忆中是否有匹配的房间或物体记录, 有则导航过去.
@@ -881,6 +1485,7 @@ class NavigationSkillContainer(Module):
             arrival_distance=0.5,
             run_arrival_action=is_object_landmark,
             enable_visual_drift=False,
+            search_context=search_context if is_object_landmark else None,
         )
         nav_lower = nav_landmark_msg.lower()
         # 检测导航失败的各种情况: 严重漂移/中止/跳过/超时/无法视觉锁定.
@@ -920,16 +1525,22 @@ class NavigationSkillContainer(Module):
         )
         return nav_landmark_msg
 
-    def _nav_fallback_step_room_sweep(self, query: str) -> str | None:
+    def _nav_fallback_step_room_sweep(
+        self,
+        query: str,
+        search_context: _ObjectSearchContext | None = None,
+    ) -> str | None:
         """fallback 步骤: 遍历所有房间锚点搜索目标.
 
         依次导航到每个房间并执行 360 度扫描 (跳过 _sweep_skip_rooms 中已搜索的房间).
         找到目标后执行 point 动作指向物体, 并将扫描结果拼入返回消息.
         """
         logger.info("[room_sweep] Sweeping room anchors for %r ...", query)
-        msg = self._room_anchor_sweep_for_object(query)
+        msg = self._room_anchor_sweep_for_object(query, search_context=search_context)
         if msg:
             logger.info("[room_sweep] ✓ HIT: %s", msg)
+            if search_context is not None and search_context.terminal_result is not None:
+                return msg
             return f"{self._run_arrival_action('point', query)} ({msg})"
         else:
             logger.info("[room_sweep] ✗ MISS")
@@ -963,7 +1574,11 @@ class NavigationSkillContainer(Module):
             logger.info("[clip_map] ✗ MISS")
         return msg
 
-    def _run_navigate_fallback_chain(self, query: str) -> str | None:
+    def _run_navigate_fallback_chain(
+        self,
+        query: str,
+        search_context: _ObjectSearchContext | None = None,
+    ) -> str | None:
         """按策略定义的顺序依次执行 fallback 步骤, 首个命中即返回.
 
         用字典映射步骤名到 lambda, 使得不同策略只需改变步骤顺序而非重写逻辑.
@@ -980,13 +1595,19 @@ class NavigationSkillContainer(Module):
         steps: dict[str, Any] = {
             "tagged": lambda: self._nav_fallback_step_tagged(query),
             "in_frame": lambda: self._nav_fallback_step_in_frame(query),
-            "landmark": lambda: self._nav_fallback_step_landmark(query),
-            "room_sweep": lambda: self._nav_fallback_step_room_sweep(query),
+            "landmark": lambda: self._nav_fallback_step_landmark(query, search_context),
+            "room_sweep": lambda: self._nav_fallback_step_room_sweep(query, search_context),
             "vlm_memory": lambda: self._nav_fallback_step_vlm_memory(query),
             "clip_map": lambda: self._nav_fallback_step_clip_map(query),
         }
 
         for step_name in order:
+            if search_context is not None and step_name == "in_frame":
+                logger.info(
+                    "[search:%s] skip in_frame: current-position detection is disabled",
+                    search_context.search_id,
+                )
+                continue
             msg: str | None = steps[step_name]()
             if msg:
                 return msg
@@ -1004,6 +1625,9 @@ class NavigationSkillContainer(Module):
         默认策略 (DIMOS_NAV_FALLBACK=object_room): 物体 landmark -> 房间扫描.
         遍历所有房间并 360 度扫描, 找不到则结束.
 
+        设置 DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true 后, 才会在前往历史位置
+        和其他房间的途中异步检测目标. 默认关闭时完全保留原有到点检测流程.
+
         其他策略: semantic (完整 6 层链) 或 room_first.
 
         每次只查找一个目标.
@@ -1019,7 +1643,24 @@ class NavigationSkillContainer(Module):
         logger.info("=" * 50)
 
         self._sweep_skip_rooms = set()
-        success_msg = self._run_navigate_fallback_chain(query)
+        search_context: _ObjectSearchContext | None = None
+        if _enroute_object_search_enabled():
+            resolved = self._resolve_landmark_from_query(query)
+            if resolved is None or resolved.record_type == RecordType.LANDMARK:
+                search_context = self._new_object_search_context(query)
+        else:
+            logger.info(
+                "En-route object search disabled; preserving arrival-only search for %r",
+                query,
+            )
+        try:
+            success_msg = self._run_navigate_fallback_chain(query, search_context)
+        finally:
+            if search_context is not None:
+                search_context.cancel_event.set()
+                self._end_search_leg(search_context)
+                if self._active_object_search is search_context:
+                    self._active_object_search = None
         if success_msg:
             logger.info("=" * 50)
             logger.info("NAVIGATE_WITH_TEXT END  query=%r  result=HIT", query)
@@ -1032,9 +1673,7 @@ class NavigationSkillContainer(Module):
         logger.info("=" * 50)
         strategy = self._nav_fallback_strategy()
         if strategy == "object_room":
-            return (
-                f"Could not find '{query}' (checked object landmark and swept all rooms)."
-            )
+            return f"Could not find '{query}' (checked object landmark and swept all rooms)."
         return (
             f"Could not reach '{query}' (landmark, in-frame, room sweep, "
             f"VLM memory, CLIP map, or tagged location all missed)."
@@ -1234,7 +1873,11 @@ class NavigationSkillContainer(Module):
                 return self._record_for_current_world(rec)
         return None
 
-    def _room_anchor_sweep_for_object(self, query: str) -> str | None:
+    def _room_anchor_sweep_for_object(
+        self,
+        query: str,
+        search_context: _ObjectSearchContext | None = None,
+    ) -> str | None:
         """逐个房间锚点扫描找物: 导航到每个房间的锚点, 到达后原地扫描查找目标物体.
 
         这是导航回退链的最后一层 (L4). 排序策略: 物体记录所在房间优先,
@@ -1285,7 +1928,9 @@ class NavigationSkillContainer(Module):
         for ri, room in enumerate(rooms):
             rname = room.name or room.record_id
             if rname in skip:
-                logger.info("[L4]   Room %d/%d: skip %r (already searched)", ri + 1, len(rooms), rname)
+                logger.info(
+                    "[L4]   Room %d/%d: skip %r (already searched)", ri + 1, len(rooms), rname
+                )
                 continue
             logger.info(
                 "[L4]   Room %d/%d: %r at (%.2f, %.2f)",
@@ -1301,7 +1946,10 @@ class NavigationSkillContainer(Module):
                 arrival_distance=0.6,
                 run_arrival_action=False,
                 enable_visual_drift=False,
+                search_context=search_context,
             )
+            if search_context is not None and search_context.terminal_result is not None:
+                return nav_msg
             # 漂移/超时/中止时跳过当前房间继续下一个, 不中断整个扫描流程
             if "severe visual/odom drift" in nav_msg.lower():
                 logger.warning("Room sweep: drift abort at %r; trying next room", rname)
@@ -1313,7 +1961,11 @@ class NavigationSkillContainer(Module):
             # stored_yaw 仅在物体记录所在房间使用 -- 在其它房间用会让机器人朝错方向.
             # 这是物体记忆中记录的朝向, 指向物体所在的方向
             stored_yaw: float | None = None
-            if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK and obj_room == rname:
+            if (
+                obj_rec is not None
+                and obj_rec.record_type == RecordType.LANDMARK
+                and obj_room == rname
+            ):
                 stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
 
             result = self._scan_room_for_object(query, stored_yaw=stored_yaw)
@@ -1642,6 +2294,7 @@ class NavigationSkillContainer(Module):
         destination_pose: PoseStamped | None = None,
         expected_room_name: str | None = None,
         enable_visual_drift: bool = True,
+        search_context: _ObjectSearchContext | None = None,
     ) -> tuple[PoseStamped, bool]:
         """等待导航目标完成, 同时周期性做视觉漂移修正.
 
@@ -1654,6 +2307,7 @@ class NavigationSkillContainer(Module):
         """
         ag: PoseStamped = active_goal
         while time.time() < segment_deadline:
+            self._poll_enroute_search(search_context)
             ag, severe = self._periodic_visual_drift_correction(
                 ag,
                 last_corr,
@@ -1667,6 +2321,7 @@ class NavigationSkillContainer(Module):
             if self._navigation.is_goal_reached():
                 return (ag, False)
             time.sleep(0.2)
+        self._poll_enroute_search(search_context)
         return (ag, False)
 
     def _run_arrival_action(self, action: str, target_name: str) -> str:
@@ -1811,9 +2466,7 @@ class NavigationSkillContainer(Module):
             )
             return None
 
-        logger.info(
-            "[detect+servo] ✓ found '%s' at bbox=%s, servoing ...", target_name, bbox
-        )
+        logger.info("[detect+servo] ✓ found '%s' at bbox=%s, servoing ...", target_name, bbox)
         if not self._servo_to_bbox(bbox):
             logger.warning("[detect+servo] servo rotation failed for '%s'", target_name)
             return None
@@ -1862,9 +2515,7 @@ class NavigationSkillContainer(Module):
         want = _normalize_vlm_object_name(target_name)
         # 先归一化再比较, 避免 "chair" vs "椅子" 这类因 VLM 输出语言不同而漏配
         candidates = [
-            item
-            for item in items
-            if _normalize_vlm_object_name(str(item.get("name", ""))) == want
+            item for item in items if _normalize_vlm_object_name(str(item.get("name", ""))) == want
         ]
         if not candidates:
             return None
@@ -1935,9 +2586,7 @@ class NavigationSkillContainer(Module):
             )
             return None
 
-        logger.info(
-            "[room_scan] ✓ '%s' in list at bbox=%s, servoing ...", want, obj.get("bbox")
-        )
+        logger.info("[room_scan] ✓ '%s' in list at bbox=%s, servoing ...", want, obj.get("bbox"))
         if not self._servo_to_bbox(bbox):
             logger.warning("[room_scan] servo rotation failed for '%s'", want)
             return None
@@ -1964,7 +2613,7 @@ class NavigationSkillContainer(Module):
         step_deg = _search_rotation_step_deg()
         # 向上取整覆盖完整 360 度, 末尾会多转一小段确保无盲区 -- 宁可
         # 重叠也不留缝隙, 否则刚好卡在两个步长之间的物体会被漏掉
-        n_steps = max(1, int(math.ceil(360.0 / step_deg)))
+        n_steps = max(1, math.ceil(360.0 / step_deg))
 
         if stored_yaw is not None:
             euler = self._odom_euler_tuple()
@@ -2378,7 +3027,9 @@ class NavigationSkillContainer(Module):
             logger.warning("[VLM single-frame] no VLM model available, skipping room=%r", room_name)
             return
 
-        image = image_data if isinstance(image_data, DimosImage) else DimosImage.from_numpy(image_data)
+        image = (
+            image_data if isinstance(image_data, DimosImage) else DimosImage.from_numpy(image_data)
+        )
         # 拍照时刻的机器人朝向, 作为计算每个物体世界系 yaw 的基准
         capture_yaw = float(rotation[2])
 
@@ -2894,6 +3545,7 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._cancel_active_object_search()
         self._cancel_goal_and_stop()
 
         return "Stopped"
@@ -2910,6 +3562,7 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._cancel_active_object_search()
         self._cancel_goal_and_stop()
         exploration_msg = ""
         if self._frontier_explorer is not None:
@@ -3082,9 +3735,7 @@ class NavigationSkillContainer(Module):
             sweep_result = self._room_anchor_sweep_for_object(name)
             if sweep_result:
                 return f"{self._run_arrival_action(effective_action, name)} ({sweep_result})"
-            return (
-                f"{result} (fallback: swept all rooms — '{name}' not found in any known room)"
-            )
+            return f"{result} (fallback: swept all rooms — '{name}' not found in any known room)"
 
         return result
 
@@ -3097,6 +3748,7 @@ class NavigationSkillContainer(Module):
         run_arrival_action: bool = True,
         relocalize_interval: float | None = None,
         enable_visual_drift: bool = False,
+        search_context: _ObjectSearchContext | None = None,
     ) -> str:
         """导航到指定 landmark 的内部实现.
 
@@ -3114,6 +3766,7 @@ class NavigationSkillContainer(Module):
             run_arrival_action: 是否在到达后执行 arrival_action.
             relocalize_interval: 视觉重定位间隔 (秒), None 用默认值.
             enable_visual_drift: 是否开启视觉漂移修正.
+            search_context: 寻物任务上下文; 提供时在导航途中异步检测目标.
         """
         # 检查目标的坐标系是否已过期 (如 SLAM 重置后旧坐标失效)
         stale_reason = self._coordinate_frame_stale_reason(target)
@@ -3136,6 +3789,7 @@ class NavigationSkillContainer(Module):
         else:
             # 其他类型: 用坐标反查所属房间名, 用于漂移检测时的期望房间匹配
             expected_room = self._room_name_at_position(target.position[0], target.position[1])
+        self._begin_search_leg(search_context, target.name or target.record_id)
 
         def _try_navigate() -> str | None:
             """单次导航尝试: 拓扑路径遍历 + 最终接近.
@@ -3189,24 +3843,21 @@ class NavigationSkillContainer(Module):
                 )
                 self._navigation.set_goal(segment_goal)
                 deadline = time.time() + 120.0
-                active = segment_goal
-                while time.time() < deadline:
-                    active, severe = self._periodic_visual_drift_correction(
-                        active,
-                        last_corr,
-                        interval,
-                        destination_pose=final_dest,
-                        expected_room_name=expected_room,
-                        enable_visual_drift=enable_visual_drift,
+                _, severe = self._wait_goal_with_relocalize(
+                    segment_goal,
+                    last_corr,
+                    deadline,
+                    interval,
+                    destination_pose=final_dest,
+                    expected_room_name=expected_room,
+                    enable_visual_drift=enable_visual_drift,
+                    search_context=search_context,
+                )
+                if severe:
+                    return (
+                        "Navigation aborted: severe visual/odom drift detected "
+                        "(>1m vs room reference). Retry navigate_with_text or re-tag rooms."
                     )
-                    if severe:
-                        return (
-                            "Navigation aborted: severe visual/odom drift detected "
-                            "(>1m vs room reference). Retry navigate_with_text or re-tag rooms."
-                        )
-                    if self._navigation.is_goal_reached():
-                        break
-                    time.sleep(0.25)
 
             if is_object_landmark:
                 # 物体: standoff 直接在物体位置, 朝向用存储的 yaw; 无存储 yaw 时朝向物体
@@ -3305,6 +3956,7 @@ class NavigationSkillContainer(Module):
                     destination_pose=standoff_pose,
                     expected_room_name=expected_room,
                     enable_visual_drift=enable_visual_drift,
+                    search_context=search_context,
                 )
                 if severe:
                     return (
@@ -3324,9 +3976,13 @@ class NavigationSkillContainer(Module):
                 # 连续 5 次卡在同一位置则接受当前位置 - 够近了
                 if self._navigation.get_state() == NavigationState.IDLE and dist <= 2.0:
                     cur_pos_2d = (
-                        self._latest_odom.position.x,
-                        self._latest_odom.position.y,
-                    ) if self._latest_odom else None
+                        (
+                            self._latest_odom.position.x,
+                            self._latest_odom.position.y,
+                        )
+                        if self._latest_odom
+                        else None
+                    )
                     if _stuck_position is None:
                         _stuck_position = cur_pos_2d
                         _stuck_replan_streak = 1
@@ -3364,8 +4020,16 @@ class NavigationSkillContainer(Module):
             return None  # Success
 
         # 第一次尝试
-        err = _try_navigate()
+        try:
+            err = _try_navigate()
+        except _EnrouteObjectHitError:
+            if search_context is None:
+                raise
+            return self._finish_enroute_hit(search_context)
         if err is None:
+            if search_context is not None and search_context.hit_event.is_set():
+                return self._finish_enroute_hit(search_context)
+            self._end_search_leg(search_context)
             tname = target.name or target.record_id
             vis_msg = ""
             if is_object_landmark:
@@ -3396,8 +4060,16 @@ class NavigationSkillContainer(Module):
         self._navigation.cancel_goal()
         time.sleep(0.5)
 
-        err2 = _try_navigate()
+        try:
+            err2 = _try_navigate()
+        except _EnrouteObjectHitError:
+            if search_context is None:
+                raise
+            return self._finish_enroute_hit(search_context)
         if err2 is None:
+            if search_context is not None and search_context.hit_event.is_set():
+                return self._finish_enroute_hit(search_context)
+            self._end_search_leg(search_context)
             tname = target.name or target.record_id
             vis_msg = ""
             if is_object_landmark:
@@ -3421,6 +4093,7 @@ class NavigationSkillContainer(Module):
                 return f"{base} ({vis_msg})"
             return f"{base} (arrival_action not run)."
 
+        self._end_search_leg(search_context)
         return (
             "Navigation aborted: severe visual/odom drift persisted after re-plan. "
             "Retry navigate_with_text or re-tag rooms."
