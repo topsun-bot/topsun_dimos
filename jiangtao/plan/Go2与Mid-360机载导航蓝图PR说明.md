@@ -136,6 +136,6 @@ dimos 整体跑在拓展坞；笔记本只看 rerun-web。详见 [runbook](jiang
 - 技术原理：[`jiangtao/plan/dimos-go2-mid360-nav-stack.md`](jiangtao/plan/dimos-go2-mid360-nav-stack.md)（1571 行）
 - 现场 runbook：[`jiangtao/runbook/go2-nav-onboard.md`](jiangtao/runbook/go2-nav-onboard.md)
 - 评估意见 v1：[`jiangtao/doc/Go2 与 Mid-360 新导航栈规划评估与代码编写计划.docx`](jiangtao/doc/)
-- 评估意见 v2：[`jiangtao/plan/Go2 与 Mid-360 新导航栈最终开发说明.md`](jiangtao/plan/Go2%20%E4%B8%8E%20Mid-360%20%E6%96%B0%E5%AF%BC%E8%88%AA%E6%A0%88%E6%9C%80%E7%BB%88%E5%BC%80%E5%8F%91%E8%AF%B4%E6%98%8E.md)
+- 评估意见 v2：[`jiangtao/plan/Go2与Mid-360新导航栈最终开发说明.md`](Go2%E4%B8%8EMid-360%E6%96%B0%E5%AF%BC%E8%88%AA%E6%A0%88%E6%9C%80%E7%BB%88%E5%BC%80%E5%8F%91%E8%AF%B4%E6%98%8E.md)
 
 > 本 PR 描述基于 dimos `jtlinux` @ `81e9f144`（2026-05-21）。
