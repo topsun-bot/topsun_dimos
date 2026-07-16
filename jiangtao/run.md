@@ -202,10 +202,18 @@ export DIMOS_SEARCH_CANCEL_WAIT_S=2.0
 
 # 返回图片拍摄观察位置的导航超时
 export DIMOS_SEARCH_REWIND_TIMEOUT_S=120.0
+
+# 回到观察位置后等待新相机帧的最长时间
+export DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S=3.0
+
+# 二次确认最多检查 2 帧；首帧偏离中心时会转向并用下一帧复核
+export DIMOS_SEARCH_CONFIRM_MAX_CHECKS=2
+
+# 最终确认时，目标 bbox 中心允许偏离相机中心的最大角度
+export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=5.0
 ```
 
 建议首轮真机测试只设置总开关，其他参数先使用默认值：
 ```bash
 export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
 ```
-

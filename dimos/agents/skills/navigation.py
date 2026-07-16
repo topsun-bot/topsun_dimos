@@ -14,6 +14,7 @@
 
 from collections import deque
 from dataclasses import dataclass, field, replace
+from enum import Enum
 import math
 import os
 import threading
@@ -21,6 +22,7 @@ import time
 from typing import Any, cast
 import uuid
 
+import cv2
 import numpy as np
 from reactivex.disposable import Disposable
 
@@ -101,6 +103,7 @@ _NAV_FALLBACK_STRATEGIES = {
 # 真实 Go2 硬件对小角度旋转不精确 - 较大步长 (如 90 度) 比小步长更可靠.
 # 可通过 DIMOS_ROTATION_STEP_DEG 环境变量覆盖.
 def _rotation_step_deg() -> float:
+    """读取房间标记和扫描共用的原地旋转步长, 单位为度."""
     import os
 
     return float(os.getenv("DIMOS_ROTATION_STEP_DEG", "90"))
@@ -148,7 +151,7 @@ _CAMERA_HFOV_DEG = float(__import__("os").getenv("DIMOS_CAMERA_HFOV_DEG", "69"))
 
 
 def _search_float_env(name: str, default: float, *, minimum: float = 0.0) -> float:
-    """Read a non-negative object-search tuning value from the environment."""
+    """读取寻物浮点环境变量, 非法值回退到默认值并应用最小值限制."""
     try:
         return max(minimum, float(os.getenv(name, str(default))))
     except ValueError:
@@ -156,13 +159,22 @@ def _search_float_env(name: str, default: float, *, minimum: float = 0.0) -> flo
 
 
 def _enroute_object_search_enabled() -> bool:
-    """Return whether the opt-in en-route object-search behavior is enabled."""
+    """判断是否显式启用了可选的导航途中寻物功能."""
     value = os.getenv("DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED", "false")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _timestamped_snapshot_stem(record_id: str, now: float | None = None) -> str:
+    """生成 ``YYYYMMDD-HHMMSS_<record_id>`` 格式的快照文件名主体."""
+    timestamp = time.time() if now is None else now
+    prefix = time.strftime("%Y%m%d-%H%M%S", time.localtime(timestamp))
+    return f"{prefix}_{record_id}"
+
+
 @dataclass(frozen=True)
 class _SearchFrameSnapshot:
+    """冻结一次沿途 VLM 请求使用的图像, 位姿和地图元数据."""
+
     search_id: str
     leg_id: int
     image: Image
@@ -174,6 +186,8 @@ class _SearchFrameSnapshot:
 
 @dataclass(frozen=True)
 class _SearchHit:
+    """保存一次通过时序校验的沿途目标命中结果."""
+
     snapshot: _SearchFrameSnapshot
     bbox: BBox
     detected_at: float
@@ -181,8 +195,37 @@ class _SearchHit:
     object_yaw_map: float | None
 
 
+class _EnrouteHitStatus(Enum):
+    """描述沿途命中处理后的确认, 待继续或失败状态."""
+
+    # CONFIRMED 才能写入记忆并向用户回复“找到”；UNCONFIRMED 表示继续原搜索链路。
+    CONFIRMED = "confirmed"
+    UNCONFIRMED = "unconfirmed"
+    # FAILED 表示回退导航、坐标转换等基础步骤失败，无法安全地继续本次任务。
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class _EnrouteHitOutcome:
+    """封装沿途命中处理状态及返回给上层的消息."""
+
+    status: _EnrouteHitStatus
+    message: str
+
+
+@dataclass(frozen=True)
+class _EnrouteVisualConfirmation:
+    """保存二次确认成功时的新图像, bbox 和说明."""
+
+    message: str
+    image: Image
+    bbox: BBox
+
+
 @dataclass
 class _ObjectSearchContext:
+    """维护一次跨多段导航寻物任务的共享并发状态."""
+
     search_id: str
     query: str
     created_at: float = field(default_factory=time.time)
@@ -196,10 +239,11 @@ class _ObjectSearchContext:
     vlm_in_flight: bool = False
     last_request_at: float = 0.0
     terminal_result: str | None = None
+    terminal_status: _EnrouteHitStatus | None = None
 
 
 class _EnrouteObjectHitError(Exception):
-    """Internal control-flow signal raised when an en-route VLM request hits."""
+    """沿途 VLM 命中后用于中断当前导航等待循环的内部信号."""
 
 
 # VLM 仍返回英文物体名时的兜底映射表 (遗留标签或 VLM 遵循指令不严格时使用).
@@ -404,6 +448,7 @@ class NavigationSkillContainer(Module):
     odom: In[PoseStamped]
 
     def __init__(self, **kwargs: Any) -> None:
+        """初始化导航技能运行状态, 传感器缓存和 VLM 客户端."""
         super().__init__(**kwargs)
         self._skill_started = False
         self._latest_image = None
@@ -639,7 +684,7 @@ class NavigationSkillContainer(Module):
         return resolved
 
     def _ensure_search_runtime(self) -> None:
-        """Initialize search-only state for normal construction and lightweight tests."""
+        """补齐寻物运行态, 兼容正常构造和绕过构造器的轻量测试."""
         if "_sensor_lock" not in self.__dict__:
             self._sensor_lock = threading.Lock()
         if "_odom_history" not in self.__dict__:
@@ -649,6 +694,7 @@ class NavigationSkillContainer(Module):
 
     @staticmethod
     def _copy_pose(pose: PoseStamped) -> PoseStamped:
+        """深拷贝位姿, 避免异步 VLM 期间上游复用并修改消息对象."""
         return PoseStamped(
             ts=float(pose.ts),
             frame_id=pose.frame_id,
@@ -666,6 +712,7 @@ class NavigationSkillContainer(Module):
         )
 
     def _new_object_search_context(self, query: str) -> _ObjectSearchContext:
+        """创建一次寻物任务上下文并登记为当前活动任务."""
         self._ensure_search_runtime()
         context = _ObjectSearchContext(
             search_id=f"search_{uuid.uuid4().hex[:10]}",
@@ -680,6 +727,7 @@ class NavigationSkillContainer(Module):
         return context
 
     def _cancel_active_object_search(self) -> None:
+        """取消当前寻物任务并关闭后续沿途监控."""
         self._ensure_search_runtime()
         context = self._active_object_search
         if context is None:
@@ -695,6 +743,7 @@ class NavigationSkillContainer(Module):
         context: _ObjectSearchContext | None,
         target_name: str,
     ) -> None:
+        """为一段新的目标导航启用沿途检测并记录起点."""
         if context is None or context.cancel_event.is_set():
             return
         origin: tuple[float, float] | None = None
@@ -719,6 +768,7 @@ class NavigationSkillContainer(Module):
 
     @staticmethod
     def _end_search_leg(context: _ObjectSearchContext | None) -> None:
+        """结束当前导航段的沿途检测, 但保留跨房间寻物上下文."""
         if context is None:
             return
         with context.lock:
@@ -729,6 +779,7 @@ class NavigationSkillContainer(Module):
         context: _ObjectSearchContext,
         leg_id: int,
     ) -> _SearchFrameSnapshot | None:
+        """冻结当前图像及其同步位姿, 构造可供异步 VLM 使用的快照."""
         self._ensure_search_runtime()
         with self._sensor_lock:
             image = self._latest_image
@@ -741,6 +792,8 @@ class NavigationSkillContainer(Module):
 
         if not candidates:
             return None
+        # 图像和里程计来自独立数据流, 必须取时间上最近的位姿才能在 VLM
+        # 延迟返回后准确导航回拍摄位置.
         nearest = min(candidates, key=lambda pose: abs(float(pose.ts) - float(image_copy.ts)))
         sync_error = abs(float(nearest.ts) - float(image_copy.ts))
         tolerance = _search_float_env("DIMOS_SEARCH_POSE_SYNC_TOLERANCE_S", 0.20, minimum=0.01)
@@ -784,6 +837,7 @@ class NavigationSkillContainer(Module):
         snapshot: _SearchFrameSnapshot,
         bbox: BBox,
     ) -> tuple[float, float | None]:
+        """把 bbox 水平偏移换算为物体在 world 和 map 中的朝向."""
         _height, width = snapshot.image.data.shape[:2]
         x1, y1, x2, y2 = (float(v) for v in bbox)
         offset = yaw_offset_from_bbox(
@@ -816,6 +870,7 @@ class NavigationSkillContainer(Module):
         context: _ObjectSearchContext,
         snapshot: _SearchFrameSnapshot,
     ) -> None:
+        """在后台执行一次沿途 VLM 检测, 并发布仍然有效的命中."""
         bbox: BBox | None = None
         try:
             bbox = get_object_bbox_from_image(self._vl_model, snapshot.image, context.query)
@@ -841,6 +896,8 @@ class NavigationSkillContainer(Module):
 
         with context.lock:
             context.vlm_in_flight = False
+            # 异步结果只属于提交时的导航段. 如果机器人已进入下一房间或结果过旧,
+            # 该 bbox 对应的拍摄位置就不能再中断当前导航.
             valid = (
                 hit is not None
                 and not context.cancel_event.is_set()
@@ -866,6 +923,7 @@ class NavigationSkillContainer(Module):
         )
 
     def _maybe_submit_enroute_vlm(self, context: _ObjectSearchContext | None) -> None:
+        """按频率和位移门限提交至多一个沿途 VLM 异步请求."""
         if context is None or context.cancel_event.is_set() or context.hit_event.is_set():
             return
         now = time.time()
@@ -925,6 +983,7 @@ class NavigationSkillContainer(Module):
         ).start()
 
     def _poll_enroute_search(self, context: _ObjectSearchContext | None) -> None:
+        """轮询沿途寻物状态, 命中时中断当前导航等待流程."""
         if context is None:
             return
         if context.hit_event.is_set():
@@ -934,9 +993,12 @@ class NavigationSkillContainer(Module):
             raise _EnrouteObjectHitError
 
     def _capture_pose_for_hit(self, hit: _SearchHit) -> PoseStamped | None:
+        """将命中时的观察位姿恢复到当前 world 坐标系并朝向目标."""
         metadata = hit.snapshot.map_metadata
         pose_map = metadata.get("pose_map")
         if metadata.get("relocalization_bound") and isinstance(pose_map, dict):
+            # 重定位后 world 原点可能变化, 因而不能直接复用历史 world 位姿.
+            # 先使用持久 map 位姿替换目标朝向, 再转换到本次运行的 world.
             raw_position = pose_map.get("position")
             raw_rotation = pose_map.get("rotation")
             if not isinstance(raw_position, (list, tuple)) or not isinstance(
@@ -991,7 +1053,13 @@ class NavigationSkillContainer(Module):
             frame_id="map",
         )
 
-    def _store_enroute_search_hit(self, context: _ObjectSearchContext, hit: _SearchHit) -> str:
+    def _store_enroute_search_hit(
+        self,
+        context: _ObjectSearchContext,
+        hit: _SearchHit,
+        confirmation: _EnrouteVisualConfirmation,
+    ) -> str:
+        """写入二次确认后的物体地标, 元数据和最终确认 JPG."""
         capture_pose = self._capture_pose_for_hit(hit)
         if capture_pose is None:
             return ""
@@ -1019,6 +1087,8 @@ class NavigationSkillContainer(Module):
                 "vlm_result_ts": hit.detected_at,
                 "vlm_latency_s": hit.detected_at - hit.snapshot.submitted_at,
                 "bbox": [float(v) for v in hit.bbox],
+                "confirmation_image_ts": float(confirmation.image.ts),
+                "confirmation_bbox": [float(v) for v in confirmation.bbox],
             }
         )
         room_name = self._room_name_at_position(position[0], position[1])
@@ -1034,20 +1104,183 @@ class NavigationSkillContainer(Module):
             metadata=metadata,
             session_id=self._memory_session_id,
         )
+
+        # 与房间初始朝向快照共用 landmark_memory/snapshots 目录。已有同名物体时
+        # 复用其 record_id；时间前缀让历次确认图都能保留，地标记录指向最新一张。
+        try:
+            existing = self._landmark_memory.find_by_name(context.query)
+            snapshot_record_id = existing.record_id if existing is not None else record.record_id
+            snapshot_stem = _timestamped_snapshot_stem(snapshot_record_id)
+            encoded, jpg = cv2.imencode(".jpg", confirmation.image.data)
+            if encoded:
+                image_path = self._landmark_memory.save_snapshot(
+                    snapshot_stem,
+                    jpg.tobytes(),
+                )
+                if image_path:
+                    record.image_snapshot_path = image_path
+                    logger.info(
+                        "[search:%s] saved confirmed object snapshot path=%s",
+                        context.search_id,
+                        image_path,
+                    )
+                else:
+                    logger.warning(
+                        "[search:%s] failed to write confirmed object snapshot",
+                        context.search_id,
+                    )
+            else:
+                logger.warning(
+                    "[search:%s] failed to encode confirmed object snapshot as JPEG",
+                    context.search_id,
+                )
+        except Exception:
+            # 快照是附加信息；写盘失败不能阻止已确认物体的地标记录和到达动作。
+            logger.exception(
+                "[search:%s] failed to save confirmed object snapshot",
+                context.search_id,
+            )
         return self._landmark_memory.record(record)
 
-    def _finish_enroute_hit(self, context: _ObjectSearchContext) -> str:
+    def _wait_for_fresh_search_image(self, after_ts: float) -> Image | None:
+        """等待相机发布一帧时间戳晚于 ``after_ts`` 的图像.
+
+        返回观察位姿或完成原地旋转后, 缓存中的 ``_latest_image`` 可能仍是运动前的
+        旧画面. 二次确认必须等待新帧, 否则会用同一张旧图重复证明自己.
+        """
+        timeout = _search_float_env("DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S", 3.0, minimum=0.1)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self._ensure_search_runtime()
+            with self._sensor_lock:
+                image = self._latest_image
+                if image is not None and float(image.ts) > after_ts + 1e-6:
+                    # 冻结确认帧，避免 VLM 推理期间相机回调替换底层图像数据。
+                    return image.copy()
+            time.sleep(0.05)
+        return None
+
+    def _bbox_yaw_offset_degrees(self, bbox: BBox, image: Image) -> float:
+        """计算 bbox 中心相对相机光轴的水平偏航角, 单位为度."""
+        height, width = image.data.shape[:2]
+        x1_px, y1_px, x2_px, y2_px = bbox
+        offset = yaw_offset_from_bbox(
+            x1_px / width * 1000.0,
+            y1_px / height * 1000.0,
+            x2_px / width * 1000.0,
+            y2_px / height * 1000.0,
+            self._camera_hfov_deg,
+        )
+        return math.degrees(offset)
+
+    def _confirm_enroute_hit(
+        self, context: _ObjectSearchContext
+    ) -> _EnrouteVisualConfirmation | None:
+        """使用新画面重新检测沿途命中, 并将目标调整到相机中央."""
+        with self._sensor_lock:
+            # 以当前缓存帧为时间基线，保证下面的 VLM 不会复用回退前的画面。
+            latest_ts = float(self._latest_image.ts) if self._latest_image is not None else 0.0
+
+        # 默认最多两次：第一次重新检测，若偏离中心则转向，第二次用新帧复核。
+        max_checks = max(
+            1,
+            int(_search_float_env("DIMOS_SEARCH_CONFIRM_MAX_CHECKS", 2.0, minimum=1.0)),
+        )
+        centre_tolerance = _search_float_env(
+            "DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG", 5.0, minimum=1.0
+        )
+        for check_index in range(max_checks):
+            image = self._wait_for_fresh_search_image(latest_ts)
+            if image is None:
+                logger.warning(
+                    "[search:%s] confirmation failed: no fresh camera frame",
+                    context.search_id,
+                )
+                return None
+            latest_ts = float(image.ts)
+
+            try:
+                bbox = get_object_bbox_from_image(self._vl_model, image, context.query)
+            except Exception:
+                logger.exception(
+                    "[search:%s] confirmation VLM failed check=%d/%d",
+                    context.search_id,
+                    check_index + 1,
+                    max_checks,
+                )
+                return None
+            if bbox is None or not self._bbox_reasonable_for_tracking(bbox, image=image):
+                logger.warning(
+                    "[search:%s] confirmation miss check=%d/%d bbox=%s",
+                    context.search_id,
+                    check_index + 1,
+                    max_checks,
+                    bbox,
+                )
+                return None
+
+            # bbox 中心偏差既用于最终居中判定，也用于计算下一次原地转向角度。
+            offset_deg = self._bbox_yaw_offset_degrees(bbox, image)
+            logger.info(
+                "[search:%s] confirmation hit check=%d/%d bbox=%s offset=%.1fdeg",
+                context.search_id,
+                check_index + 1,
+                max_checks,
+                bbox,
+                offset_deg,
+            )
+            if abs(offset_deg) <= centre_tolerance:
+                return _EnrouteVisualConfirmation(
+                    message=f"Visually confirmed '{context.query}' in a fresh centered frame",
+                    image=image,
+                    bbox=bbox,
+                )
+            if check_index + 1 >= max_checks:
+                break
+            # 目标在画面右侧时 offset 为正，因此机器人需要按负角度转向。
+            if not self._rotate_in_place_degrees(-offset_deg):
+                logger.warning(
+                    "[search:%s] confirmation servo failed offset=%.1fdeg",
+                    context.search_id,
+                    offset_deg,
+                )
+                return None
+
+        logger.warning(
+            "[search:%s] confirmation failed: object did not become centered",
+            context.search_id,
+        )
+        return None
+
+    @staticmethod
+    def _reset_unconfirmed_enroute_hit(context: _ObjectSearchContext) -> None:
+        """清除未通过二次确认的命中, 让原寻物任务可以继续."""
+        # 只丢弃本次误命中，不取消整个搜索任务；后续路段仍可以继续沿途检测。
         with context.lock:
-            if context.terminal_result is not None:
-                return context.terminal_result
-            hit = context.hit
+            context.hit = None
+            context.hit_event.clear()
             context.monitor_enabled = False
-        context.cancel_event.set()
+
+    def _finish_enroute_hit(self, context: _ObjectSearchContext) -> _EnrouteHitOutcome:
+        """停止原导航, 回到拍摄位姿并通过新画面完成二次确认."""
+        with context.lock:
+            # 命中处理可能被导航循环和到达检查同时触发，终态结果必须保持幂等。
+            if context.terminal_result is not None:
+                return _EnrouteHitOutcome(
+                    status=context.terminal_status or _EnrouteHitStatus.FAILED,
+                    message=context.terminal_result,
+                )
+            hit = context.hit
+            # 先停止提交新的 VLM 请求，但此时不能取消整个搜索任务：二次确认可能失败。
+            context.monitor_enabled = False
         if hit is None:
             result = f"Search for '{context.query}' was interrupted without a valid VLM hit."
             context.terminal_result = result
-            return result
+            context.terminal_status = _EnrouteHitStatus.FAILED
+            context.cancel_event.set()
+            return _EnrouteHitOutcome(_EnrouteHitStatus.FAILED, result)
 
+        # 沿途 VLM 有延迟，命中返回时机器人可能仍在向原目标移动，先释放旧 goal。
         self._navigation.cancel_goal()
         cancel_deadline = time.time() + _search_float_env(
             "DIMOS_SEARCH_CANCEL_WAIT_S", 2.0, minimum=0.0
@@ -1062,7 +1295,9 @@ class NavigationSkillContainer(Module):
                 "did not release control after cancellation."
             )
             context.terminal_result = result
-            return result
+            context.terminal_status = _EnrouteHitStatus.FAILED
+            context.cancel_event.set()
+            return _EnrouteHitOutcome(_EnrouteHitStatus.FAILED, result)
 
         capture_pose = self._capture_pose_for_hit(hit)
         if capture_pose is None:
@@ -1071,7 +1306,9 @@ class NavigationSkillContainer(Module):
                 "to the current relocalized map."
             )
             context.terminal_result = result
-            return result
+            context.terminal_status = _EnrouteHitStatus.FAILED
+            context.cancel_event.set()
+            return _EnrouteHitOutcome(_EnrouteHitStatus.FAILED, result)
 
         rewind_distance = self._planar_distance_to_pose(capture_pose)
         rewind_threshold = _search_float_env("DIMOS_SEARCH_REWIND_THRESHOLD_M", 0.40, minimum=0.05)
@@ -1084,13 +1321,16 @@ class NavigationSkillContainer(Module):
             hit.bbox,
         )
         if rewind_distance > rewind_threshold:
+            # 已走过拍照位置时，导航回图像对应的观察坐标，而不是在当前位置确认。
             if not self._navigation.set_goal(capture_pose):
                 result = (
                     f"Recognized '{context.query}' en route, but navigation rejected the "
                     "return-to-capture goal."
                 )
                 context.terminal_result = result
-                return result
+                context.terminal_status = _EnrouteHitStatus.FAILED
+                context.cancel_event.set()
+                return _EnrouteHitOutcome(_EnrouteHitStatus.FAILED, result)
             rewind_deadline = time.time() + _search_float_env(
                 "DIMOS_SEARCH_REWIND_TIMEOUT_S", 120.0, minimum=1.0
             )
@@ -1107,9 +1347,12 @@ class NavigationSkillContainer(Module):
                     f"capture viewpoint (distance was {rewind_distance:.2f}m)."
                 )
                 context.terminal_result = result
-                return result
+                context.terminal_status = _EnrouteHitStatus.FAILED
+                context.cancel_event.set()
+                return _EnrouteHitOutcome(_EnrouteHitStatus.FAILED, result)
 
         self._navigation.cancel_goal()
+        # 回到观察坐标后恢复抓拍时推算出的物体朝向，再开始实时视觉确认。
         target_yaw = float(capture_pose.orientation.to_euler().z)
         current_euler = self._odom_euler_tuple()
         if current_euler is not None:
@@ -1120,9 +1363,22 @@ class NavigationSkillContainer(Module):
             if abs(math.degrees(yaw_delta)) > 3.0:
                 self._rotate_in_place_degrees(math.degrees(yaw_delta))
 
+        confirmation = self._confirm_enroute_hit(context)
+        if confirmation is None:
+            # 不记忆、不打招呼、不回复“找到”；清除误命中后恢复原搜索路线。
+            self._reset_unconfirmed_enroute_hit(context)
+            result = (
+                f"The en-route detection of '{context.query}' was not confirmed after returning "
+                "to its capture viewpoint; resuming the original search route."
+            )
+            logger.info("[search:%s] unconfirmed; resume original route", context.search_id)
+            return _EnrouteHitOutcome(_EnrouteHitStatus.UNCONFIRMED, result)
+
+        # 只有新帧确认成功后，才真正终止搜索并提交物体记忆和到达动作。
+        context.cancel_event.set()
         record_id = ""
         try:
-            record_id = self._store_enroute_search_hit(context, hit)
+            record_id = self._store_enroute_search_hit(context, hit, confirmation)
         except Exception:
             logger.exception(
                 "[search:%s] failed to update landmark memory after en-route hit",
@@ -1131,16 +1387,50 @@ class NavigationSkillContainer(Module):
         action_result = self._run_arrival_action("point", context.query)
         result = (
             f"Found '{context.query}' en route, returned to the capture viewpoint, and faced "
-            f"the object. {action_result}"
+            f"the visually confirmed object. {action_result} ({confirmation.message})"
         )
         context.terminal_result = result
+        context.terminal_status = _EnrouteHitStatus.CONFIRMED
         logger.info(
             "[search:%s] finished FOUND rewind_distance=%.2fm record_id=%s",
             context.search_id,
             rewind_distance,
             record_id or "not-stored",
         )
-        return result
+        return _EnrouteHitOutcome(_EnrouteHitStatus.CONFIRMED, result)
+
+    def _finish_or_resume_enroute_hit(
+        self,
+        context: _ObjectSearchContext,
+        target: SpatialRecord,
+        *,
+        arrival_action: str,
+        arrival_distance: float,
+        run_arrival_action: bool,
+        relocalize_interval: float | None,
+        enable_visual_drift: bool,
+    ) -> str:
+        """处理沿途命中, 未确认时恢复当前导航段的原目标."""
+        outcome = self._finish_enroute_hit(context)
+        if outcome.status != _EnrouteHitStatus.UNCONFIRMED:
+            return outcome.message
+
+        logger.info(
+            "[search:%s] continuing target=%r without en-route monitoring for this leg",
+            context.search_id,
+            target.name or target.record_id,
+        )
+        # 当前路段关闭沿途监控，避免刚清除的误命中被同一路段立即再次触发；
+        # 返回外层后仍保留原 context，搜索其他房间时会重新开启沿途检测。
+        return self._navigate_to_landmark(
+            target,
+            arrival_action=arrival_action,
+            arrival_distance=arrival_distance,
+            run_arrival_action=run_arrival_action,
+            relocalize_interval=relocalize_interval,
+            enable_visual_drift=enable_visual_drift,
+            search_context=None,
+        )
 
     @skill
     def tag_location(self, location_name: str, num_photos: int = -1) -> str:
@@ -1264,10 +1554,9 @@ class NavigationSkillContainer(Module):
         # 如果图像保存成功, 额外保存一张 JPEG 快照到地标记忆, 供 UI 展示和快速检索
         if image_saved and self._latest_image is not None and hasattr(self._latest_image, "data"):
             try:
-                import cv2
-
                 _, jpg = cv2.imencode(".jpg", self._latest_image.data)
-                img_path = self._landmark_memory.save_snapshot(room_rec.record_id, jpg.tobytes())
+                snapshot_stem = _timestamped_snapshot_stem(room_rec.record_id)
+                img_path = self._landmark_memory.save_snapshot(snapshot_stem, jpg.tobytes())
                 if img_path:
                     room_rec.image_snapshot_path = img_path
             except Exception:
@@ -1907,6 +2196,7 @@ class NavigationSkillContainer(Module):
             ox, oy = obj_rec.position[0], obj_rec.position[1]
 
             def _room_sort_key(room: Any) -> tuple[int, float]:
+                """将物体所属房间优先, 其余按距历史物体位置排序."""
                 rname = room.name or room.record_id
                 is_obj_room = 0 if rname == obj_room else 1
                 dist = math.hypot(room.position[0] - ox, room.position[1] - oy)
@@ -1997,6 +2287,7 @@ class NavigationSkillContainer(Module):
             logger.exception("360 scan rotation failed")
 
     def _planar_distance_to_pose(self, pose: PoseStamped) -> float:
+        """计算当前里程计与目标位姿之间的平面欧氏距离."""
         # 只取 x/y 两轴, 忽略 z -- 导航目标在地面平面内定义, 高度差对到达判断无意义
         if self._latest_odom is None:
             return float("inf")
@@ -2494,6 +2785,7 @@ class NavigationSkillContainer(Module):
 
     @staticmethod
     def _bbox_area_0to1000(bbox: list[int] | list[float]) -> float:
+        """计算 0-1000 归一化 bbox 的非负面积."""
         # VLM 输出的 bbox 在 0-1000 归一化坐标系中, 这里直接用该坐标系
         # 计算面积即可用于比较大小 (无需换算回像素), max(0, ...) 防御
         # VLM 偶尔给出 x1 > x2 的倒序坐标导致负面积
@@ -3244,7 +3536,7 @@ class NavigationSkillContainer(Module):
             return f"Detected {stored} object(s): {', '.join(names)}. Stored in landmark memory."
         return "No nameable objects detected."
 
-    def _bbox_reasonable_for_tracking(self, bbox: BBox) -> bool:
+    def _bbox_reasonable_for_tracking(self, bbox: BBox, *, image: Image | None = None) -> bool:
         """检查 bbox 尺寸是否适合用于视觉跟踪.
 
         过小的 bbox(小于 24px)跟踪器容易丢失; 过大的 bbox(占画面 55% 以上)
@@ -3253,13 +3545,15 @@ class NavigationSkillContainer(Module):
 
         Args:
             bbox: [x1, y1, x2, y2] 像素坐标.
+            image: 可选的 bbox 来源图像; 未提供时使用最新相机帧.
 
         Returns:
             True 如果 bbox 尺寸在合理跟踪范围内.
         """
-        if self._latest_image is None or not hasattr(self._latest_image, "data"):
+        source_image = image if image is not None else self._latest_image
+        if source_image is None or not hasattr(source_image, "data"):
             return True
-        h, w = self._latest_image.data.shape[:2]
+        h, w = source_image.data.shape[:2]
         x1, y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
         bw, bh = x2 - x1, y2 - y1
         # 太小: 跟踪器容易跟丢
@@ -4025,10 +4319,26 @@ class NavigationSkillContainer(Module):
         except _EnrouteObjectHitError:
             if search_context is None:
                 raise
-            return self._finish_enroute_hit(search_context)
+            return self._finish_or_resume_enroute_hit(
+                search_context,
+                target,
+                arrival_action=arrival_action,
+                arrival_distance=arrival_distance,
+                run_arrival_action=run_arrival_action,
+                relocalize_interval=relocalize_interval,
+                enable_visual_drift=enable_visual_drift,
+            )
         if err is None:
             if search_context is not None and search_context.hit_event.is_set():
-                return self._finish_enroute_hit(search_context)
+                return self._finish_or_resume_enroute_hit(
+                    search_context,
+                    target,
+                    arrival_action=arrival_action,
+                    arrival_distance=arrival_distance,
+                    run_arrival_action=run_arrival_action,
+                    relocalize_interval=relocalize_interval,
+                    enable_visual_drift=enable_visual_drift,
+                )
             self._end_search_leg(search_context)
             tname = target.name or target.record_id
             vis_msg = ""
@@ -4065,10 +4375,26 @@ class NavigationSkillContainer(Module):
         except _EnrouteObjectHitError:
             if search_context is None:
                 raise
-            return self._finish_enroute_hit(search_context)
+            return self._finish_or_resume_enroute_hit(
+                search_context,
+                target,
+                arrival_action=arrival_action,
+                arrival_distance=arrival_distance,
+                run_arrival_action=run_arrival_action,
+                relocalize_interval=relocalize_interval,
+                enable_visual_drift=enable_visual_drift,
+            )
         if err2 is None:
             if search_context is not None and search_context.hit_event.is_set():
-                return self._finish_enroute_hit(search_context)
+                return self._finish_or_resume_enroute_hit(
+                    search_context,
+                    target,
+                    arrival_action=arrival_action,
+                    arrival_distance=arrival_distance,
+                    run_arrival_action=run_arrival_action,
+                    relocalize_interval=relocalize_interval,
+                    enable_visual_drift=enable_visual_drift,
+                )
             self._end_search_leg(search_context)
             tname = target.name or target.record_id
             vis_msg = ""

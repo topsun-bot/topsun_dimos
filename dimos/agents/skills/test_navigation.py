@@ -22,6 +22,9 @@ import pytest
 
 from dimos.agents.skills.navigation import (
     NavigationSkillContainer,
+    _EnrouteHitOutcome,
+    _EnrouteHitStatus,
+    _EnrouteVisualConfirmation,
     _ObjectSearchContext,
     _SearchFrameSnapshot,
     _SearchHit,
@@ -342,7 +345,11 @@ def test_enroute_vlm_waits_for_navigation_displacement_before_detecting(
         calls.append(query)
         return (40.0, 10.0, 60.0, 35.0)
 
+    def run_thread_inline(*, target: Any, args: tuple[Any, ...], **_kwargs: Any) -> Any:
+        return SimpleNamespace(start=lambda: target(*args))
+
     monkeypatch.setattr("dimos.agents.skills.navigation.get_object_bbox_from_image", fake_bbox)
+    monkeypatch.setattr("dimos.agents.skills.navigation.threading.Thread", run_thread_inline)
     nav = _nav_container()
     nav._vl_model = object()
     now = time.time()
@@ -451,10 +458,37 @@ def test_enroute_hit_returns_to_capture_pose_faces_and_greets_once(
     nav._navigation = _FakeNavigation()
     nav._unitree_skill_container = _FakeUnitree()
     nav._latest_odom = _pose(2.0, 0.0, yaw=0.0)
+    confirmed_image = Image.from_numpy(
+        np.full((60, 100, 3), 127, dtype=np.uint8),
+        ts=time.time() + 1.0,
+    )
+    monkeypatch.setattr(
+        nav,
+        "_confirm_enroute_hit",
+        lambda context: _EnrouteVisualConfirmation(
+            message=f"Visually confirmed '{context.query}' in a fresh centered frame",
+            image=confirmed_image,
+            bbox=(35.0, 10.0, 65.0, 50.0),
+        ),
+    )
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation._timestamped_snapshot_stem",
+        lambda record_id: f"20260716-111032_{record_id}",
+    )
     recorded: list[SpatialRecord] = []
+    saved_snapshots: list[tuple[str, bytes]] = []
+    existing = SpatialRecord(
+        name="灭火器",
+        record_type=RecordType.LANDMARK,
+        record_id="rec_existing_object",
+    )
     nav._landmark_memory = SimpleNamespace(
         query_by_type=lambda _record_type: [],
-        record=lambda record: recorded.append(record) or record.record_id,
+        find_by_name=lambda _name: existing,
+        save_snapshot=lambda record_id, image_bytes: (
+            saved_snapshots.append((record_id, image_bytes)) or f"/snapshots/{record_id}.jpg"
+        ),
+        record=lambda record: recorded.append(record) or existing.record_id,
     )
     now = time.time()
     image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=now)
@@ -481,9 +515,10 @@ def test_enroute_hit_returns_to_capture_pose_faces_and_greets_once(
     context = _ObjectSearchContext(search_id="search_return", query="灭火器", hit=hit)
     context.hit_event.set()
 
-    result = nav._finish_enroute_hit(context)
+    outcome = nav._finish_enroute_hit(context)
 
-    assert "returned to the capture viewpoint" in result
+    assert outcome.status == _EnrouteHitStatus.CONFIRMED
+    assert "returned to the capture viewpoint" in outcome.message
     assert len(nav._navigation.goals) == 1
     assert nav._navigation.goals[0].position.x == pytest.approx(0.0)
     assert nav._unitree_skill_container.rotations[0] < 0.0
@@ -492,6 +527,203 @@ def test_enroute_hit_returns_to_capture_pose_faces_and_greets_once(
     assert recorded[0].name == "灭火器"
     assert recorded[0].position[0] == pytest.approx(0.0)
     assert recorded[0].metadata["position_semantics"] == "observation_viewpoint"
+    assert recorded[0].metadata["confirmation_image_ts"] == pytest.approx(confirmed_image.ts)
+    assert recorded[0].metadata["confirmation_bbox"] == [35.0, 10.0, 65.0, 50.0]
+    assert recorded[0].image_snapshot_path == "/snapshots/20260716-111032_rec_existing_object.jpg"
+    assert len(saved_snapshots) == 1
+    assert saved_snapshots[0][0] == "20260716-111032_rec_existing_object"
+    assert saved_snapshots[0][1].startswith(b"\xff\xd8")
+
+
+def test_room_initial_snapshot_uses_timestamped_filename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._latest_odom = _pose(1.0, 2.0, yaw=0.3)
+    nav._latest_image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8))
+    nav._spatial_memory = SimpleNamespace(
+        tag_location=lambda _location: True,
+        tag_location_with_image=lambda _location, _image: True,
+    )
+    recorded: list[SpatialRecord] = []
+    saved_snapshots: list[str] = []
+    nav._landmark_memory = SimpleNamespace(
+        save_snapshot=lambda record_id, _image_bytes: (
+            saved_snapshots.append(record_id) or f"/snapshots/{record_id}.jpg"
+        ),
+        record=lambda record: recorded.append(record) or record.record_id,
+    )
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation._timestamped_snapshot_stem",
+        lambda record_id: f"20260716-111032_{record_id}",
+    )
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation.threading.Thread",
+        lambda **_kwargs: SimpleNamespace(start=lambda: None),
+    )
+
+    result = nav.tag_location("办公室", num_photos=0)
+
+    assert result.startswith("Tagged '办公室'")
+    assert len(recorded) == 1
+    expected_stem = f"20260716-111032_{recorded[0].record_id}"
+    assert saved_snapshots == [expected_stem]
+    assert recorded[0].image_snapshot_path == f"/snapshots/{expected_stem}.jpg"
+
+
+def test_enroute_confirmation_uses_fresh_bbox_and_rechecks_after_servo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_CONFIRM_MAX_CHECKS", "2")
+    nav = _nav_container()
+    nav._vl_model = object()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=10.0)
+    frames = iter(
+        [
+            Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=11.0),
+            Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=12.0),
+        ]
+    )
+    requested_after: list[float] = []
+    boxes = iter([(65.0, 10.0, 95.0, 50.0), (35.0, 10.0, 65.0, 50.0)])
+
+    def fake_wait(after_ts: float) -> Image:
+        requested_after.append(after_ts)
+        return next(frames)
+
+    monkeypatch.setattr(nav, "_wait_for_fresh_search_image", fake_wait)
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation.get_object_bbox_from_image",
+        lambda _model, _image, _query: next(boxes),
+    )
+    context = _ObjectSearchContext(search_id="search_confirm", query="灭火器")
+
+    confirmation = nav._confirm_enroute_hit(context)
+
+    assert confirmation is not None
+    assert confirmation.message == "Visually confirmed '灭火器' in a fresh centered frame"
+    assert confirmation.image.ts == pytest.approx(12.0)
+    assert confirmation.bbox == (35.0, 10.0, 65.0, 50.0)
+    assert requested_after == [10.0, 11.0]
+    assert len(nav._unitree_skill_container.rotations) == 1
+    assert nav._unitree_skill_container.rotations[0] < 0.0
+
+
+def test_enroute_confirmation_waits_past_cached_camera_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._latest_image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=10.0)
+    published = False
+
+    def publish_next_frame(_seconds: float) -> None:
+        nonlocal published
+        if not published:
+            published = True
+            nav._on_color_image(Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=11.0))
+
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", publish_next_frame)
+
+    image = nav._wait_for_fresh_search_image(10.0)
+
+    assert image is not None
+    assert image.ts == pytest.approx(11.0)
+    assert published is True
+
+
+def test_unconfirmed_enroute_hit_does_not_store_greet_or_finish_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_CANCEL_WAIT_S", "0")
+    monkeypatch.setenv("DIMOS_SEARCH_REWIND_THRESHOLD_M", "0.4")
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda _seconds: None)
+    nav = _nav_container()
+    nav._navigation = _FakeNavigation()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_odom = _pose(2.0, 0.0)
+    recorded: list[SpatialRecord] = []
+    nav._landmark_memory = SimpleNamespace(
+        query_by_type=lambda _record_type: [],
+        record=lambda record: recorded.append(record) or record.record_id,
+    )
+    monkeypatch.setattr(nav, "_confirm_enroute_hit", lambda _context: None)
+    now = time.time()
+    snapshot = _SearchFrameSnapshot(
+        search_id="search_unconfirmed",
+        leg_id=1,
+        image=Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=now),
+        image_ts=now,
+        capture_pose_world=_pose(0.0, 0.0),
+        map_metadata={"relocalization_bound": False},
+        submitted_at=now,
+    )
+    hit = _SearchHit(
+        snapshot=snapshot,
+        bbox=(35.0, 10.0, 65.0, 50.0),
+        detected_at=now,
+        object_yaw_world=0.0,
+        object_yaw_map=None,
+    )
+    context = _ObjectSearchContext(
+        search_id="search_unconfirmed",
+        query="灭火器",
+        hit=hit,
+    )
+    context.hit_event.set()
+
+    outcome = nav._finish_enroute_hit(context)
+
+    assert outcome.status == _EnrouteHitStatus.UNCONFIRMED
+    assert "resuming the original search route" in outcome.message
+    assert recorded == []
+    assert nav._unitree_skill_container.commands == []
+    assert context.cancel_event.is_set() is False
+    assert context.hit is None
+    assert context.hit_event.is_set() is False
+    assert context.terminal_result is None
+
+
+def test_unconfirmed_enroute_hit_resumes_same_target_without_monitoring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="历史灭火器位置",
+        record_type=RecordType.LANDMARK,
+        position=(2.0, 0.0, 0.0),
+    )
+    context = _ObjectSearchContext(search_id="search_resume", query="灭火器")
+    monkeypatch.setattr(
+        nav,
+        "_finish_enroute_hit",
+        lambda _context: _EnrouteHitOutcome(
+            _EnrouteHitStatus.UNCONFIRMED,
+            "not confirmed",
+        ),
+    )
+    resumed: list[dict[str, Any]] = []
+
+    def fake_navigate(_target: SpatialRecord, **kwargs: Any) -> str:
+        resumed.append(kwargs)
+        return "continued to historical target"
+
+    monkeypatch.setattr(nav, "_navigate_to_landmark", fake_navigate)
+
+    result = nav._finish_or_resume_enroute_hit(
+        context,
+        target,
+        arrival_action="point",
+        arrival_distance=0.5,
+        run_arrival_action=True,
+        relocalize_interval=None,
+        enable_visual_drift=False,
+    )
+
+    assert result == "continued to historical target"
+    assert len(resumed) == 1
+    assert resumed[0]["search_context"] is None
+    assert resumed[0]["arrival_action"] == "point"
 
 
 def test_enroute_hit_reprojects_map_capture_pose_with_current_relocalization() -> None:
