@@ -209,7 +209,10 @@ def main() -> None:
         runs = sorted(os.listdir(log_base), reverse=True)
         if runs:
             latest_run = runs[0]
-            log_file = os.path.join(log_base, latest_run, "main.jsonl")
+            # 优先查找与目录同名的 .jsonl, 回退到旧版 main.jsonl
+            named_log = os.path.join(log_base, latest_run, f"{latest_run}.jsonl")
+            legacy_log = os.path.join(log_base, latest_run, "main.jsonl")
+            log_file = named_log if os.path.exists(named_log) else legacy_log
             if os.path.exists(log_file):
                 size = os.path.getsize(log_file)
                 with open(log_file) as f:
@@ -220,7 +223,7 @@ def main() -> None:
                     for line in lines[-3:]:
                         print(f"    {line.strip()[:120]}")
             else:
-                p(f"No main.jsonl found in {latest_run}", ok=False)
+                p(f"No .jsonl log found in {latest_run}", ok=False)
                 # Check what files exist
                 run_dir = os.path.join(log_base, latest_run)
                 files = os.listdir(run_dir) if os.path.isdir(run_dir) else []

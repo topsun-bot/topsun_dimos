@@ -229,7 +229,7 @@ Every `GlobalConfig` field is a CLI flag: `--robot-ip`, `--simulation/--no-simul
 | `dimos topic echo <topic> / send <topic> <expr>` | LCM topic pub/sub |
 | `dimos rerun-bridge` | Launch Rerun visualization standalone |
 
-Log files: `~/.local/state/dimos/logs/<run-id>/main.jsonl`
+Log files: `~/.local/state/dimos/logs/<run-id>/<run-id>.jsonl`
 Run registry: `~/.local/state/dimos/runs/<run-id>.json`
 
 ---

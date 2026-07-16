@@ -52,14 +52,25 @@ def find_default_log_dir() -> Path:
     return Path.home() / ".local" / "state" / "dimos" / "logs"
 
 
+def _resolve_log_file(run_dir: Path) -> Path | None:
+    """查找 run 目录下的日志文件, 优先 <run_id>.jsonl, 回退 main.jsonl."""
+    named = run_dir / f"{run_dir.name}.jsonl"
+    if named.exists():
+        return named
+    legacy = run_dir / "main.jsonl"
+    if legacy.exists():
+        return legacy
+    return None
+
+
 def latest_run(log_root: Path) -> Path | None:
     """返回最近一次 run 目录（按 mtime）。"""
     if not log_root.exists():
         return None
-    runs = [p for p in log_root.iterdir() if p.is_dir() and (p / "main.jsonl").exists()]
+    runs = [p for p in log_root.iterdir() if p.is_dir() and _resolve_log_file(p) is not None]
     if not runs:
         return None
-    return max(runs, key=lambda p: (p / "main.jsonl").stat().st_mtime)
+    return max(runs, key=lambda p: (_resolve_log_file(p) or p).stat().st_mtime)
 
 
 def parse_jsonl(path: Path) -> list[dict]:
@@ -141,7 +152,7 @@ def render_text(summary: dict, run_path: Path) -> str:
 
     lines = [
         f"Run: {run_path.name}",
-        f"日志路径: {run_path / 'main.jsonl'}",
+        f"日志路径: {_resolve_log_file(run_path) or (run_path / 'main.jsonl')}",
         f"总行数: {summary['total_lines']}",
     ]
 
@@ -198,9 +209,9 @@ def main() -> int:
         print(f"找不到 run 目录: {args.logs_dir}", file=sys.stderr)
         return 2
 
-    jsonl = run_path / "main.jsonl"
-    if not jsonl.exists():
-        print(f"找不到日志文件: {jsonl}", file=sys.stderr)
+    jsonl = _resolve_log_file(run_path)
+    if jsonl is None or not jsonl.exists():
+        print(f"找不到日志文件: {run_path}", file=sys.stderr)
         return 2
 
     rows = parse_jsonl(jsonl)

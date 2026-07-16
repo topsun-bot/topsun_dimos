@@ -54,16 +54,17 @@ class TestLogFilePathRouting:
 
     def test_routes_to_run_dir(self, tmp_path):
         log_dir = tmp_path / "run-004"
-        set_run_log_dir(log_dir)
+        set_run_log_dir(log_dir, run_id="run-004")
         path = _get_log_file_path()
-        assert path == log_dir / "main.jsonl"
+        assert path == log_dir / "run-004.jsonl"
 
     def test_routes_via_env_var(self, tmp_path, monkeypatch):
         env_dir = tmp_path / "env-run"
         monkeypatch.setenv("DIMOS_RUN_LOG_DIR", str(env_dir))
+        monkeypatch.setenv("DIMOS_RUN_LOG_FILE_NAME", "env-run.jsonl")
 
         path = logging_config._get_log_file_path()
-        assert path == env_dir / "main.jsonl"
+        assert path == env_dir / "env-run.jsonl"
         assert env_dir.is_dir()
 
     def test_falls_back_to_legacy(self):

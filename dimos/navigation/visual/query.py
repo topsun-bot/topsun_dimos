@@ -70,7 +70,19 @@ def _scale_bbox_to_image(
     bbox: tuple[float, float, float, float],
     image: Image,
 ) -> BBox:
-    """Map model coords to pixel space (0-1 fraction, Qwen 0-1000, or absolute pixels)."""
+    """Map model coords to pixel space (0-1 fraction, Qwen 0-1000, or absolute pixels).
+
+    坐标体系判定规则 (按优先级):
+    1. 全部坐标 <= 1.0: 0-1 归一化分数
+    2. 全部坐标 <= 1000: 按 Qwen 0-1000 归一化坐标处理 (prompt 已明确要求该格式)
+    3. 坐标 > 1000 且落在图像像素范围内: 像素坐标直通
+    4. 其他: 按最大值推断缩放比例
+
+    注意: 曾经存在 "bbox 数值落在图像像素范围内就当像素坐标" 的直通分支,
+    对 1280x720 图像, Qwen 返回的 0-1000 坐标只要 y <= 720 就会被误判成
+    像素坐标, 导致后续角度计算系统性偏小约一半. 因此 <=1000 一律按 0-1000
+    处理; 真正的像素坐标只有在数值超出 1000 时才可能出现 (宽 > 1000 的图).
+    """
     h, w = image.data.shape[:2]
     x1, y1, x2, y2 = bbox
     mx = max(x1, y1, x2, y2)
@@ -81,21 +93,22 @@ def _scale_bbox_to_image(
                      mx, *result, w, h)
         return result
 
-    # Already pixel coordinates when the box fits inside the frame
+    # Qwen VL 0-1000 relative coords — the prompt explicitly requests this format.
+    if min(x1, y1, x2, y2) >= 0.0 and mx <= 1000.0:
+        result = (x1 / 1000.0 * w, y1 / 1000.0 * h, x2 / 1000.0 * w, y2 / 1000.0 * h)
+        logger.debug("_scale_bbox: Qwen0-1000 (%.1f, %.1f, %.1f, %.1f) → (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
+                     x1, y1, x2, y2, *result, w, h)
+        return result
+
+    # Pixel coordinates when values exceed 1000 but still fit inside the frame
     if 0 <= x1 < x2 <= w + 1 and 0 <= y1 < y2 <= h + 1:
         logger.debug("_scale_bbox: pixel pass-through (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
                      x1, y1, x2, y2, w, h)
         return (x1, y1, x2, y2)
 
-    # Qwen VL relative coords: try 0–1000 first, then infer scale from max value
-    if min(x1, y1, x2, y2) >= 0.0 and mx > 1.0:
-        if mx <= 1000.0:
-            result = (x1 / 1000.0 * w, y1 / 1000.0 * h, x2 / 1000.0 * w, y2 / 1000.0 * h)
-            logger.debug("_scale_bbox: Qwen0-1000 (%.1f, %.1f, %.1f, %.1f) → (%.1f, %.1f, %.1f, %.1f) image=%dx%d",
-                         x1, y1, x2, y2, *result, w, h)
-            return result
-        # VLM may use a larger normalised range (e.g. 0-1280, 0-2000).
-        # Infer the scale so the max coordinate maps to the image's larger dimension.
+    # VLM may use a larger normalised range (e.g. 0-1280, 0-2000).
+    # Infer the scale so the max coordinate maps to the image's larger dimension.
+    if min(x1, y1, x2, y2) >= 0.0:
         ref = float(max(w, h))
         scale = mx / ref
         if scale > 0:
@@ -231,7 +244,8 @@ def get_object_bbox_from_image(
         "Return JSON for every matching instance. Prefer either format:\n"
         '1) A single object: {"name": "<中文或英文名>", "bbox": [x1, y1, x2, y2]}\n'
         '2) Multiple objects: [{"label": "...", "bbox_2d": [x1, y1, x2, y2]}, ...]\n'
-        "Use top-left and bottom-right corners in image coordinates. "
+        "Use top-left and bottom-right corners in normalized 0-1000 coordinates "
+        "(0,0 = top-left corner, 1000,1000 = bottom-right corner of the image). "
         "If not found, return null."
     )
 

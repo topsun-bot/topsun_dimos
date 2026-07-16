@@ -171,7 +171,7 @@ dimos log --json | jq .event # raw JSONL, extract events
 dimos log -r 20260306-143022-unitree-go2  # specific run
 ```
 
-All processes (main + workers) write to the same `main.jsonl`. Filter by module:
+All processes (main + workers) write to the same `<run-id>.jsonl`. Filter by module:
 
 ```bash
 dimos log --json | jq 'select(.logger | contains("RerunBridge"))'
@@ -334,5 +334,5 @@ Also available as `dimos rerun-bridge`.
 | Path | Contents |
 |------|----------|
 | `~/.local/state/dimos/runs/<run-id>.json` | Run registry (PID, blueprint, args, ports). Used by `status`/`stop`/`restart`. Cleaned up when processes exit. |
-| `~/.local/state/dimos/logs/<run-id>/main.jsonl` | Structured logs (main process + all workers) |
+| `~/.local/state/dimos/logs/<run-id>/<run-id>.jsonl` | Structured logs (main process + all workers) |
 | `.env` | Local config overrides (`DIMOS_ROBOT_IP=192.168.123.161`) |

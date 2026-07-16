@@ -108,6 +108,8 @@ export DIMOS_VLM_CLOUD_API_KEY="sk-ws-H.EDDREER.p3xq.MEUCIQDdBEwnddKuZEg2EXYSeqp
 export DIMOS_VLM_CLOUD_BASE_URL="https://ws-sy431890c06kqcoz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 export DIMOS_VLM_CLOUD_MODEL_NAME="qwen3-vl-plus"
 export DIMOS_VLM_FALLBACK_COOLDOWN=60
+# 调整真机速度
+export DIMOS_NAV_SPEED=0.5
 
 # unset 代理是为了避免局域网请求(Go2 WebRTC信令 / 本地VLM)走代理导致连接失败
 # 云端VLM走公网, 如果机器没有直连能力需要保留代理, 改用 NO_PROXY 排除局域网IP即可
@@ -151,6 +153,7 @@ dimos tell '去找饮水机'
 ## Step 6: 可选沿途 VLM 寻物（默认关闭）
 
 环境变量必须在启动 blueprint 之前设置：
+
 ```bash
 export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
 ```
@@ -169,7 +172,9 @@ dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-dee
   --disable security-module \
   -o relocalizationmodule.map_file=recording_go2
 ```
+
 找物交互保持不变：
+
 ```bash
 dimos tell '去找饮水机'
 ```
@@ -211,9 +216,15 @@ export DIMOS_SEARCH_CONFIRM_MAX_CHECKS=2
 
 # 最终确认时，目标 bbox 中心允许偏离相机中心的最大角度
 export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=5.0
+
+# 导航线速度 (m/s, 范围 0.2~2.5, 真机默认 0.7); 沿途寻物时建议降速,
+# 减小运动模糊和 image/odom 同步误差, 提高 VLM 检测与拍照位姿的准确性
+export DIMOS_NAV_SPEED=0.5
 ```
 
 建议首轮真机测试只设置总开关，其他参数先使用默认值：
+
 ```bash
 export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
 ```
+

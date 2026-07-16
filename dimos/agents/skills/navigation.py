@@ -142,7 +142,8 @@ _VLM_OBJECT_LIST_PROMPT = (
     "正确示例：电脑、书桌、办公椅、灭火器、电视。\n"
     "Return ONLY a JSON array: "
     '[{"name": "<中文名>", "description": "<简短中文说明>", "bbox": [x1, y1, x2, y2]}]. '
-    "bbox 为物体在画面中的边界框（像素坐标）。跳过墙面、地面、天花板、门。若无物体，返回 []."
+    "bbox 为物体边界框, 使用 0-1000 归一化坐标（左上角 0,0 右下角 1000,1000）。"
+    "跳过墙面、地面、天花板、门。若无物体，返回 []."
 )
 
 # 相机水平视场角 (度), 用于将 bbox 中心转换为物体相对机器人的方位角.
@@ -1186,6 +1187,7 @@ class NavigationSkillContainer(Module):
             1,
             int(_search_float_env("DIMOS_SEARCH_CONFIRM_MAX_CHECKS", 2.0, minimum=1.0)),
         )
+        # 5° 以内的偏移会直接判定为已居中，不再触发小角度微调旋转
         centre_tolerance = _search_float_env(
             "DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG", 5.0, minimum=1.0
         )
@@ -3126,8 +3128,10 @@ class NavigationSkillContainer(Module):
                                 # bbox 中心偏离图像中心的比例 * 水平视场角 = 物体相对光轴的偏角
                                 angle_offset = (cx / w - 0.5) * hfov_rad
                                 robot_yaw = float(obj_rot[2])
-                                # 物体朝向 = 机器人朝向 + bbox 偏角
-                                object_yaw = robot_yaw + angle_offset
+                                # 物体在画面右侧时 angle_offset 为正, ROS yaw 右侧为负方向,
+                                # 所以物体朝向 = 机器人朝向 - bbox 偏角 (与 yaw_offset_from_bbox
+                                # 各调用点的符号约定统一, 此前误用 + 号导致左右镜像)
+                                object_yaw = robot_yaw - angle_offset
                                 obj_rot = (0.0, 0.0, object_yaw)
                                 logger.info(
                                     "VLM bbox bearing: '%s' cx=%.0f/%d "
@@ -3258,8 +3262,11 @@ class NavigationSkillContainer(Module):
         "跳过墙面、地面、天花板。"
     )
 
-    #: 相机水平视场角(度). 子类按实际相机参数覆盖, 用于从 bbox 推算物体方位角偏移.
-    _camera_hfov_deg: float = 90.0
+    #: 相机水平视场角(度). 统一取模块常量 _CAMERA_HFOV_DEG (Go2 默认 69°, 可用
+    #: DIMOS_CAMERA_HFOV_DEG 环境变量覆盖), 子类可按实际相机参数覆盖.
+    #: 此前该值硬编码 90°, 与 _object_yaws_from_bbox 等处使用的 69° 不一致,
+    #: 导致同一 bbox 在沿途寻物/二次确认/视觉伺服中算出不同角度.
+    _camera_hfov_deg: float = _CAMERA_HFOV_DEG
 
     def _parse_simple_vlm_response(
         self,
@@ -3289,8 +3296,11 @@ class NavigationSkillContainer(Module):
             # bbox 水平中心 -> 相对光轴的偏航角
             offset = yaw_offset_from_bbox(x1, y1, x2, y2, self._camera_hfov_deg)
             item["yaw_offset"] = offset
-            # 机器人朝向 + 偏移 = 世界坐标系下的物体朝向
-            item["object_yaw"] = capture_yaw + offset
+            # 物体在画面右侧时 offset 为正, 而 ROS yaw 逆时针为正 (右侧 = 负方向),
+            # 所以世界系物体方位 = 拍照朝向 - 偏移. 与 _object_yaws_from_bbox /
+            # _servo_to_bbox 的符号约定保持一致 (此前误用 + 号导致左右镜像,
+            # 物体偏离画面中心越远, 存储的朝向误差越大, 最大可达 2x offset).
+            item["object_yaw"] = capture_yaw - offset
             result.append(item)
         return result
 

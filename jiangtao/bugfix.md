@@ -282,7 +282,7 @@ GO2Connection ──► LCM /lidar ──┬──► Go2Memory（recording_go2.
 | venv 实际路径 | `gitlab/dimos/.venv`（`.venv` 可能指向此处） |
 | editable 安装源 | `gitlab/dimos`（`__editable__.dimos-*.pth`） |
 | 改 blueprint 后 | 需改 `gitlab/dimos` 下对应文件，或重装 editable 指向 `topsun_dimos` |
-| 日志目录 | `topsun_dimos/logs/<run-id>/main.jsonl`（在 `topsun_dimos` 目录下 `dimos run` 时；见 `resolve_log_dir()`） |
+| 日志目录 | `topsun_dimos/logs/<run-id>/<run-id>.jsonl`（在 `topsun_dimos` 目录下 `dimos run` 时；见 `resolve_log_dir()`） |
 
 ### 常用运维命令
 

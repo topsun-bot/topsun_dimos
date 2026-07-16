@@ -47,7 +47,7 @@ def daemonize(log_dir: Path) -> None:
 
     After this call the *caller* is the daemon grandchild.
     stdin/stdout/stderr are redirected to ``/dev/null`` — all real
-    logging goes through structlog's FileHandler to ``main.jsonl``.
+    logging goes through structlog's FileHandler to ``<run-id>.jsonl``.
     The two intermediate parents call ``os._exit(0)``.
     """
     log_dir.mkdir(parents=True, exist_ok=True)

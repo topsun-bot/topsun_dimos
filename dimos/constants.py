@@ -29,7 +29,7 @@ DIMOS_PROJECT_ROOT = Path(__file__).parent.parent
 
 
 def resolve_log_dir() -> Path:
-    """Base directory for per-run log folders (``<log_dir>/<run-id>/main.jsonl``).
+    """Base directory for per-run log folders (``<log_dir>/<run-id>/<run-id>.jsonl``).
 
     Priority:
     1. ``DIMOS_LOG_DIR`` env var (absolute path)
