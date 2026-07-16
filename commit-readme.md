@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 地标 JPEG 红蓝通道互换 | `d97b514b7` |
 | VLM bbox 0-1000 尺度 / yaw 符号 / HFOV | `5b44f3322` |
 | 按 run_id 命名的日志文件 | `5b44f3322` |
 | Go2 启动 foxglove_config TypeError | `792a4c4d` |
@@ -36,6 +37,40 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### d97b514b7 — fix(nav): encode landmark snapshots via to_opencv to avoid RGB/BGR swap
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-16 21:24:46 +0800 |
+| **分支** | `relocalization-change-local-vlm` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/agents/skills/navigation.py` | `tag_location` / 沿途确认快照改用 `to_opencv()` 再 `imencode` |
+
+**改进点**
+
+1. Go2 相机帧为 RGB，`cv2.imencode` 按 BGR 写 JPEG；直接编码 `.data` 会导致红蓝互换。
+2. 统一走 `Image.to_opencv()`，按 `format` 正确转换后再落盘。
+
+**用法**
+
+```bash
+# 重新标记房间后新 jpg 颜色正常；旧快照需重拍
+dimos tell '标记一下当前是办公室'
+```
+
+**回滚**
+
+```bash
+git checkout d97b514b7^ -- dimos/agents/skills/navigation.py
+```
+
+---
 
 ### 5b44f3322 — fix(nav): correct VLM bbox 0-1000 scale and unify yaw/HFOV
 
