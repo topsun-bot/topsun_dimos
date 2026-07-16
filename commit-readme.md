@@ -21,6 +21,8 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| VLM bbox 0-1000 尺度 / yaw 符号 / HFOV | `5b44f3322` |
+| 按 run_id 命名的日志文件 | `5b44f3322` |
 | Go2 启动 foxglove_config TypeError | `792a4c4d` |
 | relocalize 离线逐步调试脚本 | `58cfbe41` |
 | 日志目录 cwd 解析 / Go2 Rerun 雷达可见 | `88abe28d` |
@@ -34,6 +36,61 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 5b44f3322 — fix(nav): correct VLM bbox 0-1000 scale and unify yaw/HFOV
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-16 21:19:22 +0800 |
+| **分支** | `relocalization-change-local-vlm` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/navigation/visual/query.py` | 修复 `_scale_bbox_to_image` 尺度歧义；prompt 明确要求 0-1000 |
+| `dimos/navigation/visual/test_query.py` | 增加 1280×720 / 左中右 yaw 符号 / HFOV 测试 |
+| `dimos/agents/skills/navigation.py` | 统一 HFOV=69°；`object_yaw = capture - offset`；VLM list prompt 坐标约定 |
+| `dimos/utils/logging_config.py` | 日志文件名改为 `<run_id>.jsonl` |
+| `dimos/core/log_viewer.py` / `dimos/robot/cli/dimos.py` | 按 run_id 解析日志路径 |
+| `dimos/core/test_per_run_logs.py` 等 | 同步日志命名断言与文档 |
+| `jiangtao/run.md` | 补充 `DIMOS_NAV_SPEED` / 居中容差说明 |
+
+**改进点**
+
+1. Qwen 0-1000 bbox 在 1280×720 上不再被误判为像素坐标，视觉伺服/二次确认角度不再系统性偏小。
+2. 存物路径与沿途寻物路径的 yaw 符号、相机 HFOV 统一，避免左右镜像和 69°/90° 混用。
+3. 每次 run 的日志文件与目录同名，便于 `dimos log` / `nav_log_summary` 定位。
+
+**用法**
+
+```bash
+# 导航线速度建议降到 0.5，减小运动模糊
+export DIMOS_NAV_SPEED=0.5
+export DIMOS_CAMERA_HFOV_DEG=69   # 默认值，可覆盖
+
+dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+
+# 日志：~/.local/state/dimos/logs/<run-id>/<run-id>.jsonl
+dimos log -n 50
+```
+
+**回滚**
+
+```bash
+git checkout 5b44f3322^ -- \
+  dimos/navigation/visual/query.py \
+  dimos/navigation/visual/test_query.py \
+  dimos/agents/skills/navigation.py \
+  dimos/utils/logging_config.py \
+  dimos/core/log_viewer.py \
+  dimos/robot/cli/dimos.py
+```
+
+---
 
 ### 792a4c4d — fix(go2): remove invalid foxglove_config from vis_module blueprint
 
