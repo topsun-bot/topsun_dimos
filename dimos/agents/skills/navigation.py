@@ -1112,7 +1112,8 @@ class NavigationSkillContainer(Module):
             existing = self._landmark_memory.find_by_name(context.query)
             snapshot_record_id = existing.record_id if existing is not None else record.record_id
             snapshot_stem = _timestamped_snapshot_stem(snapshot_record_id)
-            encoded, jpg = cv2.imencode(".jpg", confirmation.image.data)
+            # Go2 相机为 RGB, cv2.imencode 按 BGR 编码; 直接用 .data 会红蓝互换
+            encoded, jpg = cv2.imencode(".jpg", confirmation.image.to_opencv())
             if encoded:
                 image_path = self._landmark_memory.save_snapshot(
                     snapshot_stem,
@@ -1556,7 +1557,8 @@ class NavigationSkillContainer(Module):
         # 如果图像保存成功, 额外保存一张 JPEG 快照到地标记忆, 供 UI 展示和快速检索
         if image_saved and self._latest_image is not None and hasattr(self._latest_image, "data"):
             try:
-                _, jpg = cv2.imencode(".jpg", self._latest_image.data)
+                # Go2 相机为 RGB, cv2.imencode 按 BGR 编码; 直接用 .data 会红蓝互换
+                _, jpg = cv2.imencode(".jpg", self._latest_image.to_opencv())
                 snapshot_stem = _timestamped_snapshot_stem(room_rec.record_id)
                 img_path = self._landmark_memory.save_snapshot(snapshot_stem, jpg.tobytes())
                 if img_path:
