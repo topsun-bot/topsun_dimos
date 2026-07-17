@@ -17,20 +17,24 @@ from __future__ import annotations
 import datetime
 import difflib
 import math
+import os
 import time
 
 from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
+from dimos.core.global_config import global_config
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.trigonometry import angle_diff
 
 logger = setup_logger()
 
@@ -206,6 +210,175 @@ class UnitreeSkillContainer(Module):
     @rpc
     def stop(self) -> None:
         super().stop()
+
+    @rpc
+    def rotate_in_place_degrees(self, degrees: float) -> bool:
+        """Rotate in place using cmd_vel with odom/TF closed-loop feedback.
+
+        Unlike ``relative_move``, this bypasses the path planner so in-place
+        spins are not cut short by the stuck detector during ``tag_room``.
+
+        Uses cumulative yaw tracking so that full-circle (360°) rotations are
+        handled correctly — absolute-yaw comparison breaks when ``start_yaw``
+        and ``target_yaw`` are the same physical angle.
+        """
+        degrees = float(degrees)
+        if abs(degrees) < 1e-3:
+            return True
+
+        try:
+            self._navigation.cancel_goal()
+        except Exception:
+            logger.debug("rotate_in_place: cancel_goal failed", exc_info=True)
+
+        tf = self.tf.get("world", "base_link")
+        if tf is None:
+            logger.warning("rotate_in_place: missing world→base_link TF")
+            return False
+
+        start_yaw = tf.to_pose().orientation.to_euler().z
+        target_rad = math.radians(degrees)
+        tolerance_rad = math.radians(float(os.getenv("DIMOS_ROTATE_TOLERANCE_DEG", "5")))
+        timeout_s = float(os.getenv("DIMOS_ROTATE_TIMEOUT_S", "60"))
+        max_omega = float(os.getenv("DIMOS_ROTATE_MAX_RAD_S", "0.8"))
+        k_omega = float(os.getenv("DIMOS_ROTATE_KP", "1.2"))
+        control_hz = 20.0
+        settle_s = 0.35
+        stop_twist = Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0))
+
+        logger.info(
+            "rotate_in_place: start yaw=%.1f° target_delta=%.1f°",
+            math.degrees(start_yaw),
+            degrees,
+        )
+
+        # Cumulative tracking — avoids the 360° bug where absolute yaw wraps.
+        accumulated = 0.0
+        last_yaw = start_yaw
+
+        # 调试: 每秒打印一次状态, 便于排查旋转不转的问题
+        _last_debug_log = time.monotonic()
+
+        deadline = time.monotonic() + timeout_s
+        try:
+            while time.monotonic() < deadline:
+                tf = self.tf.get("world", "base_link")
+                if tf is None:
+                    time.sleep(1.0 / control_hz)
+                    continue
+
+                current_yaw = tf.to_pose().orientation.to_euler().z
+                delta = angle_diff(current_yaw, last_yaw)
+                accumulated += delta
+                last_yaw = current_yaw
+
+                # Signed remaining — positive = counterclockwise still needed
+                remaining = target_rad - accumulated
+                if abs(remaining) <= tolerance_rad:
+                    break
+
+                # Use remaining rather than absolute error for omega computation
+                omega = max(-max_omega, min(max_omega, k_omega * remaining))
+                if global_config.simulation and abs(omega) < 0.8:
+                    omega = 0.8 if remaining >= 0 else -0.8
+
+                # 真机模式下设最小角速度, 避免 omega 太小电机不响应导致卡在死区
+                min_omega = float(os.getenv("DIMOS_ROTATE_MIN_RAD_S", "0.4"))
+                if not global_config.simulation and abs(omega) < min_omega:
+                    omega = min_omega if remaining >= 0 else -min_omega
+
+                self._connection.move(
+                    Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, omega)),
+                    duration=0.0,
+                )
+                time.sleep(1.0 / control_hz)
+
+                # 调试: 每秒打印一次 yaw/accumulated/omega
+                _now = time.monotonic()
+                if _now - _last_debug_log >= 1.0:
+                    logger.info(
+                        "rotate_in_place: DEBUG yaw=%.1f° accumulated=%.1f° remaining=%.1f° omega=%.3f",
+                        math.degrees(current_yaw),
+                        math.degrees(accumulated),
+                        math.degrees(remaining),
+                        omega,
+                    )
+                    _last_debug_log = _now
+            else:
+                logger.warning("rotate_in_place: timed out (commanded %.1f°)", degrees)
+                return False
+
+            self._connection.move(stop_twist, duration=0.0)
+            time.sleep(settle_s)
+
+            achieved_deg = math.degrees(accumulated)
+            ok = abs(accumulated - target_rad) < tolerance_rad * 2.0
+            logger.info(
+                "rotate_in_place: commanded=%.1f° achieved=%.1f° ok=%s",
+                degrees,
+                achieved_deg,
+                ok,
+            )
+            return ok
+        except Exception:
+            logger.exception("rotate_in_place failed")
+            try:
+                self._connection.move(stop_twist, duration=0.0)
+            except Exception:
+                pass
+            return False
+
+    @rpc
+    def rotate_in_place_timed(self, degrees: float) -> bool:
+        """Rotate in place using constant angular velocity (open-loop, no TF feedback).
+
+        Sends a fixed angular velocity for a calibrated duration. Vanishes the
+        TF-yaw accumulation bugs seen on real Go2 hardware where max_delta
+        clamping silently discards rotation and the robot overshoots badly.
+
+        Tune via env vars:
+          DIMOS_ROTATE_SPEED_RAD_S  — angular speed (default 0.5 rad/s)
+          DIMOS_ROTATE_TIMED_FACTOR — calibration multiplier (default 1.0)
+
+        With the defaults a 90° rotation takes ~3.1 s.
+        """
+        degrees = float(degrees)
+        if abs(degrees) < 0.1:
+            return True
+
+        speed = float(os.getenv("DIMOS_ROTATE_SPEED_RAD_S", "0.5"))
+        factor = float(os.getenv("DIMOS_ROTATE_TIMED_FACTOR", "1.0"))
+        control_hz = 20.0
+
+        omega = speed * factor * (1.0 if degrees >= 0 else -1.0)
+        target_rad = math.radians(abs(degrees))
+        duration = target_rad / (speed * factor)
+
+        logger.info(
+            "rotate_in_place_timed: degrees=%.1f° omega=%.3f rad/s duration=%.2fs",
+            degrees,
+            omega,
+            duration,
+        )
+
+        stop = Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0))
+        move = Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, omega))
+
+        deadline = time.monotonic() + duration
+        try:
+            while time.monotonic() < deadline:
+                self._connection.move(move, duration=0.0)
+                time.sleep(1.0 / control_hz)
+            self._connection.move(stop, duration=0.0)
+            logger.info("rotate_in_place_timed: completed %.1f° in %.2fs", degrees, duration)
+            return True
+        except Exception:
+            logger.exception("rotate_in_place_timed failed")
+            try:
+                self._connection.move(stop, duration=0.0)
+            except Exception:
+                pass
+            return False
 
     @skill
     def relative_move(self, forward: float = 0.0, left: float = 0.0, degrees: float = 0.0) -> str:

@@ -5,7 +5,7 @@
 > 关联文档：
 > - 计划与决策：[`jiangtao/plan/plan.md`](../plan/plan.md)
 > - 技术原理：[`jiangtao/plan/dimos-go2-mid360-nav-stack.md`](../plan/dimos-go2-mid360-nav-stack.md)
-> - 评估意见：[`jiangtao/plan/Go2 与 Mid-360 新导航栈最终开发说明.md`](../plan/Go2%20%E4%B8%8E%20Mid-360%20%E6%96%B0%E5%AF%BC%E8%88%AA%E6%A0%88%E6%9C%80%E7%BB%88%E5%BC%80%E5%8F%91%E8%AF%B4%E6%98%8E.md)
+> - 评估意见：[`jiangtao/plan/Go2与Mid-360新导航栈最终开发说明.md`](../plan/Go2%E4%B8%8EMid-360%E6%96%B0%E5%AF%BC%E8%88%AA%E6%A0%88%E6%9C%80%E7%BB%88%E5%BC%80%E5%8F%91%E8%AF%B4%E6%98%8E.md)
 >
 > 受众：值班工程师、现场操作员、新接手部署的同事。
 >

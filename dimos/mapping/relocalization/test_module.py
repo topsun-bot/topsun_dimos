@@ -19,6 +19,8 @@ import pytest
 
 from dimos.mapping.relocalization.module import RelocalizationModule
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
+from dimos.spec.utils import spec_annotation_compliance
+from dimos.types.relocalization_spec import RelocalizationStateSpec
 
 
 def _T_map_world(x: float = 1.0, yaw_deg: float = 0.0) -> np.ndarray:
@@ -43,6 +45,9 @@ def relocalization_module_factory(mocker, tmp_path):
     modules = []
 
     def create(**kwargs):
+        # Persistence-focused tests opt in explicitly because jtlinux keeps it
+        # disabled in production by default.
+        kwargs.setdefault("save_first_transform_json", True)
         module = RelocalizationModule(
             map_file="recording_go2",
             cached_transform_dir=str(tmp_path),
@@ -89,6 +94,33 @@ def test_first_published_transform_is_saved_once(relocalization_module_factory, 
     assert len(list(cache_dir.glob("*-first-tf.json"))) == 1
 
 
+def test_relocalization_state_rpc_requires_a_transform_published_this_run(
+    relocalization_module_factory,
+) -> None:
+    """Spatial memory must never bind records to an unvalidated cached transform."""
+    module = relocalization_module_factory(save_first_transform_json=False)
+
+    assert spec_annotation_compliance(RelocalizationModule, RelocalizationStateSpec)
+    assert module.config.fast_icp_enabled is True
+    assert module.config.fitness_threshold == pytest.approx(0.75)
+    assert module.get_current_map_key() == "recording_go2"
+    assert module.get_current_map_file() == "recording_go2"
+    assert module.get_world_to_map() is None
+    assert module.is_relocalized() is False
+
+    matrix = _T_map_world(1.5)
+    transform = module._tf_from_T_map_world(matrix)
+    module._record_relocalization_success(matrix, transform, 0.82, 52_000, "global")
+
+    assert module.get_world_to_map() is transform
+    assert module.is_relocalized() is False
+
+    module._publish_tf(transform)
+
+    assert module.get_world_to_map() is transform
+    assert module.is_relocalized() is True
+
+
 def test_new_module_loads_json_and_uses_10k_start_threshold(
     relocalization_module_factory,
 ) -> None:
@@ -133,7 +165,7 @@ def test_global_subsequent_mode_bypasses_fast_icp(relocalization_module_factory,
     assert module._required_local_points() == 50_000
 
 
-def test_fast_icp_uses_cached_matrix_and_50_iterations(
+def test_fast_icp_uses_cached_matrix_and_configured_estimator(
     relocalization_module_factory,
     mocker,
 ) -> None:
@@ -163,6 +195,7 @@ def test_fast_icp_uses_cached_matrix_and_50_iterations(
         max_correspondence_distance=0.10,
         max_iteration=80,
         crop_radius=None,
+        icp_estimation="point_to_point",
     )
     assert np.array_equal(module._last_T_map_world, refined)
 
@@ -275,6 +308,7 @@ def test_cached_start_uses_stricter_fitness(
 ) -> None:
     module = relocalization_module_factory(
         save_first_transform_json=False,
+        cached_start_min_fitness=0.85,
         fast_icp_min_fitness=0.75,
         subsequent_relocalization_mode="fast_icp",
     )

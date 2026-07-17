@@ -57,19 +57,39 @@ class SpeakSkill(Module):
     _connection: GO2ConnectionSpec | None = None
     _openai_client: OpenAI | None = None
     _audio_cache: dict[str, str] = {}  # text -> robot audio uuid
+    _tts_init_attempted: bool = False
 
     @rpc
     def start(self) -> None:
         super().start()
-        has_robot = self._connection is not None
-        if has_robot:
+        # TTS is lazy — never block blueprint startup on OPENAI_API_KEY.
+        if self._connection is not None:
             logger.info("SpeakSkill: GO2 connection detected, audio routes to robot speaker")
-            self._openai_client = OpenAI()
-        else:
-            logger.info("SpeakSkill: No GO2 connection, audio routes to local speaker")
-            self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX)
+
+    def _ensure_tts(self) -> bool:
+        if self._tts_node is not None:
+            return True
+        if self._tts_init_attempted:
+            return False
+        self._tts_init_attempted = True
+
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        if not api_key:
+            logger.warning(
+                "SpeakSkill: OPENAI_API_KEY not set — speak() disabled "
+                "(export OPENAI_API_KEY to enable TTS)"
+            )
+            return False
+        try:
+            self._tts_node = OpenAITTSNode(speed=1.2, voice=Voice.ONYX, api_key=api_key)
             self._audio_output = SounddeviceAudioOutput(sample_rate=24000)
             self._audio_output.consume_audio(self._tts_node.emit_audio())
+        except Exception:
+            logger.exception("SpeakSkill: failed to initialize TTS")
+            self._tts_node = None
+            self._audio_output = None
+            return False
+        return True
 
     @rpc
     def stop(self) -> None:
@@ -83,6 +103,7 @@ class SpeakSkill(Module):
         if self._audio_output:
             self._audio_output.stop()
             self._audio_output = None
+        self._tts_init_attempted = False
         super().stop()
 
     @skill
@@ -100,8 +121,8 @@ class SpeakSkill(Module):
         if self._connection is not None:
             return self._speak_via_robot(text)
 
-        if self._tts_node is None:
-            return "Error: TTS not initialized"
+        if not self._ensure_tts() or self._tts_node is None:
+            return "TTS not available (OPENAI_API_KEY not set)"
 
         if not blocking:
             thread = threading.Thread(
@@ -167,7 +188,10 @@ class SpeakSkill(Module):
                 self._openai_client = OpenAI()
 
             response = self._openai_client.audio.speech.create(
-                model="tts-1", voice="onyx", input=text, speed=1.2,
+                model="tts-1",
+                voice="onyx",
+                input=text,
+                speed=1.2,
                 response_format="mp3",
             )
 
@@ -216,7 +240,10 @@ class SpeakSkill(Module):
                     self._openai_client = OpenAI()
 
                 response = self._openai_client.audio.speech.create(
-                    model="tts-1", voice="onyx", input=text, speed=1.2,
+                    model="tts-1",
+                    voice="onyx",
+                    input=text,
+                    speed=1.2,
                     response_format="mp3",
                 )
 
@@ -272,17 +299,20 @@ class SpeakSkill(Module):
         chunks = [b64[i : i + chunk_size] for i in range(0, len(b64), chunk_size)]
 
         for i, chunk in enumerate(chunks, 1):
-            self._audio_hub_request(_AUDIO_API["UPLOAD_AUDIO_FILE"], {
-                "file_name": filename,
-                "file_type": "wav",
-                "file_size": len(wav_data),
-                "current_block_index": i,
-                "total_block_number": len(chunks),
-                "block_content": chunk,
-                "current_block_size": len(chunk),
-                "file_md5": file_md5,
-                "create_time": int(time.time() * 1000),
-            })
+            self._audio_hub_request(
+                _AUDIO_API["UPLOAD_AUDIO_FILE"],
+                {
+                    "file_name": filename,
+                    "file_type": "wav",
+                    "file_size": len(wav_data),
+                    "current_block_index": i,
+                    "total_block_number": len(chunks),
+                    "block_content": chunk,
+                    "current_block_size": len(chunk),
+                    "file_md5": file_md5,
+                    "create_time": int(time.time() * 1000),
+                },
+            )
 
         resp = self._audio_hub_request(_AUDIO_API["GET_AUDIO_LIST"], {})
         if resp and "data" in resp:
@@ -311,7 +341,7 @@ class SpeakSkill(Module):
     def _speak_blocking(self, text: str) -> str:
         with self._audio_lock:
             if self._tts_node is None:
-                return "Error: TTS not initialized"
+                return "TTS not available (OPENAI_API_KEY not set)"
 
             text_subject: Subject[str] = Subject()
             audio_complete = threading.Event()

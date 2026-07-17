@@ -35,24 +35,35 @@ logging.getLogger("websockets.server").setLevel(logging.ERROR)
 logging.getLogger("asyncio").setLevel(logging.ERROR)
 
 _LOG_FILE_PATH = None
-
 _RUN_LOG_DIR: Path | None = None
+_RUN_LOG_FILE_NAME: str = "main.jsonl"
 
 
-def set_run_log_dir(log_dir: str | Path) -> None:
+def set_run_log_dir(log_dir: str | Path, run_id: str | None = None) -> None:
     """Set per-run log directory. Call BEFORE build(blueprint).
 
     Updates the global path AND migrates any existing FileHandlers on
     stdlib loggers so that logs written after this call go to the new
     directory.  Workers spawned after this call inherit the env var.
+
+    Args:
+        log_dir: 每次运行的日志目录 (如 .../logs/20260716-171300-unitree-go2).
+        run_id:  运行 ID, 用作日志文件名 (如 20260716-171300-unitree-go2).
+                 传入时文件名为 ``<run_id>.jsonl``, 与目录名保持一致;
+                 不传入时回退到 ``main.jsonl`` 兼容旧逻辑.
     """
-    global _RUN_LOG_DIR, _LOG_FILE_PATH
+    global _RUN_LOG_DIR, _LOG_FILE_PATH, _RUN_LOG_FILE_NAME
     log_dir = Path(log_dir)
     _RUN_LOG_DIR = log_dir
     _RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    new_path = log_dir / "main.jsonl"
+    _RUN_LOG_FILE_NAME = f"{run_id}.jsonl" if run_id else "main.jsonl"
+    new_path = log_dir / _RUN_LOG_FILE_NAME
     _LOG_FILE_PATH = new_path
     os.environ["DIMOS_RUN_LOG_DIR"] = str(log_dir)
+    if run_id:
+        os.environ["DIMOS_RUN_LOG_FILE_NAME"] = _RUN_LOG_FILE_NAME
+    else:
+        os.environ.pop("DIMOS_RUN_LOG_FILE_NAME", None)
 
     # Migrate existing FileHandlers to the new path
     for logger_name in list(logging.Logger.manager.loggerDict):
@@ -90,12 +101,13 @@ def _get_log_directory() -> Path:
 
 def _get_log_file_path() -> Path:
     if _RUN_LOG_DIR is not None:
-        return _RUN_LOG_DIR / "main.jsonl"
+        return _RUN_LOG_DIR / _RUN_LOG_FILE_NAME
     env_log_dir = os.environ.get("DIMOS_RUN_LOG_DIR")
     if env_log_dir:
         p = Path(env_log_dir)
         p.mkdir(parents=True, exist_ok=True)
-        return p / "main.jsonl"
+        file_name = os.environ.get("DIMOS_RUN_LOG_FILE_NAME", "main.jsonl")
+        return p / file_name
     log_dir = _get_log_directory()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     pid = os.getpid()

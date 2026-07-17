@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Go2 relocalization-aware spatial memory using the DeepSeek V4 Pro agent.
+
+Usage::
+
+    export OPENAI_API_KEY="sk-..."
+    export OPENAI_BASE_URL="https://api.deepseek.com"
+    dimos run unitree-go2-relocalization-memory-agentic-deepseek \\
+      -o relocalizationmodule.map_file=<premap>
+"""
+
+from dimos.agents.mcp.mcp_client import McpClient
+from dimos.agents.mcp.mcp_server import McpServer
+from dimos.core.coordination.blueprints import autoconnect
+from dimos.robot.unitree.go2.blueprints.agentic._common_agentic import _common_agentic
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial import (
+    unitree_go2_relocalization_memory,
+)
+
+unitree_go2_relocalization_memory_agentic_deepseek = autoconnect(
+    unitree_go2_relocalization_memory,
+    McpServer.blueprint(),
+    McpClient.blueprint(
+        model="deepseek-v4-pro",
+        model_provider="openai",
+        model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
+        supports_vision=False,
+    ),
+    _common_agentic,
+)

@@ -22,9 +22,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.global_config import GlobalConfig
+from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.robot.unitree import connection as conn_mod
 from dimos.robot.unitree.connection import UnitreeWebRTCConnection
 
@@ -69,6 +72,31 @@ def test_connect_success_completes_setup(built_connection: Any) -> None:
 
     driver.connect.assert_awaited_once()
     driver.datachannel.pub_sub.publish_request_new.assert_awaited_once()
+
+
+def test_move_uses_wireless_controller_joystick_backend(
+    built_connection: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Navigation velocity must stay on jtlinux's simulated joystick channel."""
+    conn, driver = built_connection
+    timer = MagicMock()
+    monkeypatch.setattr(conn_mod.threading, "Timer", MagicMock(return_value=timer))
+    twist = Twist(
+        linear=Vector3(0.4, -0.2, 0.0),
+        angular=Vector3(0.0, 0.0, 0.3),
+    )
+
+    assert conn.move(twist) is True
+
+    driver.datachannel.pub_sub.publish_without_callback.assert_called_once_with(
+        RTC_TOPIC["WIRELESS_CONTROLLER"],
+        data={"lx": 0.2, "ly": 0.4, "rx": -0.3, "ry": 0},
+    )
+    # SPORT_MOD was used once during connect for the motion-mode switch. A move
+    # must not add another sport RPC request.
+    driver.datachannel.pub_sub.publish_request_new.assert_awaited_once()
+    timer.start.assert_called_once_with()
 
 
 @pytest.fixture

@@ -113,3 +113,144 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 | 9   | yaw       | 偏航角 (rad)  |
 | 10  | pitch     | 俯仰角 (rad)  |
 | 11  | roll      | 翻滚角 (rad)  |
+
+
+---
+
+## Step 4: 空间找物（单次会话, 无 premap）
+
+环境变量：
+
+```bash
+export UNITREE_AES_128_KEY='0a7d97828984ec332984571244318f30'
+export OPENAI_API_KEY="sk-fb774f182a3c4c28aaa8b6878ee32b60"
+export OPENAI_BASE_URL="https://api.deepseek.com"
+export DIMOS_VLM_API_KEY="EMPTY"
+export DIMOS_VLM_BASE_URL="http://10.10.153.172:8080/v1"
+export DIMOS_VLM_MODEL_NAME="/Users/dijia/models/Qwen3-VL-8B-4bit"
+export DIMOS_ROTATION_STEP_DEG=60
+export DIMOS_ROOM_SCAN_ROTATIONS=6
+
+# 云端 VLM fallback (本地不可用时自动切换)
+export DIMOS_VLM_CLOUD_API_KEY="sk-ws-H.EDDREER.p3xq.MEUCIQDdBEwnddKuZEg2EXYSeqpWRBGlATod78ixRpzjHrew8wIgH0sJMDzpuZJdyORYcnsOQLDuP5gpF5ZDqfnW_WDpbto"
+export DIMOS_VLM_CLOUD_BASE_URL="https://ws-sy431890c06kqcoz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+export DIMOS_VLM_CLOUD_MODEL_NAME="qwen3-vl-plus"
+export DIMOS_VLM_FALLBACK_COOLDOWN=60
+# 调整真机速度
+export DIMOS_NAV_SPEED=0.5
+
+# unset 代理是为了避免局域网请求(Go2 WebRTC信令 / 本地VLM)走代理导致连接失败
+# 云端VLM走公网, 如果机器没有直连能力需要保留代理, 改用 NO_PROXY 排除局域网IP即可
+unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy
+```
+
+真机：
+
+```bash
+dimos --robot-ip 10.206.176.64 run unitree-go2-agentic-deepseek --disable security-module
+```
+
+找物交互：
+
+```bash
+dimos tell '标记一下当前是办公室'
+dimos tell '去找饮水机'
+```
+
+## Step 5: 重定位空间找物（基于 premap, 跨 session 复用空间记忆）
+
+前置：已完成 Step 1 ~ Step 2, 生成了 `recording_go2.pc2.lcm`。
+
+环境变量同 Step 4。
+
+真机：
+
+```bash
+dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+找物交互：
+
+```bash
+dimos tell '标记一下当前是办公室'
+dimos tell '去找饮水机'
+```
+
+## Step 6: 可选沿途 VLM 寻物（默认关闭）
+
+环境变量必须在启动 blueprint 之前设置：
+
+```bash
+export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
+```
+```bash
+dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+也可以只对单次启动启用，不修改当前 shell 的其他运行：
+
+```bash
+DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true \
+dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+找物交互保持不变：
+
+```bash
+dimos tell '去找饮水机'
+```
+
+### 沿途寻物调参（可选）
+
+不设置时使用右侧默认值：
+
+```bash
+# 两次沿途 VLM 请求的最短间隔
+export DIMOS_SEARCH_VLM_INTERVAL_S=0.8
+
+# 离开每段导航起点至少 0.20m 后才开始检测，避免检测任务起始位置
+export DIMOS_SEARCH_START_DISPLACEMENT_M=0.20
+
+# 图片时间戳与 odom 时间戳的最大允许误差
+export DIMOS_SEARCH_POSE_SYNC_TOLERANCE_S=0.20
+
+# VLM 结果返回时，图片允许的最大年龄
+export DIMOS_SEARCH_MAX_RESULT_AGE_S=8.0
+
+# 已走出拍照位置超过 0.40m 时，重新规划返回该观察位置
+export DIMOS_SEARCH_REWIND_THRESHOLD_M=0.40
+
+# 保留的 odom 历史时长，需要覆盖可能的 VLM 延迟
+export DIMOS_SEARCH_ODOM_BUFFER_S=15.0
+
+# 命中后等待旧导航 goal 释放控制权的最长时间
+export DIMOS_SEARCH_CANCEL_WAIT_S=2.0
+
+# 返回图片拍摄观察位置的导航超时
+export DIMOS_SEARCH_REWIND_TIMEOUT_S=120.0
+
+# 回到观察位置后等待新相机帧的最长时间
+export DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S=3.0
+
+# 二次确认最多检查 2 帧；首帧偏离中心时会转向并用下一帧复核
+export DIMOS_SEARCH_CONFIRM_MAX_CHECKS=2
+
+# 最终确认时，目标 bbox 中心允许偏离相机中心的最大角度
+export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=5.0
+
+# 导航线速度 (m/s, 范围 0.2~2.5, 真机默认 0.7); 沿途寻物时建议降速,
+# 减小运动模糊和 image/odom 同步误差, 提高 VLM 检测与拍照位姿的准确性
+export DIMOS_NAV_SPEED=0.5
+```
+
+建议首轮真机测试只设置总开关，其他参数先使用默认值：
+
+```bash
+export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
+```

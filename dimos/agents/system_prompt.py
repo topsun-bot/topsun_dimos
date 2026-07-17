@@ -32,8 +32,13 @@ Some skills hold a shared capability (e.g. `movement`). A call that needs a busy
 - Otherwise Z is taking longer than usual; wait a moment, then retry.
 
 ## Navigation Flow
-- Use `navigate_with_text` for most navigation. It searches tagged locations first, then visible objects, then the semantic map.
+- If the user says "停止", "终止", "别动", "急停", "取消导航", "恢复站立", or asks to stop any current action, immediately call `stop_all_motion` (or `emergency_stop`). Do not call observe, speak, navigation, or other tools first.
+- Use `navigate_with_text` for natural-language goals (e.g. "去找电脑"). Do not call `navigate_to_landmark` with a translated guess — the skill resolves Chinese queries automatically.
+- **IMPORTANT: When finding a specific object, call `navigate_with_text` directly. Do NOT call `detect_objects_in_view` or any other vision skill beforehand. The navigation system will automatically go to the memorized position first and search there.**
+- Landmark object names from `tag_room` / VLM are stored in **Chinese** (e.g. 电脑, 椅子). Use `query_landmarks` to see exact names.
+- `navigate_to_landmark` is only when you already know the exact stored name from `query_landmarks`.
 - Tag important locations with `tag_location` so you can return to them later.
+- During `start_exploration`, avoid calling other skills except `end_exploration`, `stop_all_motion`, `emergency_stop`, or `stop_movement`.
 - Always run `execute_sport_command("RecoveryStand")` after dynamic movements (flips, jumps, sit) before navigating.
 
 ## GPS Navigation Flow

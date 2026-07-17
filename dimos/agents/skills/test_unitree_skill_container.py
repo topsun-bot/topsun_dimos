@@ -20,6 +20,7 @@ from langchain_core.messages import HumanMessage
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.navigation.base import NavigationState
 from dimos.robot.unitree.unitree_skill_container import _UNITREE_COMMANDS, UnitreeSkillContainer
 
@@ -43,6 +44,10 @@ class StubNavigation(Module):
 
 
 class StubGO2Connection(Module):
+    @rpc
+    def move(self, twist: Twist, duration: float = 0.0) -> bool:
+        return True
+
     @rpc
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
         return {}

@@ -341,9 +341,10 @@ def run(
     # cleanup can identify them via os.environ after main dies.
     os.environ[DIMOS_RUN_ID_ENV] = run_id
 
-    # Route structured logs (main.jsonl) to the per-run directory.
-    # Workers inherit DIMOS_RUN_LOG_DIR env var via forkserver.
-    set_run_log_dir(log_dir)
+    # Route structured logs to the per-run directory.
+    # 文件名与 run_id 一致, 如 20260716-171300-unitree-go2.jsonl
+    # Workers inherit DIMOS_RUN_LOG_DIR / DIMOS_RUN_LOG_FILE_NAME env var via forkserver.
+    set_run_log_dir(log_dir, run_id=run_id)
 
     blueprint = autoconnect(*map(get_by_name_or_exit, robot_types))
 
@@ -637,6 +638,27 @@ def agent_send_cmd(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
     typer.echo(text)
+
+
+@main.command("tell")
+def tell_cmd(
+    message: str = typer.Argument(..., help="Natural language message to the robot"),
+    timeout: float = typer.Option(60.0, "--timeout", "-t", help="Max wait time in seconds"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Only print agent text responses"),
+) -> None:
+    """Send a natural language command and wait for the agent's response.
+
+    This publishes your message on the /human_input LCM topic, then subscribes
+    to /agent and /agent_idle to stream the response back synchronously.
+
+    Works with any running blueprint that includes an agent module
+    (e.g. unitree-go2-agentic, unitree-go2-spatial-agentic).
+    """
+    from dimos.robot.cli.tell import tell_robot
+
+    result = tell_robot(message, timeout=timeout, quiet=quiet, write=typer.echo)
+    if result < 0:
+        raise typer.Exit(1)
 
 
 @main.command()

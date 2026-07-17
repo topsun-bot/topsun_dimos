@@ -105,5 +105,18 @@ def follow_log(path: Path, stop: Callable[[], bool] | None = None) -> Iterator[s
 
 
 def _log_path_if_exists(log_dir: str) -> Path | None:
-    path = Path(log_dir) / "main.jsonl"
-    return path if path.exists() else None
+    """查找日志文件, 优先 <run_id>.jsonl, 回退 main.jsonl.
+
+    新版日志文件名与目录名 (run_id) 一致, 如目录为
+    ``20260716-171300-unitree-go2`` 则文件名为
+    ``20260716-171300-unitree-go2.jsonl``.
+    旧版日志固定为 ``main.jsonl``, 保留兼容.
+    """
+    d = Path(log_dir)
+    # 优先: 与目录同名的 .jsonl 文件
+    named = d / f"{d.name}.jsonl"
+    if named.exists():
+        return named
+    # 回退: 旧版 main.jsonl
+    legacy = d / "main.jsonl"
+    return legacy if legacy.exists() else None

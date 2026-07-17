@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Callable
+import os
 from queue import Empty, Queue
 from threading import Event, RLock, Thread
 import time
@@ -44,8 +45,11 @@ logger = setup_logger()
 class McpClientConfig(ModuleConfig):
     system_prompt: str | None = SYSTEM_PROMPT
     model: str = "gpt-4o"
+    model_provider: str | None = None
+    model_kwargs: dict[str, Any] | None = None
     model_fixture: str | None = None
     mcp_server_url: str = "http://localhost:9990/mcp"
+    supports_vision: bool = True  # Set False for text-only models (e.g. DeepSeek)
 
 
 class McpClient(Module):
@@ -78,9 +82,25 @@ class McpClient(Module):
             daemon=True,
         )
         self._stop_event = Event()
-        self._http_client = httpx.Client(timeout=120.0)
+        self._http_client = self._make_http_client()
         self._seq_ids = SequentialIds()
         self._tool_stream_cleanup = None
+
+    @staticmethod
+    def _make_http_client() -> httpx.Client:
+        """Create an httpx client, ignoring unsupported proxy schemes like socks://."""
+        unsupported = {}
+        for key in ("all_proxy", "ALL_PROXY"):
+            val = os.environ.get(key, "")
+            if val.startswith("socks://"):
+                unsupported[key] = val
+        for key in unsupported:
+            del os.environ[key]
+        try:
+            return httpx.Client(timeout=300.0)
+        finally:
+            for key, val in unsupported.items():
+                os.environ[key] = val
 
     def __reduce__(self) -> Any:
         return (self.__class__, (), {})
@@ -212,11 +232,24 @@ class McpClient(Module):
     def on_system_modules(self, _modules: list[RPCClient]) -> None:
         tools = self._fetch_tools()
 
+        # Patch langchain_openai to keep empty string content when tool_calls
+        # are present — DeepSeek rejects ``null`` content (500 Internal Server
+        # Error: 'NoneType' object is not iterable).
+        self._patch_openai_message_converter()
+
         model: str | Any = self.config.model
         if self.config.model_fixture is not None:
             from dimos.agents.testing import MockModel
 
             model = MockModel(json_path=self.config.model_fixture)
+        elif self.config.model_provider is not None:
+            from langchain.chat_models import init_chat_model
+
+            model = init_chat_model(
+                self.config.model,
+                model_provider=self.config.model_provider,
+                **(self.config.model_kwargs or {}),
+            )
 
         with self._lock:
             self._state_graph = create_agent(
@@ -313,20 +346,62 @@ class McpClient(Module):
             with self._lock:
                 if not self._state_graph:
                     raise ValueError("No state graph initialized")
-                self._process_message(self._state_graph, message)
+                try:
+                    self._process_message(self._state_graph, message)
+                except Exception as e:
+                    logger.exception("McpClient-thread error processing message; skipping")
+                    # Roll back the message appended in _process_message before stream failed
+                    if self._history and self._history[-1] is message:
+                        self._history.pop()
+                    self.agent.publish(
+                        HumanMessage(
+                            content=f"An error occurred while processing: {type(e).__name__}: {e}"
+                        )
+                    )
+
+    @staticmethod
+    def _patch_openai_message_converter() -> None:
+        """Patch langchain_openai so tool_calls messages keep ``""`` content (not ``null``).
+
+        langchain_openai's ``_convert_message_to_dict`` explicitly converts empty
+        string content to ``None`` when tool_calls are present, to match OpenAI's
+        API spec.  DeepSeek rejects ``null`` content with a 500 —
+        ``'NoneType' object is not iterable`` — so we post-process the dict to
+        keep ``""``.
+        """
+        import langchain_openai.chat_models.base as base_module
+
+        _original = base_module._convert_message_to_dict
+
+        def _patched(message: BaseMessage, api: str = "chat/completions") -> dict[str, Any]:  # type: ignore[no-untyped-def]
+            result = _original(message, api)
+            if result.get("tool_calls") or result.get("function_call"):
+                if result.get("content") is None:
+                    result["content"] = ""
+            return result
+
+        base_module._convert_message_to_dict = _patched
+
+    @staticmethod
+    def _sanitize_message(msg: BaseMessage) -> BaseMessage:
+        """Ensure ``content`` is never ``None`` (DeepSeek rejects null content)."""
+        if hasattr(msg, "content") and msg.content is None:
+            msg.content = ""
+        return msg
 
     def _process_message(
         self, state_graph: CompiledStateGraph[Any, Any, Any, Any], message: BaseMessage
     ) -> None:
         self.agent_idle.publish(False)
-        self._history.append(message)
+        self._history.append(self._sanitize_message(message))
         pretty_print_langchain_message(message)
         self.agent.publish(message)
 
+        self._history = [self._sanitize_message(m) for m in self._history]
         for update in state_graph.stream({"messages": self._history}, stream_mode="updates"):
             for node_output in update.values():
                 for msg in node_output.get("messages", []):
-                    self._history.append(msg)
+                    self._history.append(self._sanitize_message(msg))
                     pretty_print_langchain_message(msg)
                     self.agent.publish(msg)
 
@@ -337,6 +412,9 @@ class McpClient(Module):
 def _append_image_to_history(
     mcp_client: McpClient, func_name: str, uuid_: str, result: Any
 ) -> None:
+    if not mcp_client.config.supports_vision:
+        # Text-only models can't process images — skip the artefact message.
+        return
     mcp_client.add_message(
         HumanMessage(
             content=[

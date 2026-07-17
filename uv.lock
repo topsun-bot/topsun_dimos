@@ -1448,6 +1448,26 @@ wheels = [
 ]
 
 [[package]]
+name = "dashscope"
+version = "1.26.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "requests" },
+    { name = "rich" },
+    { name = "typer" },
+    { name = "websocket-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/58/57c7bbdbf6ecb1b17e627bb0186cd94aa7d5a86be7ec5e5c2981c55ed181/dashscope-1.26.3.tar.gz", hash = "sha256:ca11b2eb9da9bfb0fa15d55da9277e65daadb996925f0e2241106dab16415b4a", size = 1422906, upload-time = "2026-07-10T02:32:55.454Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/7c/b8d04426576f6e484d1d5392a57d11a3fa85cae6c11c491ae2cb85386575/dashscope-1.26.3-py3-none-any.whl", hash = "sha256:da9804f694346018a6f21eef753e4dc3f7854cb1df8d4120056ee8617540f630", size = 1525734, upload-time = "2026-07-10T02:32:53.337Z" },
+]
+
+[[package]]
 name = "dataclasses-json"
 version = "0.6.7"
 source = { registry = "https://pypi.org/simple" }
@@ -1564,6 +1584,7 @@ dependencies = [
 
 [package.optional-dependencies]
 agents = [
+    { name = "dashscope" },
     { name = "faster-whisper" },
     { name = "langchain" },
     { name = "langchain-core" },
@@ -1580,6 +1601,7 @@ all = [
     { name = "chromadb" },
     { name = "coacd" },
     { name = "cupy-cuda12x", marker = "platform_machine == 'x86_64'" },
+    { name = "dashscope" },
     { name = "dimos-viewer" },
     { name = "drake", version = "1.45.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'aarch64' and sys_platform == 'darwin'" },
     { name = "drake", version = "1.49.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'aarch64' and sys_platform != 'darwin'" },
@@ -1647,6 +1669,7 @@ apriltag = [
 ]
 base = [
     { name = "chromadb" },
+    { name = "dashscope" },
     { name = "dimos-viewer" },
     { name = "einops" },
     { name = "fastapi" },
@@ -1749,6 +1772,7 @@ sim = [
 ]
 unitree = [
     { name = "chromadb" },
+    { name = "dashscope" },
     { name = "dimos-viewer" },
     { name = "einops" },
     { name = "fastapi" },
@@ -1781,6 +1805,7 @@ unitree = [
 unitree-dds = [
     { name = "chromadb" },
     { name = "cyclonedds" },
+    { name = "dashscope" },
     { name = "dimos-viewer" },
     { name = "einops" },
     { name = "fastapi" },
@@ -1905,6 +1930,7 @@ tests = [
     { name = "googlemaps" },
     { name = "hydra-core" },
     { name = "langchain" },
+    { name = "langchain-chroma" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "lap" },
@@ -1951,6 +1977,7 @@ tests-self-hosted = [
     { name = "googlemaps" },
     { name = "hydra-core" },
     { name = "langchain" },
+    { name = "langchain-chroma" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "lap" },
@@ -2001,6 +2028,7 @@ requires-dist = [
     { name = "cupy-cuda12x", marker = "platform_machine == 'x86_64' and extra == 'cuda'", specifier = "==13.6.0" },
     { name = "cyclonedds", marker = "extra == 'dds'", specifier = ">=0.10.5" },
     { name = "cyclonedds", marker = "extra == 'unitree-dds'", specifier = ">=0.10.5" },
+    { name = "dashscope", marker = "extra == 'agents'", specifier = ">=1.25.18" },
     { name = "dimos", extras = ["agents", "apriltag", "base", "cpu", "cuda", "drone", "manipulation", "misc", "perception", "scene", "sim", "unitree", "visualization", "web", "webrtc"], marker = "extra == 'all'" },
     { name = "dimos", extras = ["agents", "web", "perception", "visualization"], marker = "extra == 'base'" },
     { name = "dimos", extras = ["base", "mapping"], marker = "extra == 'unitree'" },
@@ -2181,6 +2209,7 @@ tests = [
     { name = "googlemaps", specifier = ">=4.10.0" },
     { name = "hydra-core", specifier = ">=1.3.0" },
     { name = "langchain", specifier = "==1.2.3" },
+    { name = "langchain-chroma", specifier = ">=1,<2" },
     { name = "langchain-core", specifier = "==1.3.3" },
     { name = "langchain-openai", specifier = ">=1,<2" },
     { name = "lap", specifier = ">=0.5.12" },
@@ -2229,6 +2258,7 @@ tests-self-hosted = [
     { name = "googlemaps", specifier = ">=4.10.0" },
     { name = "hydra-core", specifier = ">=1.3.0" },
     { name = "langchain", specifier = "==1.2.3" },
+    { name = "langchain-chroma", specifier = ">=1,<2" },
     { name = "langchain-core", specifier = "==1.3.3" },
     { name = "langchain-openai", specifier = ">=1,<2" },
     { name = "lap", specifier = ">=0.5.12" },
@@ -3234,6 +3264,15 @@ wheels = [
 ]
 
 [[package]]
+name = "httpx-sse"
+version = "0.4.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/4c/751061ffa58615a32c31b2d82e8482be8dd4a89154f003147acee90f2be9/httpx_sse-0.4.3.tar.gz", hash = "sha256:9b1ed0127459a66014aec3c56bebd93da3c1bc8bb6618c8082039a44889a755d", size = 15943, upload-time = "2025-10-10T21:48:22.271Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/fd/6668e5aec43ab844de6fc74927e155a3b37bf40d7c3790e49fc0406b6578/httpx_sse-0.4.3-py3-none-any.whl", hash = "sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc", size = 8960, upload-time = "2025-10-10T21:48:21.158Z" },
+]
+
+[[package]]
 name = "huggingface-hub"
 version = "0.36.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3892,6 +3931,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5f/78/9565319259d92818d96f30d55507ee1072fbf5c008b95a6acecf5e47c4d6/langchain-1.2.3.tar.gz", hash = "sha256:9d6171f9c3c760ca3c7c2cf8518e6f8625380962c488b41e35ebff1f1d611077", size = 548296, upload-time = "2026-01-08T20:26:30.149Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/de/e5/9b4f58533f8ce3013b1a993289eb11e8607d9c9d9d14699b29c6ac3b4132/langchain-1.2.3-py3-none-any.whl", hash = "sha256:5cdc7c80f672962b030c4b0d16d0d8f26d849c0ada63a4b8653a20d7505512ae", size = 106428, upload-time = "2026-01-08T20:26:29.162Z" },
+]
+
+[[package]]
+name = "langchain-chroma"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "chromadb" },
+    { name = "langchain-core" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/0e/54896830b7331c90788cf96b2c37858977c199da9ecdaf85cf11eb6e6bc1/langchain_chroma-1.1.0.tar.gz", hash = "sha256:8069685e7848041e998d16c8a4964256b031fd20551bf59429173415bc2adc12", size = 220382, upload-time = "2025-12-12T16:23:01.399Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/35/2a6d1191acaad043647e28313b0ecd161d61f09d8be37d1996a90d752c13/langchain_chroma-1.1.0-py3-none-any.whl", hash = "sha256:ff65e4a2ccefb0fb9fde2ff38705022ace402f979d557f018f6e623f7288f0fc", size = 12981, upload-time = "2025-12-12T16:23:00.196Z" },
 ]
 
 [[package]]

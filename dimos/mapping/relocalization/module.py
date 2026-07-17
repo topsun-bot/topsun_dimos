@@ -88,7 +88,7 @@ class Config(ModuleConfig):
     # 是否把加载的原始 premap 也发布出去，主要用于调试/可视化。
     publish_loaded_map: bool = False
     # relocalize() 返回的匹配质量阈值；低于该值说明候选配准不可信。
-    fitness_threshold: float = 0.45
+    fitness_threshold: float = 0.75
     # merge 时是否用列雕刻：local 当前观测覆盖 premap 的同 XY 列旧点。
     use_carving: bool = True
     # 启动时是否读取上一次独立运行保存的 latest.json。
@@ -241,6 +241,28 @@ class RelocalizationModule(Module):
     def _map_cache_key(self) -> str:
         # start() 只有 map_file 非空才调用缓存逻辑，这里保留 default 便于单测和容错。
         return self._sanitize_map_key(self.config.map_file or "default")
+
+    @rpc
+    def get_current_map_key(self) -> str | None:
+        """Return the stable key for the configured preloaded map."""
+        if not self.config.map_file:
+            return None
+        return self._map_cache_key()
+
+    @rpc
+    def get_current_map_file(self) -> str | None:
+        """Return the configured map file/stem used by this relocalization module."""
+        return self.config.map_file
+
+    @rpc
+    def get_world_to_map(self) -> Transform | None:
+        """Return the latest validated world<-map transform, if available."""
+        return self._last_world_to_map_tf
+
+    @rpc
+    def is_relocalized(self) -> bool:
+        """Whether this run has published a validated world<-map transform."""
+        return self._last_world_to_map_tf is not None and self._has_published_tf_this_run
 
     @staticmethod
     def _resolve_cache_path(value: str) -> Path:
@@ -649,9 +671,12 @@ class RelocalizationModule(Module):
                     f"crop_radius={self.config.fast_icp_crop_radius}"
                 )
         else:
-            threshold = self.config.fast_icp_min_fitness
-            if threshold is None:
-                threshold = self.config.fitness_threshold
+            configured_threshold = self.config.fast_icp_min_fitness
+            threshold = (
+                self.config.fitness_threshold
+                if configured_threshold is None
+                else configured_threshold
+            )
 
         t0 = time.monotonic()
         try:
