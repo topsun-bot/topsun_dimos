@@ -1,0 +1,12 @@
+{
+  "frames": 175,
+  "hz": 8.75,
+  "points_max": 28339,
+  "points_mean": 23637.5,
+  "decode_ok": 175,
+  "decode_fail": 1,
+  "dimos_ok": true,
+  "dimos_n": 28234,
+  "network": "4G",
+  "disableTrafficSaving": true
+}

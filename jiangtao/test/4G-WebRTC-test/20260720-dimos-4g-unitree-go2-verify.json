@@ -1,0 +1,17 @@
+{
+  "/lidar#sensor_msgs.PointCloud2": 275,
+  "/odom#geometry_msgs.PoseStamped": 721,
+  "/color_image#sensor_msgs.Image": 572,
+  "/camera_info#sensor_msgs.CameraInfo": 40,
+  "/global_map#sensor_msgs.PointCloud2": 55,
+  "/tf#tf2_msgs.TFMessage": 722,
+  "hz": {
+    "/lidar#sensor_msgs.PointCloud2": 6.88,
+    "/odom#geometry_msgs.PoseStamped": 18.02,
+    "/color_image#sensor_msgs.Image": 14.3,
+    "/camera_info#sensor_msgs.CameraInfo": 1.0,
+    "/global_map#sensor_msgs.PointCloud2": 1.38,
+    "/tf#tf2_msgs.TFMessage": 18.05
+  },
+  "ok": true
+}

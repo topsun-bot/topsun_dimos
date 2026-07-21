@@ -39,9 +39,31 @@ def stub_webrtc(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 def test_make_connection_webrtc_forwards_aes_128_key(stub_webrtc: MagicMock) -> None:
     """Webrtc branch forwards aes_128_key as a kwarg to UnitreeWebRTCConnection."""
-    cfg = SimpleNamespace(unitree_connection_type="webrtc")
+    cfg = SimpleNamespace(unitree_connection_type="webrtc", unitree_webrtc_method="local")
     go2_conn.make_connection("192.168.123.161", cfg, aes_128_key="cafe" * 8)
     stub_webrtc.assert_called_once_with("192.168.123.161", aes_128_key="cafe" * 8)
+
+
+def test_make_connection_remote_uses_cloud_credentials(stub_webrtc: MagicMock) -> None:
+    """Remote method does not require robot_ip; credentials are forwarded."""
+    cfg = SimpleNamespace(
+        unitree_connection_type="webrtc",
+        unitree_webrtc_method="remote",
+        unitree_username="user@example.com",
+        unitree_password="secret",
+        unitree_serial="B42D2000TEST",
+        unitree_region="cn",
+    )
+    go2_conn.make_connection(None, cfg, aes_128_key=None)
+    stub_webrtc.assert_called_once_with(
+        ip=None,
+        aes_128_key=None,
+        connection_method="remote",
+        username="user@example.com",
+        password="secret",
+        serial_number="B42D2000TEST",
+        region="cn",
+    )
 
 
 def test_connection_config_aes_key_defaults_from_global_config() -> None:

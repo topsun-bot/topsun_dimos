@@ -47,6 +47,14 @@ class GlobalConfig(BaseSettings):
     # Per-device AES-128 key for new Unitree firmware (G1 >=1.5.1, Go2 >=1.1.15, data2=3
     # handshake). Fetch: unitree-fetch-aes-key --email YOU --sn <serial>
     unitree_aes_128_key: str | None = None
+    # WebRTC path: "local" = LAN LocalSTA (default, unchanged), "remote" = Unitree 4G/cloud
+    # TURN. Remote needs unitree_username / unitree_password / unitree_serial.
+    unitree_webrtc_method: str = "local"
+    unitree_username: str | None = None
+    unitree_password: str | None = None
+    unitree_serial: str | None = None
+    # Cloud region for Remote signaling: "cn" or "global"
+    unitree_region: str = "cn"
     xarm7_ip: str | None = None
     xarm6_ip: str | None = None
     can_port: str | None = None

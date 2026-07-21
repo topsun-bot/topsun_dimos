@@ -62,7 +62,8 @@ class Go2Mode(str, Enum):
 
 
 class ConnectionConfig(ModuleConfig):
-    ip: str = Field(default_factory=lambda m: m["g"].robot_ip)
+    # Optional for Remote (4G); LocalSTA still requires GlobalConfig.robot_ip.
+    ip: str | None = Field(default_factory=lambda m: m["g"].robot_ip)
     mode: Go2Mode = Go2Mode.DEFAULT
     lidar: bool = True
     camera: bool = True
@@ -138,7 +139,19 @@ def make_connection(
 
         return DimSimConnection(cfg)
     elif connection_type == "webrtc":
-        assert ip is not None, "IP address must be provided"
+        method = (cfg.unitree_webrtc_method or "local").strip().lower()
+        if method in ("remote", "4g", "sta-t"):
+            # 4G / cloud TURN — does not require robot_ip; LAN LocalSTA unchanged.
+            return UnitreeWebRTCConnection(
+                ip=None,
+                aes_128_key=aes_128_key,
+                connection_method="remote",
+                username=cfg.unitree_username,
+                password=cfg.unitree_password,
+                serial_number=cfg.unitree_serial,
+                region=cfg.unitree_region or "cn",
+            )
+        assert ip is not None, "IP address must be provided for LocalSTA WebRTC"
         return UnitreeWebRTCConnection(ip, aes_128_key=aes_128_key)
     else:
         raise ValueError(f"Unknown simulator {cfg.simulation!r}. Choose from: mujoco, dimsim")

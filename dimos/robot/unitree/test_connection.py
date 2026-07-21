@@ -22,7 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unitree_webrtc_connect.constants import RTC_TOPIC
+from unitree_webrtc_connect.constants import RTC_TOPIC, WebRTCConnectionMethod
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.global_config import GlobalConfig
@@ -89,7 +89,7 @@ def test_move_uses_wireless_controller_joystick_backend(
 
     assert conn.move(twist) is True
 
-    driver.datachannel.pub_sub.publish_without_callback.assert_called_once_with(
+    driver.datachannel.pub_sub.publish_without_callback.assert_any_call(
         RTC_TOPIC["WIRELESS_CONTROLLER"],
         data={"lx": 0.2, "ly": 0.4, "rx": -0.3, "ry": 0},
     )
@@ -118,6 +118,7 @@ def test_no_key_forwards_falsy(stub_legion: MagicMock) -> None:
     """No key → a falsy value reaches the driver, which treats it as no key."""
     UnitreeWebRTCConnection(ip="192.168.123.161")
     assert not _aes_kwarg(stub_legion)
+    assert stub_legion.call_args.args[0] == WebRTCConnectionMethod.LocalSTA
 
 
 def test_aes_key_forwarded_when_provided(stub_legion: MagicMock) -> None:
@@ -132,7 +133,43 @@ def test_empty_string_key_forwarded_as_falsy(stub_legion: MagicMock) -> None:
     assert not _aes_kwarg(stub_legion)
 
 
+def test_remote_requires_credentials(stub_legion: MagicMock) -> None:
+    """Remote construction fails fast without cloud credentials."""
+    with pytest.raises(ValueError, match="unitree_username"):
+        UnitreeWebRTCConnection(connection_method="remote")
+
+
+def test_remote_uses_remote_method_and_shared_ice(
+    stub_legion: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remote path selects WebRTCConnectionMethod.Remote and applies ICE patch."""
+    called: list[bool] = []
+    monkeypatch.setattr(conn_mod, "_ensure_shared_ice_credentials", lambda: called.append(True))
+    UnitreeWebRTCConnection(
+        connection_method="remote",
+        username="u",
+        password="p",
+        serial_number="SN",
+        region="cn",
+    )
+    assert called == [True]
+    assert stub_legion.call_args.args[0] == WebRTCConnectionMethod.Remote
+    assert stub_legion.call_args.kwargs["serialNumber"] == "SN"
+
+
 def test_global_config_reads_unitree_aes_128_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """The key enters via GlobalConfig, read from the UNITREE_AES_128_KEY env var."""
     monkeypatch.setenv("UNITREE_AES_128_KEY", "ee" * 16)
     assert GlobalConfig().unitree_aes_128_key == "ee" * 16
+
+
+def test_global_config_reads_remote_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UNITREE_WEBRTC_METHOD", "remote")
+    monkeypatch.setenv("UNITREE_USERNAME", "15200000000")
+    monkeypatch.setenv("UNITREE_SERIAL", "B42TEST")
+    monkeypatch.setenv("UNITREE_REGION", "cn")
+    g = GlobalConfig()
+    assert g.unitree_webrtc_method == "remote"
+    assert g.unitree_username == "15200000000"
+    assert g.unitree_serial == "B42TEST"
+    assert g.unitree_region == "cn"

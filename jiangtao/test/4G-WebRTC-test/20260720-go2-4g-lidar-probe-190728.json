@@ -1,0 +1,251 @@
+{
+  "phases": [
+    {
+      "name": "A_video_on",
+      "video": "on",
+      "voxel": {
+        "compressed": 99,
+        "raw": 0,
+        "mapping": 0,
+        "uslam": 0
+      },
+      "binary_n": 99,
+      "binary_sizes_max": 9428,
+      "top_topics": [
+        [
+          "STR:rt/lf/lowstate",
+          262
+        ],
+        [
+          "STR:rt/utlidar/robot_pose",
+          245
+        ],
+        [
+          "STR:rt/utlidar/lidar_state",
+          65
+        ],
+        [
+          "STR:rt/api/sport/response",
+          2
+        ]
+      ],
+      "type_hist": {
+        "STR:rtc_inner_req": 7,
+        "STR:msg": 572,
+        "STR:res": 2,
+        "STR:heartbeat": 6
+      },
+      "lidar_state_keys": [
+        "stamp",
+        "firmware_version",
+        "software_version",
+        "sdk_version",
+        "sys_rotation_speed",
+        "com_rotation_speed",
+        "error_state",
+        "dirty_percentage",
+        "cloud_frequency",
+        "cloud_packet_loss_rate",
+        "cloud_size",
+        "cloud_scan_num",
+        "imu_frequency",
+        "imu_packet_loss_rate",
+        "imu_rpy",
+        "serial_recv_stamp",
+        "serial_buffer_size",
+        "serial_buffer_read"
+      ],
+      "lidar_state_snippet": {
+        "mode": null,
+        "percent": null,
+        "state": null,
+        "lidar_state": null,
+        "cloud_size": 60852,
+        "error_code": null,
+        "is_working": null,
+        "is_blocked": null
+      },
+      "lidar_state_full_small": {
+        "stamp": 1784546000.0,
+        "firmware_version": "",
+        "software_version": "1.0.0.38",
+        "sdk_version": "",
+        "sys_rotation_speed": 12925.462891,
+        "com_rotation_speed": 259.00473,
+        "error_state": 0,
+        "dirty_percentage": 1,
+        "cloud_frequency": 15.391295,
+        "cloud_packet_loss_rate": 0.552486,
+        "cloud_size": 60852,
+        "cloud_scan_num": 210,
+        "imu_frequency": 250.67923,
+        "imu_packet_loss_rate": 0,
+        "serial_recv_stamp": 1784546000.0,
+        "serial_buffer_size": 66,
+        "serial_buffer_read": 210
+      }
+    },
+    {
+      "name": "B_video_off",
+      "video": "off",
+      "voxel_delta": {
+        "compressed": 114,
+        "raw": 0,
+        "mapping": 0,
+        "uslam": 0
+      },
+      "binary_delta": 114,
+      "binary_sizes_max": 9413,
+      "top_topics": [
+        [
+          "STR:rt/lf/lowstate",
+          300
+        ],
+        [
+          "STR:rt/utlidar/robot_pose",
+          280
+        ],
+        [
+          "STR:rt/utlidar/lidar_state",
+          75
+        ]
+      ],
+      "type_hist": {
+        "STR:msg": 655,
+        "STR:heartbeat": 8
+      },
+      "lidar_state_snippet": {
+        "mode": null,
+        "percent": null,
+        "state": null,
+        "lidar_state": null,
+        "cloud_size": 60822,
+        "error_code": null,
+        "is_working": null,
+        "is_blocked": null
+      },
+      "lidar_state_full_small": {
+        "stamp": 1784546000.0,
+        "firmware_version": "",
+        "software_version": "1.0.0.38",
+        "sdk_version": "",
+        "sys_rotation_speed": 12931.03418,
+        "com_rotation_speed": 259.067352,
+        "error_state": 0,
+        "dirty_percentage": 1,
+        "cloud_frequency": 15.074499,
+        "cloud_packet_loss_rate": 0,
+        "cloud_size": 60822,
+        "cloud_scan_num": 210,
+        "imu_frequency": 250.19574,
+        "imu_packet_loss_rate": 0,
+        "serial_recv_stamp": 1784546000.0,
+        "serial_buffer_size": 0,
+        "serial_buffer_read": 240
+      }
+    }
+  ],
+  "lidar_state_samples": [
+    {
+      "stamp": 1784546000.0,
+      "firmware_version": "",
+      "software_version": "1.0.0.38",
+      "sdk_version": "",
+      "sys_rotation_speed": 12925.462891,
+      "com_rotation_speed": 259.044983,
+      "error_state": 0,
+      "dirty_percentage": 88,
+      "cloud_frequency": 15.154057,
+      "cloud_packet_loss_rate": 0,
+      "cloud_size": 6664,
+      "cloud_scan_num": 210,
+      "imu_frequency": 248.436844,
+      "imu_packet_loss_rate": 0,
+      "imu_rpy": [
+        35.879288,
+        20.164221,
+        0.029745
+      ],
+      "serial_recv_stamp": 1784546000.0,
+      "serial_buffer_size": 0,
+      "serial_buffer_read": 330
+    },
+    {
+      "stamp": 1784546000.0,
+      "firmware_version": "",
+      "software_version": "1.0.0.38",
+      "sdk_version": "",
+      "sys_rotation_speed": 12925.462891,
+      "com_rotation_speed": 259.044983,
+      "error_state": 0,
+      "dirty_percentage": 88,
+      "cloud_frequency": 15.390275,
+      "cloud_packet_loss_rate": 0,
+      "cloud_size": 6633,
+      "cloud_scan_num": 210,
+      "imu_frequency": 247.810867,
+      "imu_packet_loss_rate": 0,
+      "imu_rpy": [
+        35.885815,
+        20.18808,
+        0.017365
+      ],
+      "serial_recv_stamp": 1784546000.0,
+      "serial_buffer_size": 0,
+      "serial_buffer_read": 210
+    },
+    {
+      "stamp": 1784546000.0,
+      "firmware_version": "",
+      "software_version": "1.0.0.38",
+      "sdk_version": "",
+      "sys_rotation_speed": 12928.248047,
+      "com_rotation_speed": 259.020386,
+      "error_state": 0,
+      "dirty_percentage": 88,
+      "cloud_frequency": 15.386259,
+      "cloud_packet_loss_rate": 0,
+      "cloud_size": 6762,
+      "cloud_scan_num": 210,
+      "imu_frequency": 250.637466,
+      "imu_packet_loss_rate": 0,
+      "imu_rpy": [
+        35.817184,
+        20.193363,
+        -0.023501
+      ],
+      "serial_recv_stamp": 1784546000.0,
+      "serial_buffer_size": 30,
+      "serial_buffer_read": 84
+    }
+  ],
+  "errors": [
+    "subscribe_probe: "
+  ],
+  "connect_s": 1.004,
+  "disableTrafficSaving": true,
+  "stand_up": 0,
+  "balance_stand": 0,
+  "inner_req": {
+    "disable_traffic_saving": {
+      "type": "rtc_inner_req",
+      "info": {
+        "req_type": "disable_traffic_saving",
+        "execution": "ok"
+      }
+    },
+    "enable_lidar": "err:",
+    "lidar_stream": "err:",
+    "voxel_map": "err:",
+    "enable_voxel_map": "err:"
+  },
+  "final_voxel": {
+    "compressed": 443,
+    "raw": 0,
+    "mapping": 0,
+    "uslam": 0
+  },
+  "final_binary_n": 443,
+  "network_mode": "4G",
+  "stand_down": 0
+}

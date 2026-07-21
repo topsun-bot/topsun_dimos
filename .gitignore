@@ -110,3 +110,6 @@ recording*.db
 .codegraph/
 /jiangtao/tmp/
 /jiangtao/data/
+
+# 个人本地运行配置（含账号等，不入库）
+/jiangtao/run-self.md

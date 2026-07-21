@@ -57,6 +57,36 @@ VideoMessage: TypeAlias = NDArray[np.uint8]  # Shape: (height, width, 3)
 
 logger = setup_logger()
 
+# Remote (4G/TURN) full A/V offers fail DTLS when aiortc assigns a different
+# ice-ufrag per m-line. Patch once per process before createOffer.
+_SHARED_ICE_PATCHED = False
+
+
+def _ensure_shared_ice_credentials() -> None:
+    """Force aioice to reuse one ice-ufrag/pwd across all PeerConnection m-lines.
+
+    Only needed for Unitree Remote/TURN. LocalSTA does not call this, so LAN
+    behavior stays identical to upstream.
+    """
+    global _SHARED_ICE_PATCHED
+    if _SHARED_ICE_PATCHED:
+        return
+    import aioice
+    import aioice.utils
+
+    shared_ufrag = aioice.utils.random_string(4)
+    shared_pwd = aioice.utils.random_string(22)
+    orig_init = aioice.Connection.__init__
+
+    def _patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        kwargs["local_username"] = shared_ufrag
+        kwargs["local_password"] = shared_pwd
+        orig_init(self, *args, **kwargs)
+
+    aioice.Connection.__init__ = _patched_init  # type: ignore[method-assign]
+    _SHARED_ICE_PATCHED = True
+    logger.info("Applied shared ICE credentials for Unitree Remote WebRTC")
+
 
 _T = TypeVar("_T", bound=Timestamped)
 
@@ -98,15 +128,59 @@ class UnitreeWebRTCConnection(Resource):
     _SPORT_API_ID_RAGEMODE: int = 2059
     _SPORT_API_ID_FREEAVOID: int = 2048
 
-    def __init__(self, ip: str, mode: str = "ai", aes_128_key: str | None = None) -> None:
+    def __init__(
+        self,
+        ip: str | None = None,
+        mode: str = "ai",
+        aes_128_key: str | None = None,
+        *,
+        connection_method: str = "local",
+        username: str | None = None,
+        password: str | None = None,
+        serial_number: str | None = None,
+        region: str = "cn",
+        device_type: str = "Go2",
+    ) -> None:
         self.ip = ip
         self.mode = mode
         self.stop_timer: threading.Timer | None = None
         self.cmd_vel_timeout = 0.2
-        # Per-device AES-128 key for new Unitree firmware (data2=3 handshake); omitted when unset.
-        self.conn = LegionConnection(
-            WebRTCConnectionMethod.LocalSTA, ip=self.ip, aes_128_key=aes_128_key
-        )
+        method = (connection_method or "local").strip().lower()
+        self._connection_method = method
+
+        if method in ("remote", "4g", "sta-t"):
+            if not username or not password or not serial_number:
+                raise ValueError(
+                    "Remote WebRTC requires unitree_username, unitree_password, and unitree_serial"
+                )
+            # Shared ICE + TURN-only are Remote-only; LocalSTA path is unchanged.
+            _ensure_shared_ice_credentials()
+            self.conn = LegionConnection(
+                WebRTCConnectionMethod.Remote,
+                serialNumber=serial_number,
+                username=username,
+                password=password,
+                region=region,
+                device_type=device_type,
+            )
+            # Prefer Unitree TURN only (Clash-friendly). Do not touch LocalSTA.
+            orig_cfg = self.conn.create_webrtc_configuration
+
+            def _turn_only_cfg(
+                turn_server_info: Any, stunEnable: bool = True, turnEnable: bool = True
+            ) -> Any:
+                return orig_cfg(turn_server_info, stunEnable=False, turnEnable=turnEnable)
+
+            self.conn.create_webrtc_configuration = _turn_only_cfg  # type: ignore[method-assign]
+        elif method in ("local_ap", "ap"):
+            self.conn = LegionConnection(WebRTCConnectionMethod.LocalAP, aes_128_key=aes_128_key)
+        else:
+            # Default: LAN LocalSTA — identical to historical behavior.
+            if not ip:
+                raise ValueError("LocalSTA WebRTC requires robot_ip")
+            self.conn = LegionConnection(
+                WebRTCConnectionMethod.LocalSTA, ip=self.ip, aes_128_key=aes_128_key
+            )
         self.connect()
 
     def connect(self) -> None:
@@ -117,6 +191,8 @@ class UnitreeWebRTCConnection(Resource):
             await self.conn.datachannel.disableTrafficSaving(True)
 
             self.conn.datachannel.set_decoder(decoder_type="native")
+            # Needed for 4G Remote voxel stream; on LocalSTA this matches App "lidar on".
+            self.conn.datachannel.pub_sub.publish_without_callback(RTC_TOPIC["ULIDAR_SWITCH"], "on")
 
             await self.conn.datachannel.pub_sub.publish_request_new(
                 RTC_TOPIC["MOTION_SWITCHER"], {"api_id": 1002, "parameter": {"name": self.mode}}

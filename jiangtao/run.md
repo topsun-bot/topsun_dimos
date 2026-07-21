@@ -2,6 +2,42 @@
 
 > 环境：在 `topsun_dimos` 根目录执行 `deactivate 2>/dev/null; source .venv/bin/activate`，确认 `echo $VIRTUAL_ENV` 以 `topsun_dimos/.venv` 结尾。详见 `jiangtao/bugfix.md` §9/§13。
 
+## 4G Remote 跑 unitree-go2（云 TURN，不改 LAN）
+
+默认仍是 **LocalSTA**（`--robot-ip` / `.env` 的 `ROBOT_IP`），行为与原来一致。
+只有显式指定 `unitree_webrtc_method=remote` 才走 4G。
+
+```bash
+# 个人账号密码放在 jiangtao/run-self.md（已 gitignore），这里只用占位符
+export UNITREE_WEBRTC_METHOD=remote
+export UNITREE_USERNAME='你的宇树账号'
+export UNITREE_PASSWORD='你的密码'
+export UNITREE_SERIAL='B42D........'
+export UNITREE_REGION=cn
+
+dimos --viewer none \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region cn \
+  run unitree-go2
+
+# 或后台：末尾加 --daemon
+```
+
+LAN 用法不变：
+
+```bash
+dimos --robot-ip 192.168.12.1 run unitree-go2
+# 或依赖 .env 里的 ROBOT_IP / UNITREE_AES_128_KEY
+```
+
+本机 2026-07-20 验收（4G）：`lidar≈6.9Hz`，`odom≈18Hz`，`color_image≈14Hz`，`global_map` 有输出。
+完整流程见：`jiangtao/plan/2026-07-20-Go2-4G远程WebRTC跨电脑完整测试指南.md`。
+
+---
+
 ## Step 1: 录制（真机遛一圈）
 
 ```bash
@@ -122,8 +158,12 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 环境变量：
 
 ```bash
+# 二狗
 export UNITREE_AES_128_KEY='0a7d97828984ec332984571244318f30'
-export OPENAI_API_KEY="sk-fb774f182a3c4c28aaa8b6878ee32b60"
+# 三狗
+export UNITREE_AES_128_KEY='a84c9f3171fb9ceaa1629ec0d3a82031'
+
+export OPENAI_API_KEY="sk-b1c3c485844d49a6a2782a20a790ba20"
 export OPENAI_BASE_URL="https://api.deepseek.com"
 export DIMOS_VLM_API_KEY="EMPTY"
 export DIMOS_VLM_BASE_URL="http://10.10.153.172:8080/v1"
@@ -166,7 +206,9 @@ dimos tell '去找饮水机'
 真机：
 
 ```bash
-dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
+rm -f ~/.local/state/dimos/landmark_memory/landmarks.json
+
+dimos --robot-ip 10.10.155.110 run unitree-go2-relocalization-memory-agentic-deepseek \
   --disable security-module \
   -o relocalizationmodule.map_file=recording_go2
 ```
@@ -178,23 +220,21 @@ dimos tell '标记一下当前是办公室'
 dimos tell '去找饮水机'
 ```
 
+图片保存位置：
+
+```
+~/.local/state/dimos/landmark_memory/
+├── landmarks.json             ← 地标记录（名称、位置、房间等元数据）
+└── snapshots/
+    └── <record_id>.jpg        ← 每个地标的 JPG 快照
+```
+
 ## Step 6: 可选沿途 VLM 寻物（默认关闭）
 
 环境变量必须在启动 blueprint 之前设置：
 
 ```bash
 export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
-```
-```bash
-dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
-  --disable security-module \
-  -o relocalizationmodule.map_file=recording_go2
-```
-
-也可以只对单次启动启用，不修改当前 shell 的其他运行：
-
-```bash
-DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true \
 dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-deepseek \
   --disable security-module \
   -o relocalizationmodule.map_file=recording_go2
