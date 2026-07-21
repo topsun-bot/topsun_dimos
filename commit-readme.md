@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| Go2 4G Remote WebRTC / unitree-go2 remote | `fe4b31a77` |
 | uv.lock 去重 / bugfix §12-13 / free_avoid 默认关 | `94b2cf002` |
 | 合并 upstream/main fdf3cb7d（Zenoh/spy/WebRTC/scene） | `77ca3291c` |
 | fast ICP 诊断 / point-to-plane / 开机 odom 分析 | `bacc407a` |
@@ -38,7 +39,57 @@ git reset --hard <sha>
 
 ## 提交记录
 
+### fe4b31a77 — feat(go2): add 4G Remote WebRTC connection without breaking LocalSTA
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-21 11:17:45 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/core/global_config.py` | 新增 remote 凭据与 `unitree_webrtc_method` |
+| `dimos/robot/unitree/connection.py` | Remote: 共享 ICE + TURN-only + ULIDAR_SWITCH; LocalSTA 默认不变 |
+| `dimos/robot/unitree/go2/connection.py` | `make_connection` 按 method 分流 |
+| `dimos/robot/unitree/test_connection.py` 等 | 单测覆盖 remote / LocalSTA |
+| `jiangtao/run.md` | 4G 启动说明（占位符，个人配置见 run-self.md） |
+| `jiangtao/plan/2026-07-20-Go2-4G远程WebRTC跨电脑完整测试指南.md` | 完整测试与排障指南 |
+| `jiangtao/test/4G-WebRTC-test/*` | 验收脚本、JSON、相机样张 |
+| `.gitignore` | 忽略 `jiangtao/run-self.md` |
+
+**改进点**
+
+1. `dimos run unitree-go2` 可通过 4G 云 TURN 建连，不破坏原有 LAN LocalSTA。
+2. 修复 aiortc 多 m-line 不同 ice-ufrag 导致的 Remote DTLS 失败。
+3. 点云三开关与 DimOS 导航链在 4G 上已验收通过。
+
+**用法**
+
+```bash
+# 个人配置复制到 jiangtao/run-self.md（已 gitignore）后:
+source jiangtao/run-self.md  # 或手动 export 其中变量
+dimos --viewer none \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region cn \
+  run unitree-go2
+```
+
+**回滚**
+
+```bash
+git checkout fe4b31a77^ -- dimos/core/global_config.py dimos/robot/unitree/connection.py dimos/robot/unitree/go2/connection.py
+```
+
+---
+
 ### 94b2cf002 — chore: post-merge uv.lock fix, docs, and Go2 defaults
+
 
 | 字段 | 内容 |
 |---|---|
