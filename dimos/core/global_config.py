@@ -44,16 +44,20 @@ def _default_transport() -> TransportBackend:
 class GlobalConfig(BaseSettings):
     robot_ip: str | None = None
     robot_ips: str | None = None
-    # Per-device AES-128 key for new Unitree firmware (G1 >=1.5.1, Go2 >=1.1.15, data2=3
-    # handshake). Fetch: unitree-fetch-aes-key --email YOU --sn <serial>
+    # 新固件的 AES-128 设备密钥只用于 LocalSTA / LocalAP 的局域网握手.
+    # 4G Remote 使用云端账号令牌和临时 TURN 凭据, 不读取这个字段.
     unitree_aes_128_key: str | None = None
-    # WebRTC path: "local" = LAN LocalSTA (default, unchanged), "remote" = Unitree 4G/cloud
-    # TURN. Remote needs unitree_username / unitree_password / unitree_serial.
+    # 连接方式选择. local 是默认的局域网 LocalSTA; remote / 4g / sta-t
+    # 都会进入 Unitree 云信令路径. 这些字段也会被 CLI 自动生成为
+    # --unitree-webrtc-method 等参数, 并可由同名大写环境变量读取.
     unitree_webrtc_method: str = "local"
+    # Remote 构造底层驱动时会立刻用账号密码登录 Unitree 云并取得 token.
+    # 密码不要提交到仓库; 生产环境应通过环境变量或专用密钥管理器注入.
     unitree_username: str | None = None
     unitree_password: str | None = None
+    # 云端用 SN 把本机 SDP Offer 路由到已经注册在线的那一台 Go2.
     unitree_serial: str | None = None
-    # Cloud region for Remote signaling: "cn" or "global"
+    # cn 连接中国区 robot-api.unitree.com; global 连接海外区云端.
     unitree_region: str = "cn"
     xarm7_ip: str | None = None
     xarm6_ip: str | None = None

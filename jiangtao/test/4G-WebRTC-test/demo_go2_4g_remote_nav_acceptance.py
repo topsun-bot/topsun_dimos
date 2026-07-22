@@ -215,9 +215,9 @@ async def run_test(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "data": {},
         "errors": [],
         "note_lidar": (
-            "Go2 built-in voxel_map(_compressed) is not published over 4G Remote "
-            "DataChannel (0 binary frames observed). Use Mid360 or WiFi LocalSTA "
-            "for navigation point clouds. lidar_state still proves radar is spinning."
+            "本脚本主要验收运动, 视频和状态. 后续独立测试已确认 4G Remote 点云可用: "
+            "先执行 disableTrafficSaving(True), 发送 ULIDAR_SWITCH=on, "
+            "再订阅 voxel_map_compressed."
         ),
     }
     conn: UnitreeWebRTCConnection | None = None

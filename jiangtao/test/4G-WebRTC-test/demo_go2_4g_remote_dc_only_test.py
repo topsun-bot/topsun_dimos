@@ -28,9 +28,9 @@
   控制与状态验收. Clash 系统代理可保持, 无需退出.
 
 说明:
-  - 4G 链路上实测不会推送 voxel_map(_compressed) 点云帧
-    (lidar_state 仍有, 说明雷达硬件在转, 但点云 topic 被云端/
-    机端按流量策略抑制).
+  - 本脚本只做 DataChannel 控制/状态基线, 没有按完整流程开启并订阅点云.
+    后续实测已确认 4G 可推送 voxel_map_compressed; 需要先执行
+    disableTrafficSaving(True) + ULIDAR_SWITCH=on, 再订阅压缩点云 topic.
   - 前置相机需要 video transceiver, 与上述 DTLS bug 冲突;
     后续可再单独做视频方案.
 

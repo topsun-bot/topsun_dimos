@@ -62,7 +62,7 @@ class Go2Mode(str, Enum):
 
 
 class ConnectionConfig(ModuleConfig):
-    # Optional for Remote (4G); LocalSTA still requires GlobalConfig.robot_ip.
+    # Remote 用账号 + SN 做云端寻址, 所以 ip 可以为空; LocalSTA 仍要求 robot_ip.
     ip: str | None = Field(default_factory=lambda m: m["g"].robot_ip)
     mode: Go2Mode = Go2Mode.DEFAULT
     lidar: bool = True
@@ -125,6 +125,9 @@ def make_connection(
     cfg: GlobalConfig,
     aes_128_key: str | None = None,
 ) -> Go2ConnectionProtocol:
+    # 第一级先按 replay / simulator / 真机选择后端. 真机 WebRTC 再按
+    # unitree_webrtc_method 分成 Remote 和 LocalSTA, 上层 GO2Connection
+    # 因而不需要知道数据来自局域网还是 4G.
     connection_type = cfg.unitree_connection_type.lower()
 
     if ip in ("fake", "mock", "replay") or connection_type == "replay":
@@ -141,7 +144,8 @@ def make_connection(
     elif connection_type == "webrtc":
         method = (cfg.unitree_webrtc_method or "local").strip().lower()
         if method in ("remote", "4g", "sta-t"):
-            # 4G / cloud TURN — does not require robot_ip; LAN LocalSTA unchanged.
+            # 4G / STA-T 走 Unitree 云信令. 这里不传 robot_ip, 也不会用
+            # LocalSTA 的 AES key 做握手; region 决定中国区或海外区 API.
             return UnitreeWebRTCConnection(
                 ip=None,
                 aes_128_key=aes_128_key,
@@ -151,6 +155,7 @@ def make_connection(
                 serial_number=cfg.unitree_serial,
                 region=cfg.unitree_region or "cn",
             )
+        # 没有显式选择 Remote 就保持历史 LocalSTA 行为, 防止旧部署被改道.
         assert ip is not None, "IP address must be provided for LocalSTA WebRTC"
         return UnitreeWebRTCConnection(ip, aes_128_key=aes_128_key)
     else:
@@ -278,6 +283,7 @@ class GO2Connection(Module, Camera, Pointcloud):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        # 构造底层 Resource 时已经同步完成 WebRTC 建连和 DataChannel 验证.
         self.connection = make_connection(
             self.config.ip, self.config.g, aes_128_key=self.config.aes_128_key
         )
@@ -296,6 +302,8 @@ class GO2Connection(Module, Camera, Pointcloud):
             self.color_image.publish(image)
             self._latest_video_frame = image
 
+        # 下面的 Observable 接口对 Remote 和 LocalSTA 完全一致. 传输方式的
+        # 差异已经封装在 UnitreeWebRTCConnection 内, 蓝图和导航模块无需改动.
         if self.config.lidar:
             self.register_disposable(self.connection.lidar_stream().subscribe(self.lidar.publish))
         self.register_disposable(self.connection.odom_stream().subscribe(self._publish_tf))
@@ -313,6 +321,8 @@ class GO2Connection(Module, Camera, Pointcloud):
         if self.config.motion_mode and isinstance(self.connection, UnitreeWebRTCConnection):
             self.connection.set_motion_mode(self.config.motion_mode)
 
+        # 重要安全行为: unitree-go2 blueprint 启动后会自动站立并进入
+        # BalanceStand, 不是只建立只读数据连接. 真机启动前必须清空周围空间.
         self.standup()
         time.sleep(3)
         self.connection.balance_stand()
@@ -442,7 +452,11 @@ class GO2Connection(Module, Camera, Pointcloud):
 
     @rpc
     def publish_request(self, topic: str, data: dict[str, Any]) -> dict[Any, Any]:
-        """Publish a request to the WebRTC connection.
+        """把通用 Unitree topic/API 请求转发到 WebRTC DataChannel.
+
+        Remote 和 LocalSTA 在这里使用相同的请求格式; 区别只在更底层的
+        ICE 选路和 SDP 信令方式.
+
         Args:
             topic: The RTC topic to publish to
             data: The data dictionary to publish
