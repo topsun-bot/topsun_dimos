@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 导航诊断 trace / `dimos nav analyze` | `0ed24b321` |
 | Go2 4G Remote WebRTC / unitree-go2 remote | `fe4b31a77` |
 | uv.lock 去重 / bugfix §12-13 / free_avoid 默认关 | `94b2cf002` |
 | 合并 upstream/main fdf3cb7d（Zenoh/spy/WebRTC/scene） | `77ca3291c` |
@@ -38,6 +39,60 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 0ed24b321 — feat(nav): add bounded navigation diagnostics trace and offline analyze
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-26 11:41:25 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/navigation/diagnostics/*` | 新增 TraceSink、manifest、report、`dimos nav analyze` CLI |
+| `dimos/navigation/replanning_a_star/*` | planner/local/path_clearance 埋点与 session |
+| `dimos/navigation/movement_manager/movement_manager.py` | mux 命令链 trace |
+| `dimos/mapping/costmapper.py` / `relocalization/module.py` | costmap / 重定位候选与 attempt trace |
+| `dimos/robot/unitree/connection.py` / `go2/connection.py` | WebRTC 发送与 odom/lowstate 可选记录 |
+| `dimos/core/global_config.py` | `navigation_trace_level` 等配置，默认 `off` |
+| `dimos/robot/cli/dimos.py` | 注册 `dimos nav`、写 navigation manifest |
+| `docs/usage/navigation-diagnostics.md` / `jiangtao/run.md` | 用法与 4G 诊断启动说明 |
+
+**改进点**
+
+1. 可选记录规划→mux→WebRTC 控制链与 costmap/重定位证据，默认关闭不影响寻物。
+2. 停机后 `dimos nav analyze <run-dir>` 生成 summary/report/plots，便于走过/转过排障。
+3. 队列与磁盘预算失败时只降级诊断，不打断导航发令。
+
+**用法**
+
+```bash
+dimos --navigation-trace-level full \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region cn \
+  run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+
+dimos stop
+dimos nav analyze logs/<run-id>
+```
+
+**回滚**
+
+```bash
+git checkout 0ed24b321^ -- dimos/navigation/diagnostics dimos/core/global_config.py dimos/robot/cli/dimos.py
+# 或
+git reset --hard 29b240832
+```
+
+---
 
 ### fe4b31a77 — feat(go2): add 4G Remote WebRTC connection without breaking LocalSTA
 
