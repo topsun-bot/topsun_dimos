@@ -92,3 +92,52 @@ def test_landmark_object_same_name_updates_count(memory: SpatialLandmarkMemory) 
     )
     assert memory.count() == 1
     assert memory.find_by_name("person").observation_count == 2  # type: ignore[union-attr]
+
+
+def test_module_start_new_memory_clears_persisted_json(tmp_path: Path) -> None:
+    """new_memory=True 时 start 应清空 landmarks.json, 避免跨 session 残留."""
+    from dimos.perception.detection.door.door_spatial_memory_module import (
+        SpatialLandmarkMemoryModule,
+    )
+
+    db_path = tmp_path / "landmarks.json"
+    snapshots_dir = tmp_path / "snapshots"
+    seed = SpatialLandmarkMemory(db_path=db_path, snapshots_dir=snapshots_dir)
+    seed.record(SpatialRecord(name="办公室", record_type=RecordType.ROOM, position=(1.0, 2.0, 0.0)))
+    assert db_path.exists()
+    assert seed.count() == 1
+
+    module = SpatialLandmarkMemoryModule(
+        db_path=str(db_path),
+        snapshots_dir=str(snapshots_dir),
+        new_memory=True,
+    )
+    module.start()
+    try:
+        assert module.count() == 0
+        assert not db_path.exists()
+    finally:
+        module.stop()
+
+
+def test_module_start_keeps_memory_when_new_memory_false(tmp_path: Path) -> None:
+    from dimos.perception.detection.door.door_spatial_memory_module import (
+        SpatialLandmarkMemoryModule,
+    )
+
+    db_path = tmp_path / "landmarks.json"
+    snapshots_dir = tmp_path / "snapshots"
+    seed = SpatialLandmarkMemory(db_path=db_path, snapshots_dir=snapshots_dir)
+    seed.record(SpatialRecord(name="会议室", record_type=RecordType.ROOM, position=(3.0, 4.0, 0.0)))
+
+    module = SpatialLandmarkMemoryModule(
+        db_path=str(db_path),
+        snapshots_dir=str(snapshots_dir),
+        new_memory=False,
+    )
+    module.start()
+    try:
+        assert module.count() == 1
+        assert module.find_by_name("会议室") is not None
+    finally:
+        module.stop()

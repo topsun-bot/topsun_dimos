@@ -19,7 +19,7 @@ dimos [GLOBAL OPTIONS] COMMAND [ARGS]
 | `--simulation` / `--no-simulation` | bool | `False` | Enable MuJoCo simulation |
 | `--replay` / `--no-replay` | bool | `False` | Use recorded replay data |
 | `--replay-db` | TEXT | `go2_bigoffice` | Replay memory2 SQLite database name |
-| `--new-memory` / `--no-new-memory` | bool | `False` | Clear persistent memory on start |
+| `--new-memory` / `--no-new-memory` | bool | `True` | Clear persistent memory on start (landmarks.json, CLIP/Chroma, temporal DB). Use `--no-new-memory` to keep prior-run memory. |
 | `--viewer` | `rerun\|none` | `rerun` | Visualization backend |
 | `--rerun-open` | `native\|web\|both\|none` | `native` | How to open the Rerun viewer |
 | `--rerun-web` / `--no-rerun-web` | bool | `False` | Serve the Rerun web viewer |

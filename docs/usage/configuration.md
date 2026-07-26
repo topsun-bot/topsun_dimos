@@ -91,7 +91,7 @@ Config(
         simulation='',
         replay=False,
         replay_db='go2_short',
-        new_memory=False,
+        new_memory=True,
         viewer='rerun',
         rerun_open='native',
         rerun_web=False,

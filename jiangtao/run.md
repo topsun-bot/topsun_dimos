@@ -257,17 +257,44 @@ dimos tell '标记一下当前是办公室'
 dimos tell '去找饮水机'
 ```
 
-## Step 5: 重定位空间找物（基于 premap, 跨 session 复用空间记忆）
+## Step 5: 重定位空间找物（基于 premap）
 
 前置：已完成 Step 1 ~ Step 2, 生成了 `recording_go2.pc2.lcm`。
 
 环境变量同 Step 4。
 
-真机：
+### 启动时记忆（`new_memory`，默认清空）
+
+重启后 **odom 原点会重置**，但磁盘上的 `landmarks.json` / CLIP 房间图若残留，CLIP 仍可能认出旧房间名（如「办公室」），再和旧坐标交叉验证就会报坐标过期、拒绝导航。
+
+因此 `GlobalConfig.new_memory` **默认 `True`**：启动时自动清空
+
+- `~/.local/state/dimos/landmark_memory/landmarks.json` 与 `snapshots/`
+- SpatialMemory 的 CLIP / Chroma 持久化库
+
+**一般不必再手动 `rm`。** 启动日志应看到：
+
+```text
+Cleared landmark memory on start (new_memory=True, ...)
+```
+
+而不是 `Loaded N landmark(s) from ...`。
+
+需要跨次运行保留地标时：
 
 ```bash
-rm -f ~/.local/state/dimos/landmark_memory/landmarks.json
+dimos --no-new-memory --robot-ip 10.10.155.110 \
+  run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
 
+# 或在 .env 里：
+# DIMOS_NEW_MEMORY=false
+```
+
+真机（默认清空记忆）：
+
+```bash
 dimos --robot-ip 10.10.155.110 run unitree-go2-relocalization-memory-agentic-deepseek \
   --disable security-module \
   -o relocalizationmodule.map_file=recording_go2
@@ -280,7 +307,7 @@ dimos tell '标记一下当前是办公室'
 dimos tell '去找饮水机'
 ```
 
-图片保存位置：
+图片保存位置（本 session 标记后才会重新生成）：
 
 ```
 ~/.local/state/dimos/landmark_memory/

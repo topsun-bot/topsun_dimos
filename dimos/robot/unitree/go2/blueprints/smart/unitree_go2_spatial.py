@@ -29,7 +29,7 @@ unitree_go2_spatial = (
     autoconnect(
         unitree_go2,
         SpatialMemory.blueprint(new_memory=global_config.new_memory),
-        SpatialLandmarkMemoryModule.blueprint(),
+        SpatialLandmarkMemoryModule.blueprint(new_memory=global_config.new_memory),
         ObjectTracker2D.blueprint(frame_id="camera_link"),
         BBoxNavigationModule.blueprint(),
         PerceiveLoopSkill.blueprint(),
@@ -48,7 +48,7 @@ unitree_go2_relocalization_memory = (
         unitree_go2,
         RelocalizationModule.blueprint(),
         SpatialMemory.blueprint(new_memory=global_config.new_memory),
-        SpatialLandmarkMemoryModule.blueprint(),
+        SpatialLandmarkMemoryModule.blueprint(new_memory=global_config.new_memory),
         ObjectTracker2D.blueprint(frame_id="camera_link"),
         BBoxNavigationModule.blueprint(),
         PerceiveLoopSkill.blueprint(),

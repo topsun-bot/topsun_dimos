@@ -67,7 +67,10 @@ class GlobalConfig(BaseSettings):
     simulation: str = ""
     replay: bool = False
     replay_db: str = "go2_short"
-    new_memory: bool = False
+    # 默认 True: 启动时清空持久化记忆 (landmarks.json / CLIP Chroma / temporal DB),
+    # 避免重启后旧 odom 坐标与 CLIP 房间图残留导致误匹配. 需要跨次运行保留记忆时用
+    # --no-new-memory 或 DIMOS_NEW_MEMORY=false.
+    new_memory: bool = True
     viewer: ViewerBackend = "rerun"
     rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT
     rerun_web: bool = RERUN_ENABLE_WEB

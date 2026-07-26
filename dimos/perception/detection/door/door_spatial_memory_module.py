@@ -39,6 +39,8 @@ _SNAPSHOTS_DIR = _LANDMARK_MEMORY_DIR / "snapshots"
 class SpatialLandmarkMemoryConfig(ModuleConfig):
     db_path: str = str(_LANDMARK_DB_PATH)
     snapshots_dir: str = str(_SNAPSHOTS_DIR)
+    # 与 GlobalConfig.new_memory 对齐: True 时启动清空 landmarks.json 与 snapshots.
+    new_memory: bool = False
 
 
 class SpatialLandmarkMemoryModule(Module):
@@ -58,8 +60,16 @@ class SpatialLandmarkMemoryModule(Module):
 
     @rpc
     def start(self) -> None:
-        """Start the module and load persisted landmarks."""
+        """Start the module; optionally wipe then load persisted landmarks."""
         super().start()
+        if self.config.new_memory:
+            n = self._memory.clear_all()
+            logger.info(
+                "Cleared landmark memory on start (new_memory=True, removed %d record(s) from %s)",
+                n,
+                self.config.db_path,
+            )
+            return
         loaded = self._memory.load()
         if loaded:
             logger.info("Loaded %d landmark(s) from %s", self._memory.count(), self.config.db_path)
