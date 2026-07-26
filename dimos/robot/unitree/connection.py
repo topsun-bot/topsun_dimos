@@ -42,6 +42,7 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.navigation.diagnostics.sink import TraceSink, isolate_trace_failure
 from dimos.robot.unitree.type.lidar import (
     RawLidarMsg,
     pointcloud2_from_webrtc_lidar,
@@ -104,6 +105,48 @@ def time_is_now(x: _T) -> _T:
     return x
 
 
+def _twist_trace_fields(twist: Twist) -> dict[str, float]:
+    return {
+        "linear_x": float(twist.linear.x),
+        "linear_y": float(twist.linear.y),
+        "linear_z": float(twist.linear.z),
+        "angular_x": float(twist.angular.x),
+        "angular_y": float(twist.angular.y),
+        "angular_z": float(twist.angular.z),
+    }
+
+
+def _pose_trace_fields(pose: Pose) -> dict[str, object]:
+    return {
+        "position": {
+            "x": float(pose.position.x),
+            "y": float(pose.position.y),
+            "z": float(pose.position.z),
+        },
+        "orientation_xyzw": [
+            float(pose.orientation.x),
+            float(pose.orientation.y),
+            float(pose.orientation.z),
+            float(pose.orientation.w),
+        ],
+    }
+
+
+def _response_summary(response: Any) -> dict[str, object]:
+    if not isinstance(response, dict):
+        return {"type": type(response).__name__, "truthy": bool(response)}
+    summary: dict[str, object] = {
+        "type": "dict",
+        "keys": sorted(str(key) for key in response),
+        "truthy": bool(response),
+    }
+    for key in ("status", "code", "message", "api_id"):
+        value = response.get(key)
+        if isinstance(value, (bool, int, float, str)) or value is None:
+            summary[key] = value
+    return summary
+
+
 @dataclass
 class SerializableVideoFrame:
     """Pickleable wrapper for av.VideoFrame with all metadata"""
@@ -148,11 +191,18 @@ class UnitreeWebRTCConnection(Resource):
         serial_number: str | None = None,
         region: str = "cn",
         device_type: str = "Go2",
+        trace_sink: TraceSink | None = None,
+        trace_roi_interval_sec: float = 5.0,
     ) -> None:
         self.ip = ip
         self.mode = mode
         self.stop_timer: threading.Timer | None = None
         self.cmd_vel_timeout = 0.2
+        self._navigation_trace = trace_sink
+        self._trace_last_lidar_roi_ns = 0
+        self._trace_roi_interval_sec = max(5.0, trace_roi_interval_sec)
+        self._trace_heartbeat_handle: asyncio.TimerHandle | None = None
+        self._trace_heartbeat_interval_sec = 0.1
         # 接受 4g / sta-t 作为 remote 的易读别名, 其余未知值继续按历史
         # local 行为处理, 从而保持旧命令兼容.
         method = (connection_method or "local").strip().lower()
@@ -203,6 +253,7 @@ class UnitreeWebRTCConnection(Resource):
             )
         # 对外构造函数保持同步语义: 返回前必须完成 WebRTC 和设备验证.
         self.connect()
+        self._trace_connection_ready()
 
     def connect(self) -> None:
         self.loop = asyncio.new_event_loop()
@@ -225,6 +276,13 @@ class UnitreeWebRTCConnection(Resource):
             await self.conn.datachannel.pub_sub.publish_request_new(
                 RTC_TOPIC["MOTION_SWITCHER"], {"api_id": 1002, "parameter": {"name": self.mode}}
             )
+            # 新会话建立后立即覆盖机器人端可能残留的摇杆状态。即使上一个
+            # 客户端异常断线，新连接在任何站立动作前也先显式进入零速度。
+            self.conn.datachannel.pub_sub.publish_without_callback(
+                RTC_TOPIC["WIRELESS_CONTROLLER"],
+                data={"lx": 0, "ly": 0, "rx": 0, "ry": 0},
+            )
+            self._start_trace_loop_heartbeat()
 
         def start_background_loop() -> None:
             asyncio.set_event_loop(self.loop)
@@ -252,6 +310,7 @@ class UnitreeWebRTCConnection(Resource):
             self.stop_timer = None
 
         async def async_disconnect() -> None:
+            self._cancel_trace_loop_heartbeat()
             try:
                 # 先发送零速度, 再关闭 PeerConnection. 这是网络层兜底,
                 # 上层 GO2Connection.stop() 还会先发送一次 StandDown.
@@ -259,20 +318,30 @@ class UnitreeWebRTCConnection(Resource):
                     RTC_TOPIC["WIRELESS_CONTROLLER"],
                     data={"lx": 0, "ly": 0, "rx": 0, "ry": 0},
                 )
+            except Exception as exc:
+                # 链路可能已经被云端关闭；零速度发不出去时仍必须继续执行
+                # disconnect()，否则 aiortc 的 ICE/DTLS 资源会残留。
+                logger.warning("Failed to send zero velocity while disconnecting: %s", exc)
+            try:
                 await self.conn.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to disconnect Unitree WebRTC cleanly: %s", exc)
 
         if self.loop.is_running():
-            # 当前实现是 best-effort 清理: 提交断连协程后立即请求停止 loop,
-            # 没有等待 Future 完成. 正常停止一般可用, 但连续快速重连时可能
-            # 留下未完成的 ICE/DTLS 清理; 若后续遇到会话占用应优先检查这里.
-            asyncio.run_coroutine_threadsafe(async_disconnect(), self.loop)
-
+            future = asyncio.run_coroutine_threadsafe(async_disconnect(), self.loop)
+            try:
+                future.result(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+            except TimeoutError:
+                future.cancel()
+                logger.warning("Timed out while disconnecting Unitree WebRTC")
+            except Exception as exc:
+                logger.warning("Unitree WebRTC disconnect task failed: %s", exc)
             self.loop.call_soon_threadsafe(self.loop.stop)
 
         if self.thread.is_alive():
             self.thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+            if self.thread.is_alive():
+                logger.warning("Unitree WebRTC event-loop thread did not stop in time")
 
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         """Send movement command to the robot using Twist commands.
@@ -291,10 +360,27 @@ class UnitreeWebRTCConnection(Resource):
         # y - positive forward, negative backwards
         # yaw - Positive rotate right, negative rotate left
         async def async_move() -> None:
-            self.conn.datachannel.pub_sub.publish_without_callback(
-                RTC_TOPIC["WIRELESS_CONTROLLER"],
-                data={"lx": -y, "ly": x, "rx": -yaw, "ry": 0},
-            )
+            joystick = {"lx": -y, "ly": x, "rx": -yaw, "ry": 0}
+            trace_send = self._trace_full_enabled()
+            send_wall_ts = time.time() if trace_send else None
+            send_monotonic_ns = time.monotonic_ns() if trace_send else None
+            send_error: Exception | None = None
+            try:
+                self.conn.datachannel.pub_sub.publish_without_callback(
+                    RTC_TOPIC["WIRELESS_CONTROLLER"],
+                    data=joystick,
+                )
+            except Exception as exc:
+                send_error = exc
+                raise
+            finally:
+                self._trace_webrtc_send(
+                    twist,
+                    joystick,
+                    send_wall_ts,
+                    send_monotonic_ns,
+                    send_error,
+                )
 
         async def async_move_duration() -> None:
             """Send movement commands continuously for the specified duration."""
@@ -310,7 +396,7 @@ class UnitreeWebRTCConnection(Resource):
             self.stop_timer.cancel()
 
         # Auto-stop after 0.5 seconds if no new commands
-        self.stop_timer = threading.Timer(self.cmd_vel_timeout, self.stop_movement)
+        self.stop_timer = threading.Timer(self.cmd_vel_timeout, self._on_command_timeout)
         self.stop_timer.daemon = True
         self.stop_timer.start()
 
@@ -374,13 +460,11 @@ class UnitreeWebRTCConnection(Resource):
 
     @simple_mcache
     def lidar_stream(self) -> Observable[PointCloud2]:
-        return backpressure(
-            self.raw_lidar_stream().pipe(
-                ops.map(pointcloud2_from_webrtc_lidar),
-                ops.map(time_is_now),
-                # repair_stale_ts(),
-            )
-        )
+        operators: list[Any] = [ops.map(pointcloud2_from_webrtc_lidar)]
+        if self._trace_full_enabled():
+            operators.append(ops.map(self._trace_raw_lidar_before_timestamp_override))
+        operators.append(ops.map(time_is_now))
+        return backpressure(self.raw_lidar_stream().pipe(*operators))
 
     @simple_mcache
     def tf_stream(self) -> Observable[Transform]:
@@ -394,6 +478,7 @@ class UnitreeWebRTCConnection(Resource):
                 ops.map(
                     Odometry.from_msg,
                 ),
+                ops.map(self._trace_raw_odom_before_timestamp_override),
                 ops.map(time_is_now),
             )
         )
@@ -431,9 +516,25 @@ class UnitreeWebRTCConnection(Resource):
         )
 
     def set_obstacle_avoidance(self, enabled: bool = True) -> None:
-        self.publish_request(
-            RTC_TOPIC["OBSTACLES_AVOID"],
-            {"api_id": 1001, "parameter": {"enable": int(enabled)}},
+        try:
+            response = self.publish_request(
+                RTC_TOPIC["OBSTACLES_AVOID"],
+                {"api_id": 1001, "parameter": {"enable": int(enabled)}},
+            )
+        except Exception as exc:
+            self._trace_avoidance_response(
+                "obstacles_avoid",
+                enabled,
+                None,
+                api_id=1001,
+                error=exc,
+            )
+            raise
+        self._trace_avoidance_response(
+            "obstacles_avoid",
+            enabled,
+            response,
+            api_id=1001,
         )
 
     def set_motion_mode(self, name: str) -> None:
@@ -479,12 +580,29 @@ class UnitreeWebRTCConnection(Resource):
         Returns:
             bool: True if the device acknowledged the request, False otherwise.
         """
-        return bool(
-            self.publish_request(
+        try:
+            response = self.publish_request(
                 RTC_TOPIC["SPORT_MOD"],
                 {"api_id": self._SPORT_API_ID_FREEAVOID, "parameter": {"data": bool(enabled)}},
             )
+        except Exception as exc:
+            self._trace_avoidance_response(
+                "free_avoid",
+                enabled,
+                None,
+                api_id=self._SPORT_API_ID_FREEAVOID,
+                error=exc,
+            )
+            raise
+        result = bool(response)
+        self._trace_avoidance_response(
+            "free_avoid",
+            enabled,
+            response,
+            api_id=self._SPORT_API_ID_FREEAVOID,
+            acknowledged_value=result,
         )
+        return result
 
     def free_walk(self) -> bool:
         """Activate FreeWalk locomotion mode — enables walking and velocity commands."""
@@ -551,17 +669,25 @@ class UnitreeWebRTCConnection(Resource):
         subject: Subject[VideoMessage] = Subject()
         stop_event = threading.Event()
 
-        from aiortc import MediaStreamTrack
+        from aiortc import MediaStreamError, MediaStreamTrack
 
         async def accept_track(track: MediaStreamTrack) -> None:
             # 视频不走 DataChannel. aiortc 从独立的 WebRTC media track 解码
             # av.VideoFrame, 再转换成可跨 DimOS worker 传输的 numpy 包装对象.
-            while True:
-                if stop_event.is_set():
-                    return
-                frame = await track.recv()
-                serializable_frame = SerializableVideoFrame.from_av_frame(frame)  # type: ignore[no-untyped-call]
-                subject.on_next(serializable_frame)
+            try:
+                while True:
+                    if stop_event.is_set():
+                        return
+                    frame = await track.recv()
+                    serializable_frame = SerializableVideoFrame.from_av_frame(frame)  # type: ignore[no-untyped-call]
+                    subject.on_next(serializable_frame)
+            except MediaStreamError:
+                # aiortc 用 MediaStreamError 表示远端正常结束媒体轨。它在
+                # WebRTC 断链/主动关闭时是预期终态，不应成为未处理的回调异常。
+                logger.info("Unitree video track ended")
+            except asyncio.CancelledError:
+                # 订阅释放或 event loop 停止时的正常取消。
+                return
 
         self.conn.video.add_track_callback(accept_track)
 
@@ -597,6 +723,239 @@ class UnitreeWebRTCConnection(Resource):
         """
         return self.video_stream()
 
+    def _trace_connection_ready(self) -> None:
+        trace = self._navigation_trace
+        if trace is None or not trace.accepts("summary"):
+            return
+        try:
+            trace.record(
+                "webrtc_connection_ready",
+                {
+                    "connection_method": self._connection_method,
+                    "datachannel": self._datachannel_state(),
+                },
+                estimated_bytes=640,
+            )
+        except Exception as exc:
+            isolate_trace_failure(trace, exc)
+
+    def _start_trace_loop_heartbeat(self) -> None:
+        """Schedule a lightweight event-loop delay probe when full tracing is active."""
+        if not self._trace_full_enabled():
+            return
+        expected_loop_time = self.loop.time() + self._trace_heartbeat_interval_sec
+        self._trace_heartbeat_handle = self.loop.call_at(
+            expected_loop_time,
+            self._trace_loop_heartbeat,
+            expected_loop_time,
+        )
+
+    def _trace_loop_heartbeat(self, expected_loop_time: float) -> None:
+        """Record loop callback delay and schedule the next non-catch-up sample."""
+        trace = self._navigation_trace
+        if trace is None or not trace.accepts("full") or not self.loop.is_running():
+            self._trace_heartbeat_handle = None
+            return
+        try:
+            actual_loop_time = self.loop.time()
+            delay_sec = max(0.0, actual_loop_time - expected_loop_time)
+            trace.record(
+                "webrtc_loop_heartbeat",
+                {
+                    "scheduled_monotonic_ns": int(expected_loop_time * 1_000_000_000),
+                    "callback_monotonic_ns": int(actual_loop_time * 1_000_000_000),
+                    "delay_ns": int(delay_sec * 1_000_000_000),
+                    "interval_sec": self._trace_heartbeat_interval_sec,
+                },
+                estimated_bytes=512,
+            )
+            next_loop_time = max(
+                expected_loop_time + self._trace_heartbeat_interval_sec,
+                actual_loop_time + self._trace_heartbeat_interval_sec,
+            )
+            self._trace_heartbeat_handle = self.loop.call_at(
+                next_loop_time,
+                self._trace_loop_heartbeat,
+                next_loop_time,
+            )
+        except Exception as exc:
+            self._trace_heartbeat_handle = None
+            isolate_trace_failure(trace, exc)
+
+    def _cancel_trace_loop_heartbeat(self) -> None:
+        handle = self._trace_heartbeat_handle
+        self._trace_heartbeat_handle = None
+        if handle is not None:
+            handle.cancel()
+
+    def _trace_raw_odom_before_timestamp_override(self, odom: Pose) -> Pose:
+        trace = self._navigation_trace
+        if trace is None or not trace.accepts("full"):
+            return odom
+        try:
+            host_rx_ts = time.time()
+            host_rx_monotonic_ns = time.monotonic_ns()
+            trace.record(
+                "connection_raw_odom",
+                {
+                    "source_ts": float(odom.ts),
+                    "host_rx_ts": host_rx_ts,
+                    "host_rx_monotonic_ns": host_rx_monotonic_ns,
+                    "source_clock_domain": "unitree_header_unverified",
+                    "downstream_timestamp_overwritten": True,
+                    "frame_id": odom.frame_id,
+                    "pose": _pose_trace_fields(odom),
+                    "ground_truth": False,
+                    "estimate_kind": "unitree_lidar_odometry",
+                },
+                estimated_bytes=1024,
+            )
+        except Exception as exc:
+            isolate_trace_failure(trace, exc)
+        return odom
+
+    def _trace_raw_lidar_before_timestamp_override(
+        self,
+        pointcloud: PointCloud2,
+    ) -> PointCloud2:
+        trace = self._navigation_trace
+        if trace is None or not trace.accepts("full"):
+            return pointcloud
+        try:
+            now_ns = time.monotonic_ns()
+            trace.record(
+                "connection_raw_lidar",
+                {
+                    "source_ts": float(pointcloud.ts),
+                    "host_rx_ts": time.time(),
+                    "host_rx_monotonic_ns": now_ns,
+                    "source_clock_domain": "unitree_header_unverified",
+                    "downstream_timestamp_overwritten": True,
+                    "frame_id": pointcloud.frame_id,
+                    "point_count": len(pointcloud),
+                },
+                estimated_bytes=768,
+            )
+            if not trace.accepts("forensic"):
+                return pointcloud
+            interval_ns = int(self._trace_roi_interval_sec * 1_000_000_000)
+            if now_ns - self._trace_last_lidar_roi_ns < interval_ns:
+                return pointcloud
+            points = pointcloud.points().numpy()  # type: ignore[no-untyped-call]
+            accepted = trace.record_blob(
+                "pointcloud",
+                points,
+                {
+                    "source_kind": "raw_lidar",
+                    "source_ts": float(pointcloud.ts),
+                    "frame_id": pointcloud.frame_id,
+                    "frame_semantics_note": "Unitree raw lidar is labeled world by existing converter",
+                    "roi_bounds_m": [-5.0, 5.0, -5.0, 5.0, -2.0, 2.0],
+                    "voxel_size_m": 0.1,
+                    "maximum_sample_hz": 0.2,
+                },
+                stem="pointcloud-roi-raw-lidar",
+            )
+            if accepted:
+                self._trace_last_lidar_roi_ns = now_ns
+        except Exception as exc:
+            isolate_trace_failure(trace, exc)
+        return pointcloud
+
+    def _trace_full_enabled(self) -> bool:
+        trace = self._navigation_trace
+        return trace is not None and trace.accepts("full")
+
+    def _trace_webrtc_send(
+        self,
+        twist: Twist,
+        joystick: dict[str, float | int],
+        send_wall_ts: float | None,
+        send_monotonic_ns: int | None,
+        error: Exception | None,
+    ) -> None:
+        trace = self._navigation_trace
+        if trace is None or not trace.accepts("full"):
+            return
+        try:
+            finished_ns = time.monotonic_ns()
+            fields: dict[str, object] = {
+                "twist": _twist_trace_fields(twist),
+                "joystick": joystick,
+                "command_send_ts": send_wall_ts,
+                "command_send_monotonic_ns": send_monotonic_ns,
+                "send_completed_monotonic_ns": finished_ns,
+                "datachannel": self._datachannel_state(),
+                "send_accepted": error is None,
+                "robot_execution_ack": False,
+                "robot_execution_observed": False,
+            }
+            if send_monotonic_ns is not None:
+                fields["send_duration_ns"] = max(0, finished_ns - send_monotonic_ns)
+            if error is not None:
+                fields["error_type"] = type(error).__name__
+                fields["error_message"] = str(error)
+            trace.record("webrtc_command_send", fields, estimated_bytes=1152)
+        except Exception as exc:
+            isolate_trace_failure(trace, exc)
+
+    def _trace_avoidance_response(
+        self,
+        switch_name: str,
+        requested_enabled: bool,
+        response: Any,
+        *,
+        api_id: int,
+        acknowledged_value: bool | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        trace = self._navigation_trace
+        if trace is None or not trace.accepts("summary"):
+            return
+        try:
+            fields: dict[str, object] = {
+                "switch_name": switch_name,
+                "api_id": api_id,
+                "requested_enabled": requested_enabled,
+                "response_received": response is not None,
+                "response_summary": _response_summary(response),
+                "acknowledged_value": acknowledged_value,
+                "error": error is not None,
+            }
+            if error is not None:
+                fields["error_type"] = type(error).__name__
+                fields["error_message"] = str(error)
+            trace.record("unitree_avoidance_switch_response", fields, estimated_bytes=896)
+        except Exception as exc:
+            isolate_trace_failure(trace, exc)
+
+    def _datachannel_state(self) -> dict[str, object]:
+        datachannel = getattr(self.conn, "datachannel", None)
+        channel = getattr(datachannel, "channel", None)
+        return {
+            "ready_state": getattr(channel, "readyState", None),
+            "buffered_amount": getattr(channel, "bufferedAmount", None),
+            "validated_open": getattr(datachannel, "data_channel_opened", None),
+        }
+
+    def _on_command_timeout(self) -> None:
+        self.stop_movement()
+        trace = self._navigation_trace
+        if trace is None or not trace.accepts("full"):
+            return
+        try:
+            trace.record(
+                "command_watchdog_timer_fired",
+                {
+                    "timeout_sec": self.cmd_vel_timeout,
+                    "zero_command_sent": False,
+                    "behavior_note": "existing stop_movement only cancels the timer",
+                },
+                estimated_bytes=512,
+            )
+        except Exception as exc:
+            isolate_trace_failure(trace, exc)
+
     def stop_movement(self) -> None:
         """Cancel the auto-stop timer (used by move() for continuous commands)."""
         if self.stop_timer:
@@ -622,6 +981,7 @@ class UnitreeWebRTCConnection(Resource):
                 asyncio.run_coroutine_threadsafe(async_disconnect(), self.loop)
 
         if hasattr(self, "loop") and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self._cancel_trace_loop_heartbeat)
             self.loop.call_soon_threadsafe(self.loop.stop)
 
         if hasattr(self, "thread") and self.thread.is_alive():

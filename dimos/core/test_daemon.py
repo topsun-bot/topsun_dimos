@@ -84,6 +84,39 @@ class TestRunEntryCRUD:
         entry.remove()
         entry.remove()  # already gone — still fine
 
+    def test_save_redacts_credentials_from_args_and_overrides(self, tmp_registry: Path):
+        entry = _make_entry()
+        entry.original_argv = [
+            "dimos",
+            "--unitree-username",
+            "private-user",
+            "--unitree-password=private-password",
+            "--unitree-serial",
+            "private-serial",
+            "run",
+            "unitree-go2",
+        ]
+        entry.config_overrides = {
+            "unitree_username": "private-user",
+            "unitree_password": "private-password",
+            "nested": {"api_key": "private-key", "ordinary": "kept"},
+        }
+
+        entry.save()
+
+        persisted = entry.registry_path.read_text()
+        assert "private-user" not in persisted
+        assert "private-password" not in persisted
+        assert "private-serial" not in persisted
+        assert "private-key" not in persisted
+        loaded = RunEntry.load(entry.registry_path)
+        assert loaded.original_argv[2] == "<redacted>"
+        assert loaded.original_argv[3] == "--unitree-password=<redacted>"
+        assert loaded.config_overrides["nested"] == {
+            "api_key": "<redacted>",
+            "ordinary": "kept",
+        }
+
 
 class TestGenerateRunId:
     """test_generate_run_id_format — timestamp + sanitized blueprint name."""

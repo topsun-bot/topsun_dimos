@@ -33,7 +33,7 @@ import requests
 import typer
 
 from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
-from dimos.constants import CONFIG_DIR, resolve_log_dir
+from dimos.constants import CONFIG_DIR, DIMOS_PROJECT_ROOT, resolve_log_dir
 from dimos.core.daemon import daemonize, install_signal_handlers
 from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.run_registry import get_most_recent, is_pid_alive, stop_entry
@@ -42,6 +42,7 @@ from dimos.mapping.utils.cli.pose_fill import main as _map_pose_fill_main
 from dimos.mapping.utils.cli.rename import main as _map_rename_main
 from dimos.mapping.utils.cli.replay import main as _map_replay_main
 from dimos.mapping.utils.cli.replay_marker import main as _map_replay_marker_main
+from dimos.navigation.diagnostics.cli import nav_app
 from dimos.robot.unitree.go2.cli.go2tool import app as go2tool_app
 from dimos.utils.logging_config import setup_logger
 from dimos.visualization.rerun.constants import RerunOpenOption
@@ -153,6 +154,7 @@ def create_dynamic_callback():  # type: ignore[no-untyped-def]
 
 main.callback()(create_dynamic_callback())  # type: ignore[no-untyped-call]
 main.add_typer(go2tool_app, name="go2tool")
+main.add_typer(nav_app, name="nav")
 
 
 def arg_help(
@@ -365,6 +367,29 @@ def run(
     kwargs = load_config_args(blueprint_config, blueprint_args, config_path)
     if cli_config_overrides:
         kwargs["g"] = cli_config_overrides
+
+    resolved_config = blueprint_config(**kwargs)
+    resolved_global_config = getattr(resolved_config, "g", global_config)
+    if not isinstance(resolved_global_config, GlobalConfig):
+        resolved_global_config = global_config
+    if resolved_global_config.navigation_trace_level != "off":
+        from dimos.navigation.diagnostics.manifest import write_navigation_manifest
+
+        try:
+            manifest_path = write_navigation_manifest(
+                log_dir,
+                run_id=run_id,
+                blueprint=blueprint_name,
+                argv=sys.argv,
+                global_settings=resolved_global_config,
+                resolved_blueprint_config=resolved_config,
+                repository=DIMOS_PROJECT_ROOT,
+            )
+        except Exception:
+            logger.exception("Navigation trace manifest failed; continuing without it")
+            manifest_path = None
+        if manifest_path is None:
+            logger.warning("Navigation trace manifest could not be written")
 
     coordinator = ModuleCoordinator.build(blueprint, kwargs)
 
@@ -673,6 +698,15 @@ def restart(
 
     if not entry.original_argv:
         typer.echo("Cannot restart: run entry missing original command", err=True)
+        raise typer.Exit(1)
+    from dimos.core.run_registry import argv_has_redacted_values
+
+    if argv_has_redacted_values(entry.original_argv):
+        typer.echo(
+            "Cannot restart automatically: the saved command contained credentials "
+            "that were redacted. Stop and rerun with credentials supplied via environment.",
+            err=True,
+        )
         raise typer.Exit(1)
 
     # Save argv and pid before stopping (stop removes the entry)

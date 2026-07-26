@@ -31,6 +31,35 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 REGISTRY_DIR = STATE_DIR / "runs"
+_REDACTED = "<redacted>"
+_SENSITIVE_KEY_PARTS = (
+    "account",
+    "password",
+    "passwd",
+    "token",
+    "username",
+    "api_key",
+    "apikey",
+    "secret",
+    "credential",
+    "aes_128_key",
+    "serial",
+)
+_SENSITIVE_OPTIONS = frozenset(
+    {
+        "--account",
+        "--password",
+        "--passwd",
+        "--token",
+        "--api-key",
+        "--apikey",
+        "--secret",
+        "--unitree-username",
+        "--unitree-password",
+        "--unitree-aes-128-key",
+        "--unitree-serial",
+    }
+)
 
 
 @dataclass
@@ -53,7 +82,11 @@ class RunEntry:
     def save(self) -> None:
         """Persist this entry to disk."""
         REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-        self.registry_path.write_text(json.dumps(asdict(self), indent=2))
+        data = asdict(self)
+        data["cli_args"] = redact_argv_for_storage(self.cli_args)
+        data["original_argv"] = redact_argv_for_storage(self.original_argv)
+        data["config_overrides"] = redact_registry_value(self.config_overrides)
+        self.registry_path.write_text(json.dumps(data, indent=2))
 
     def remove(self) -> None:
         """Delete this entry from disk."""
@@ -74,6 +107,49 @@ def generate_run_id(blueprint: str) -> str:
     ts = time.strftime("%Y%m%d-%H%M%S")
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", blueprint)
     return f"{ts}-{safe_name}"
+
+
+def redact_argv_for_storage(argv: list[str]) -> list[str]:
+    """Remove credential option values before persisting restart arguments."""
+    output: list[str] = []
+    redact_next = False
+    for raw_arg in argv:
+        arg = str(raw_arg)
+        if redact_next:
+            output.append(_REDACTED)
+            redact_next = False
+            continue
+        option, separator, _value = arg.partition("=")
+        if option.lower() in _SENSITIVE_OPTIONS:
+            if separator:
+                output.append(f"{option}={_REDACTED}")
+            else:
+                output.append(option)
+                redact_next = True
+            continue
+        output.append(arg)
+    return output
+
+
+def argv_has_redacted_values(argv: list[str]) -> bool:
+    """Return whether persisted arguments cannot be safely replayed."""
+    return any(_REDACTED in arg for arg in argv)
+
+
+def redact_registry_value(value: object, *, key: str | None = None) -> object:
+    """Recursively redact credential-bearing config values."""
+    if key is not None and any(part in key.lower() for part in _SENSITIVE_KEY_PARTS):
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            str(child_key): redact_registry_value(child_value, key=str(child_key))
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_registry_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [redact_registry_value(item) for item in value]
+    return value
 
 
 def is_pid_alive(pid: int) -> bool:

@@ -98,10 +98,13 @@ class PatrollingModule(Module):
         return "Patrol stopped."
 
     async def _stop_patrolling(self) -> None:
-        if self._patrol_task is not None and not self._patrol_task.done():
-            self._patrol_task.cancel()
+        patrol_task = self._patrol_task
+        was_patrolling = patrol_task is not None and not patrol_task.done()
+        if was_patrolling:
+            assert patrol_task is not None
+            patrol_task.cancel()
             try:
-                await self._patrol_task
+                await patrol_task
             except asyncio.CancelledError:
                 pass
         self._patrol_task = None
@@ -110,7 +113,9 @@ class PatrollingModule(Module):
         # Closes the tool-stream and releases the `movement` capability via
         # the dimos/tool_stopped frame consumed by McpServer.
         self.stop_tool("start_patrol")
-        if self._latest_pose is not None:
+        # A module shutdown also calls this method even when patrol was never
+        # started.  Do not turn that lifecycle cleanup into a navigation goal.
+        if was_patrolling and self._latest_pose is not None:
             self.goal_request.publish(self._latest_pose)
 
     async def _patrol_loop(self) -> None:

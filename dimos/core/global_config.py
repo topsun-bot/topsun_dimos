@@ -29,6 +29,7 @@ from dimos.visualization.rerun.constants import (
 )
 
 TransportBackend: TypeAlias = Literal["lcm", "zenoh"]
+NavigationTraceLevel: TypeAlias = Literal["off", "summary", "full", "forensic"]
 
 
 def _get_all_numbers(s: str) -> list[float]:
@@ -109,6 +110,20 @@ class GlobalConfig(BaseSettings):
     listen_host: str = "127.0.0.1"
     dimsim_scene: str = "apt"
     dimsim_port: int = 8090
+    # Navigation tracing is intentionally disabled by default.  The online
+    # path only queues bounded records; report generation is always offline.
+    navigation_trace_level: NavigationTraceLevel = "off"
+    navigation_trace_costmap_min_interval_sec: float = 5.0
+    navigation_trace_roi_interval_sec: float = 5.0
+    navigation_trace_lowstate_hz: float = 2.0
+    navigation_trace_webrtc_stats_hz: float = 0.0
+    navigation_trace_scalar_queue_items: int = 2048
+    navigation_trace_blob_queue_items: int = 2
+    navigation_trace_scalar_max_bytes_per_producer: int = 67_108_864
+    navigation_trace_blob_max_bytes_per_producer: int = 134_217_728
+    navigation_trace_blob_max_item_bytes: int = 33_554_432
+    navigation_trace_min_free_disk_bytes: int = 5_368_709_120
+    navigation_trace_forensic_ack: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

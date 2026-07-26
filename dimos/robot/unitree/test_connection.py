@@ -18,13 +18,14 @@ Pure-Python — no hardware, no network. Covers connect() error propagation,
 aes_128_key forwarding, and the UNITREE_AES_128_KEY env var via GlobalConfig.
 """
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from aiortc import MediaStreamError
 import pytest
 from unitree_webrtc_connect.constants import RTC_TOPIC, WebRTCConnectionMethod
 
-from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -36,6 +37,7 @@ def _stub_driver(connect_exc: Exception | None = None) -> MagicMock:
     """A LegionConnection instance double covering everything connect() touches."""
     driver = MagicMock(name="LegionConnection-instance")
     driver.connect = AsyncMock(side_effect=connect_exc)
+    driver.disconnect = AsyncMock()
     driver.datachannel.disableTrafficSaving = AsyncMock()
     driver.datachannel.set_decoder = MagicMock()
     driver.datachannel.pub_sub.publish_request_new = AsyncMock()
@@ -62,8 +64,8 @@ def built_connection(monkeypatch: pytest.MonkeyPatch) -> Any:
     try:
         yield conn, driver
     finally:
-        conn.loop.call_soon_threadsafe(conn.loop.stop)
-        conn.thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+        if conn.loop.is_running():
+            conn.stop()
 
 
 def test_connect_success_completes_setup(built_connection: Any) -> None:
@@ -72,6 +74,58 @@ def test_connect_success_completes_setup(built_connection: Any) -> None:
 
     driver.connect.assert_awaited_once()
     driver.datachannel.pub_sub.publish_request_new.assert_awaited_once()
+    driver.datachannel.pub_sub.publish_without_callback.assert_any_call(
+        RTC_TOPIC["WIRELESS_CONTROLLER"],
+        data={"lx": 0, "ly": 0, "rx": 0, "ry": 0},
+    )
+
+
+def test_stop_disconnects_even_when_zero_velocity_send_fails(built_connection: Any) -> None:
+    """A closed DataChannel must not prevent the aiortc disconnect coroutine."""
+    conn, driver = built_connection
+    driver.datachannel.pub_sub.publish_without_callback.side_effect = RuntimeError(
+        "Data channel is not open"
+    )
+
+    conn.stop()
+
+    driver.disconnect.assert_awaited_once()
+
+
+def test_video_track_end_is_a_clean_terminal_state(built_connection: Any) -> None:
+    """Remote media-track closure must not escape as an unhandled callback error."""
+    conn, driver = built_connection
+    observable = conn.raw_video_stream()
+    track_callback = driver.video.add_track_callback.call_args.args[0]
+    track = MagicMock()
+    track.recv = AsyncMock(side_effect=MediaStreamError)
+
+    asyncio.run(track_callback(track))
+
+    subscription = observable.subscribe()
+    subscription.dispose()
+
+
+def test_trace_loop_heartbeat_records_delay_and_reschedules() -> None:
+    connection = UnitreeWebRTCConnection.__new__(UnitreeWebRTCConnection)
+    connection.loop = MagicMock()
+    connection.loop.time.side_effect = [10.0, 10.102]
+    connection.loop.is_running.return_value = True
+    connection._trace_heartbeat_interval_sec = 0.1
+    connection._trace_heartbeat_handle = None
+    connection._navigation_trace = MagicMock()
+    connection._navigation_trace.accepts.return_value = True
+
+    connection._start_trace_loop_heartbeat()
+    first_call = connection.loop.call_at.call_args_list[0]
+    assert first_call.args[0] == pytest.approx(10.1)
+
+    connection._trace_loop_heartbeat(10.1)
+
+    event, fields = connection._navigation_trace.record.call_args.args
+    assert event == "webrtc_loop_heartbeat"
+    assert fields["delay_ns"] == pytest.approx(2_000_000, abs=1)
+    assert connection.loop.call_at.call_args_list[1].args[0] == pytest.approx(10.202)
 
 
 def test_move_uses_wireless_controller_joystick_backend(

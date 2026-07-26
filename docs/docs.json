@@ -43,6 +43,7 @@
           "usage/transforms",
           "usage/visualization",
           "usage/cli",
+          "usage/navigation-diagnostics",
           "usage/python-api",
           "usage/camera_calibration",
           "usage/native_modules",

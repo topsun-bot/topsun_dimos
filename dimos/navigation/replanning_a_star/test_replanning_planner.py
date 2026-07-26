@@ -201,3 +201,27 @@ class TestGlobalPlannerGoalHandling:
         assert planner._replanning_enabled is False
         planner.set_replanning_enabled(True)
         assert planner._replanning_enabled is True
+
+    def test_goal_arriving_during_shutdown_is_ignored(self, planner: "MagicMock") -> None:
+        planner._stop_planner.set()
+        goal = _make_pose(1.0, 0.0)
+
+        with patch.object(planner, "_plan_path") as plan_path:
+            planner.handle_goal_request(goal)
+
+        assert planner._current_goal is None
+        plan_path.assert_not_called()
+
+    def test_goal_cancelled_during_plan_does_not_assert(self, planner: "MagicMock") -> None:
+        planner._current_odom = _make_pose(0.0, 0.0)
+        planner._current_goal = _make_pose(1.0, 0.0)
+
+        def cancel_during_shutdown(**_kwargs: object) -> None:
+            planner._current_goal = None
+            planner._stop_planner.set()
+
+        planner.cancel_goal = cancel_during_shutdown
+
+        planner._plan_path("shutdown_race")
+
+        planner._local_planner.start_planning.assert_not_called()

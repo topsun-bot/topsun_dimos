@@ -15,7 +15,7 @@
 from enum import Enum
 from importlib import resources
 import sys
-from threading import Thread
+from threading import Event, Thread
 import time
 from typing import Any, Protocol
 
@@ -42,6 +42,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.navigation.diagnostics.sink import TraceSink, isolate_trace_failure
 from dimos.robot.unitree.connection import UnitreeWebRTCConnection
 from dimos.robot.unitree.type.lowstate import LowStateMsg
 from dimos.spec.perception import Camera, Pointcloud
@@ -124,6 +125,7 @@ def make_connection(
     ip: str | None,
     cfg: GlobalConfig,
     aes_128_key: str | None = None,
+    trace_sink: TraceSink | None = None,
 ) -> Go2ConnectionProtocol:
     # 第一级先按 replay / simulator / 真机选择后端. 真机 WebRTC 再按
     # unitree_webrtc_method 分成 Remote 和 LocalSTA, 上层 GO2Connection
@@ -143,9 +145,21 @@ def make_connection(
         return DimSimConnection(cfg)
     elif connection_type == "webrtc":
         method = (cfg.unitree_webrtc_method or "local").strip().lower()
+        has_trace_config = hasattr(cfg, "navigation_trace_roi_interval_sec")
+        trace_roi_interval_sec = float(getattr(cfg, "navigation_trace_roi_interval_sec", 5.0))
         if method in ("remote", "4g", "sta-t"):
             # 4G / STA-T 走 Unitree 云信令. 这里不传 robot_ip, 也不会用
             # LocalSTA 的 AES key 做握手; region 决定中国区或海外区 API.
+            if not has_trace_config and trace_sink is None:
+                return UnitreeWebRTCConnection(
+                    ip=None,
+                    aes_128_key=aes_128_key,
+                    connection_method="remote",
+                    username=cfg.unitree_username,
+                    password=cfg.unitree_password,
+                    serial_number=cfg.unitree_serial,
+                    region=cfg.unitree_region or "cn",
+                )
             return UnitreeWebRTCConnection(
                 ip=None,
                 aes_128_key=aes_128_key,
@@ -154,10 +168,19 @@ def make_connection(
                 password=cfg.unitree_password,
                 serial_number=cfg.unitree_serial,
                 region=cfg.unitree_region or "cn",
+                trace_sink=trace_sink,
+                trace_roi_interval_sec=trace_roi_interval_sec,
             )
         # 没有显式选择 Remote 就保持历史 LocalSTA 行为, 防止旧部署被改道.
         assert ip is not None, "IP address must be provided for LocalSTA WebRTC"
-        return UnitreeWebRTCConnection(ip, aes_128_key=aes_128_key)
+        if not has_trace_config and trace_sink is None:
+            return UnitreeWebRTCConnection(ip, aes_128_key=aes_128_key)
+        return UnitreeWebRTCConnection(
+            ip,
+            aes_128_key=aes_128_key,
+            trace_sink=trace_sink,
+            trace_roi_interval_sec=trace_roi_interval_sec,
+        )
     else:
         raise ValueError(f"Unknown simulator {cfg.simulation!r}. Choose from: mujoco, dimsim")
 
@@ -188,6 +211,16 @@ class ReplayConnection(UnitreeWebRTCConnection, CompositeResource):
 
     def start(self) -> None:
         pass
+
+    def stop(self) -> None:
+        # GO2Connection must dispose its stream subscriptions before closing
+        # the SQLite store.  UnitreeWebRTCConnection.stop() is not applicable:
+        # replay intentionally has no WebRTC loop/data-channel members.
+        pass
+
+    def close_store(self) -> None:
+        """Dispose the replay store after all scheduled streams are unsubscribed."""
+        CompositeResource.stop(self)
 
     def standup(self) -> bool:
         return True
@@ -268,8 +301,12 @@ class GO2Connection(Module, Camera, Pointcloud):
     connection: Go2ConnectionProtocol
     camera_info_static: CameraInfo = _camera_info_static()
     _camera_info_thread: Thread | None = None
+    _camera_info_stop: Event
     _latest_video_frame: Image | None = None
     _latest_lowstate: LowStateMsg | None = None
+    _navigation_trace: TraceSink
+    _trace_last_lowstate_ns: int
+    _go2_stop_started: bool
 
     @classmethod
     def rerun_views(cls):  # type: ignore[no-untyped-def]
@@ -283,10 +320,21 @@ class GO2Connection(Module, Camera, Pointcloud):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._camera_info_stop = Event()
+        self._go2_stop_started = False
+        self._navigation_trace = TraceSink("connection", config=self.config.g)
+        self._trace_last_lowstate_ns = 0
         # 构造底层 Resource 时已经同步完成 WebRTC 建连和 DataChannel 验证.
-        self.connection = make_connection(
-            self.config.ip, self.config.g, aes_128_key=self.config.aes_128_key
-        )
+        try:
+            self.connection = make_connection(
+                self.config.ip,
+                self.config.g,
+                aes_128_key=self.config.aes_128_key,
+                trace_sink=self._navigation_trace,
+            )
+        except Exception:
+            self._navigation_trace.close()
+            raise
 
         if hasattr(self.connection, "camera_info_static"):
             self.camera_info_static = self.connection.camera_info_static
@@ -296,6 +344,7 @@ class GO2Connection(Module, Camera, Pointcloud):
         super().start()
         if not hasattr(self, "connection"):
             return
+        self._camera_info_stop.clear()
         self.connection.start()
 
         def onimage(image: Image) -> None:
@@ -323,17 +372,26 @@ class GO2Connection(Module, Camera, Pointcloud):
 
         # 重要安全行为: unitree-go2 blueprint 启动后会自动站立并进入
         # BalanceStand, 不是只建立只读数据连接. 真机启动前必须清空周围空间.
-        self.standup()
+        standup_result = self.standup()
         time.sleep(3)
-        self.connection.balance_stand()
+        balance_stand_result = self.connection.balance_stand()
 
+        rage_mode_result: bool | None = None
         if self.config.mode == Go2Mode.RAGE:
-            self.connection.set_rage_mode(True)
+            rage_mode_result = self.connection.set_rage_mode(True)
 
         self.connection.set_obstacle_avoidance(self.config.g.obstacle_avoidance)
+        self._trace_avoidance_configuration(
+            "obstacles_avoid",
+            self.config.g.obstacle_avoidance,
+            request_completed=True,
+            acknowledged_value=None,
+        )
         # Toggle Unitree's hidden FreeAvoid sport-mode AI obstacle-avoidance
         # (SportClient::FreeAvoid, sport api_id=2048). See `free_avoid` on the
         # underlying connection for details.
+        free_avoid_ack: bool | None = None
+        free_avoid_error: Exception | None = None
         try:
             free_avoid_ack = self.connection.free_avoid(self.config.g.free_avoid)
             logger.info(
@@ -341,20 +399,71 @@ class GO2Connection(Module, Camera, Pointcloud):
                 f"{'enabled' if self.config.g.free_avoid else 'disabled'}, "
                 f"ack={free_avoid_ack}"
             )
+            self._trace_avoidance_configuration(
+                "free_avoid",
+                self.config.g.free_avoid,
+                request_completed=True,
+                acknowledged_value=free_avoid_ack,
+            )
         except Exception as e:
+            free_avoid_error = e
             logger.warning(f"FreeAvoid toggle failed (non-fatal): {e}")
+            self._trace_avoidance_configuration(
+                "free_avoid",
+                self.config.g.free_avoid,
+                request_completed=False,
+                acknowledged_value=None,
+                error=e,
+            )
+        self._trace_robot_startup_state(
+            standup_result=standup_result,
+            balance_stand_result=balance_stand_result,
+            rage_mode_result=rage_mode_result,
+            free_avoid_ack=free_avoid_ack,
+            free_avoid_error=free_avoid_error,
+        )
 
     @rpc
     def stop(self) -> None:
-        self.liedown()
+        # ModuleCoordinator 会先 RPC stop，worker 退出时还可能再次调用 stop。
+        # 第二次不能再向已经停止的 asyncio loop 提交 StandDown RPC。
+        if getattr(self, "_go2_stop_started", False):
+            return
+        self._go2_stop_started = True
 
-        if self.connection:
-            self.connection.stop()
+        # 每一步都独立 best-effort：云端可能先断开 DataChannel，此时
+        # StandDown 会失败，但订阅、WebRTC、worker 和 trace 仍必须全部清理。
+        try:
+            self.liedown()
+        except Exception as exc:
+            logger.warning("Failed to send StandDown while stopping Go2: %s", exc)
+
+        self._camera_info_stop.set()
+
+        try:
+            # 先释放视频/点云订阅，让 finally_action 能在 WebRTC loop
+            # 仍存活时关闭媒体通道。
+            super().stop()
+        except Exception as exc:
+            logger.warning("Failed to dispose Go2 module subscriptions: %s", exc)
+
+        try:
+            if self.connection:
+                self.connection.stop()
+        except Exception as exc:
+            logger.warning("Failed to stop Go2 connection: %s", exc)
 
         if self._camera_info_thread and self._camera_info_thread.is_alive():
             self._camera_info_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+            if self._camera_info_thread.is_alive():
+                logger.warning("Go2 camera-info thread did not stop in time")
 
-        super().stop()
+        if isinstance(self.connection, ReplayConnection):
+            try:
+                self.connection.close_store()
+            except Exception as exc:
+                logger.warning("Failed to close Go2 replay store: %s", exc)
+        self._navigation_trace.close()
 
     @classmethod
     def _odom_to_tf(cls, odom: PoseStamped) -> list[Transform]:
@@ -386,16 +495,22 @@ class GO2Connection(Module, Camera, Pointcloud):
         self.tf.publish(*transforms)
         if self.odom.transport:
             self.odom.publish(msg)
+        self._trace_published_odom(msg)
 
     def publish_camera_info(self) -> None:
-        while True:
+        while not self._camera_info_stop.wait(timeout=1.0):
             self.camera_info.publish(self.camera_info_static)
-            time.sleep(1.0)
 
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         """Send movement command to robot."""
-        return self.connection.move(twist, duration)
+        try:
+            result = self.connection.move(twist, duration)
+        except Exception as exc:
+            self._trace_move_result(twist, duration, result=None, error=exc)
+            raise
+        self._trace_move_result(twist, duration, result=result)
+        return result
 
     @rpc
     def standup(self) -> bool:
@@ -432,11 +547,191 @@ class GO2Connection(Module, Camera, Pointcloud):
         time.sleep(0.3)
         result = self.connection.free_avoid(enabled)
         logger.info(f"FreeAvoid {'enabled' if enabled else 'disabled'}, ack={result}")
+        self._trace_avoidance_configuration(
+            "free_avoid",
+            enabled,
+            request_completed=True,
+            acknowledged_value=result,
+        )
         return result
 
     def _on_lowstate(self, msg: LowStateMsg) -> None:
         """Cache the latest low-level state push (battery, IMU, motors, etc.)."""
         self._latest_lowstate = msg
+        self._trace_lowstate(msg)
+
+    def _trace_published_odom(self, msg: PoseStamped) -> None:
+        if not self._navigation_trace.accepts("full"):
+            return
+        try:
+            self._navigation_trace.record(
+                "connection_odom_published",
+                {
+                    "host_assigned_ts": float(msg.ts),
+                    "frame_id": msg.frame_id,
+                    "pose": _pose_trace_fields(msg),
+                    "ground_truth": False,
+                    "estimate_kind": "unitree_lidar_odometry",
+                    "tf_publish_completed": True,
+                    "odom_publish_attempted": bool(self.odom.transport),
+                },
+                estimated_bytes=1024,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+    def _trace_move_result(
+        self,
+        twist: Twist,
+        duration: float,
+        *,
+        result: bool | None,
+        error: Exception | None = None,
+    ) -> None:
+        if not self._navigation_trace.accepts("full"):
+            return
+        try:
+            fields: dict[str, object] = {
+                "twist": _twist_trace_fields(twist),
+                "duration_sec": duration,
+                "connection_returned": result,
+                "send_path_completed": result is not None,
+                "robot_execution_ack": False,
+                "robot_execution_observed": False,
+            }
+            if error is not None:
+                fields["error_type"] = type(error).__name__
+                fields["error_message"] = str(error)
+            self._navigation_trace.record(
+                "connection_move_completed",
+                fields,
+                estimated_bytes=896,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+    def _trace_avoidance_configuration(
+        self,
+        switch_name: str,
+        requested_enabled: bool,
+        *,
+        request_completed: bool,
+        acknowledged_value: bool | None,
+        error: Exception | None = None,
+    ) -> None:
+        if not self._navigation_trace.accepts("summary"):
+            return
+        try:
+            fields: dict[str, object] = {
+                "switch_name": switch_name,
+                "requested_enabled": requested_enabled,
+                "request_completed": request_completed,
+                "ack_observed": acknowledged_value is not None,
+                "acknowledged_value": acknowledged_value,
+            }
+            if error is not None:
+                fields["error_type"] = type(error).__name__
+                fields["error_message"] = str(error)
+            self._navigation_trace.record(
+                "go2_avoidance_configuration",
+                fields,
+                estimated_bytes=768,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+    def _trace_robot_startup_state(
+        self,
+        *,
+        standup_result: bool,
+        balance_stand_result: bool,
+        rage_mode_result: bool | None,
+        free_avoid_ack: bool | None,
+        free_avoid_error: Exception | None,
+    ) -> None:
+        if not self._navigation_trace.accepts("summary"):
+            return
+        try:
+            network_status: dict[str, object] = {
+                "connection_type": self.config.g.unitree_connection_type,
+                "connection_method_requested": self.config.g.unitree_webrtc_method,
+            }
+            if isinstance(self.connection, UnitreeWebRTCConnection) and hasattr(
+                self.connection, "_connection_method"
+            ):
+                network_status["connection_method_effective"] = getattr(
+                    self.connection,
+                    "_connection_method",
+                    None,
+                )
+                if hasattr(self.connection, "_datachannel_state"):
+                    network_status["datachannel"] = self.connection._datachannel_state()
+            self._navigation_trace.record(
+                "robot_startup_state",
+                {
+                    "standup": {
+                        "request_completed": True,
+                        "acknowledged_value": standup_result,
+                    },
+                    "balance_stand": {
+                        "request_completed": True,
+                        "acknowledged_value": balance_stand_result,
+                    },
+                    "motion_mode": {
+                        "requested": self.config.motion_mode,
+                        "ack_observed": False,
+                    },
+                    "rage_mode": {
+                        "requested": self.config.mode == Go2Mode.RAGE,
+                        "ack_observed": rage_mode_result is not None,
+                        "acknowledged_value": rage_mode_result,
+                    },
+                    "obstacle_avoidance": {
+                        "requested_enabled": self.config.g.obstacle_avoidance,
+                        "request_completed": True,
+                        "ack_observed": False,
+                        "detail_event": "unitree_avoidance_switch_response",
+                    },
+                    "free_avoid": {
+                        "requested_enabled": self.config.g.free_avoid,
+                        "request_completed": free_avoid_error is None,
+                        "ack_observed": free_avoid_ack is not None,
+                        "acknowledged_value": free_avoid_ack,
+                        "error_type": (
+                            type(free_avoid_error).__name__
+                            if free_avoid_error is not None
+                            else None
+                        ),
+                    },
+                    "network_status": network_status,
+                },
+                estimated_bytes=1536,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+    def _trace_lowstate(self, msg: LowStateMsg) -> None:
+        if not self._navigation_trace.accepts("full"):
+            return
+        try:
+            sample_hz = self.config.g.navigation_trace_lowstate_hz
+            if sample_hz <= 0:
+                return
+            now_ns = time.monotonic_ns()
+            interval_ns = max(1, int(1_000_000_000 / sample_hz))
+            if now_ns - self._trace_last_lowstate_ns < interval_ns:
+                return
+            self._trace_last_lowstate_ns = now_ns
+            self._navigation_trace.record(
+                "go2_lowstate_summary",
+                {
+                    "host_rx_monotonic_ns": now_ns,
+                    "summary": _lowstate_trace_fields(msg),
+                },
+                estimated_bytes=896,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
 
     @skill
     def get_battery_soc(self) -> int | None:
@@ -473,3 +768,45 @@ class GO2Connection(Module, Camera, Pointcloud):
         Returns None if no frame has been captured yet.
         """
         return self._latest_video_frame
+
+
+def _twist_trace_fields(twist: Twist) -> dict[str, float]:
+    return {
+        "linear_x": float(twist.linear.x),
+        "linear_y": float(twist.linear.y),
+        "linear_z": float(twist.linear.z),
+        "angular_x": float(twist.angular.x),
+        "angular_y": float(twist.angular.y),
+        "angular_z": float(twist.angular.z),
+    }
+
+
+def _pose_trace_fields(pose: PoseStamped) -> dict[str, object]:
+    return {
+        "position": {
+            "x": float(pose.position.x),
+            "y": float(pose.position.y),
+            "z": float(pose.position.z),
+        },
+        "orientation_xyzw": [
+            float(pose.orientation.x),
+            float(pose.orientation.y),
+            float(pose.orientation.z),
+            float(pose.orientation.w),
+        ],
+    }
+
+
+def _lowstate_trace_fields(msg: LowStateMsg) -> dict[str, object]:
+    data = msg.get("data", {})
+    bms = data.get("bms_state", {})
+    imu = data.get("imu_state", {})
+    return {
+        "topic": msg.get("topic"),
+        "battery_soc": bms.get("soc"),
+        "battery_current": bms.get("current"),
+        "power_v": data.get("power_v"),
+        "temperature_ntc1": data.get("temperature_ntc1"),
+        "imu_rpy": imu.get("rpy"),
+        "foot_force": data.get("foot_force"),
+    }

@@ -24,8 +24,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from dimos.core.global_config import GlobalConfig
+from dimos.core.module import Module
 from dimos.robot.unitree.go2 import connection as go2_conn
-from dimos.robot.unitree.go2.connection import ConnectionConfig
+from dimos.robot.unitree.go2.connection import ConnectionConfig, GO2Connection, ReplayConnection
 
 
 @pytest.fixture
@@ -70,3 +71,43 @@ def test_connection_config_aes_key_defaults_from_global_config() -> None:
     """ConnectionConfig.aes_128_key defaults from GlobalConfig.unitree_aes_128_key."""
     g = GlobalConfig(robot_ip="127.0.0.1", unitree_aes_128_key="dd" * 16)
     assert ConnectionConfig(g=g).aes_128_key == "dd" * 16
+
+
+def test_replay_connection_defers_store_disposal_until_subscriptions_stop() -> None:
+    """Replay store closes only after the owner has cancelled subscriptions."""
+    connection = ReplayConnection(dataset="unused")
+    disposable = MagicMock()
+    connection.register_disposable(disposable)
+
+    connection.stop()
+    disposable.dispose.assert_not_called()
+    connection.close_store()
+
+    disposable.dispose.assert_called_once_with()
+
+
+def test_go2_stop_cleans_up_after_stand_down_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-closed DataChannel must not abort module and trace cleanup."""
+    module = GO2Connection.__new__(GO2Connection)
+    module.connection = MagicMock()
+    module.connection.liedown.side_effect = RuntimeError("Data channel is not open")
+    module._camera_info_stop = MagicMock()
+    module._camera_info_thread = None
+    module._navigation_trace = MagicMock()
+    module._go2_stop_started = False
+    module_stop = MagicMock()
+    monkeypatch.setattr(Module, "stop", module_stop)
+
+    GO2Connection.stop(module)
+
+    module._camera_info_stop.set.assert_called_once_with()
+    module_stop.assert_called_once_with()
+    module.connection.stop.assert_called_once_with()
+    module._navigation_trace.close.assert_called_once_with()
+
+    GO2Connection.stop(module)
+
+    module.connection.liedown.assert_called_once_with()
+    module.connection.stop.assert_called_once_with()

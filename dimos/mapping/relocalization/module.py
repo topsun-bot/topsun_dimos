@@ -36,6 +36,7 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.navigation.diagnostics.sink import TraceSink, isolate_trace_failure
 from dimos.utils.data import resolve_named_path
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import backpressure
@@ -77,7 +78,7 @@ class Config(ModuleConfig):
         None  # e.g. `-o relocalizationmodule.map_file=go2_hongkong_office_twopass_map`
     )
     # 快速 ICP 总开关；关闭后所有重定位都保持原全局 RANSAC 流程。
-    fast_icp_enabled: bool = True
+    fast_icp_enabled: bool = False
     # 有跨运行 JSON 初值时，1 万点即可开始本次运行的第一次快速匹配。
     cached_start_min_local_points: int = 10_000
     # 快速 ICP 的最大对应距离，单位为米。
@@ -88,7 +89,7 @@ class Config(ModuleConfig):
     # 是否把加载的原始 premap 也发布出去，主要用于调试/可视化。
     publish_loaded_map: bool = False
     # relocalize() 返回的匹配质量阈值；低于该值说明候选配准不可信。
-    fitness_threshold: float = 0.75
+    fitness_threshold: float = 0.8
     # merge 时是否用列雕刻：local 当前观测覆盖 premap 的同 XY 列旧点。
     use_carving: bool = True
     # 启动时是否读取上一次独立运行保存的 latest.json。
@@ -159,6 +160,15 @@ class RelocalizationModule(Module):
         self._json_cache_meta: dict[str, Any] | None = None
         # cached_start 本轮已尝试 fast ICP 次数，仅用于诊断日志。
         self._cached_start_attempts = 0
+        self._navigation_trace = TraceSink("relocalization", config=self.config.g)
+        self._trace_attempt_seq = 0
+        self._trace_transform_version = 0
+        self._trace_merged_map_seq = 0
+        self._trace_source_ts: float | None = None
+        self._trace_last_candidate: tuple[np.ndarray, float, int, str] | None = None
+        self._trace_last_published_T_map_world: np.ndarray | None = None
+        self._trace_last_global_map_roi_ns = 0
+        self._trace_last_merged_map_roi_ns = 0
 
     @rpc
     def start(self) -> None:
@@ -225,6 +235,11 @@ class RelocalizationModule(Module):
             f"premap_pts={premap_pts} loaded_map.frame_id={self._premap.frame_id!r}"
         )
         self._log_relocalization_config()
+
+    @rpc
+    def stop(self) -> None:
+        super().stop()
+        self._navigation_trace.close()
 
     @staticmethod
     def _sanitize_map_key(map_file: str) -> str:
@@ -587,6 +602,7 @@ class RelocalizationModule(Module):
                 n_pts,
                 match_mode,
             )
+        self._trace_relocalization_published(tf)
 
     @staticmethod
     def _tf_from_T_map_world(T_map_world: np.ndarray) -> Transform:
@@ -625,29 +641,174 @@ class RelocalizationModule(Module):
                 n_pts,
                 match_mode,
             )
+        self._trace_last_candidate = (
+            self._last_T_map_world,
+            fitness,
+            n_pts,
+            match_mode,
+        )
+        self._trace_relocalization_candidate(
+            self._last_T_map_world,
+            world_to_map_tf,
+            fitness,
+            n_pts,
+            match_mode,
+        )
+
+    def _trace_relocalization_attempt(
+        self,
+        msg: PointCloud2,
+        *,
+        requested_mode: str,
+        started_ns: int | None,
+        succeeded: bool,
+    ) -> None:
+        if not self._navigation_trace.accepts("summary"):
+            return
+        try:
+            self._trace_attempt_seq += 1
+            finished_ns = time.monotonic_ns()
+            fields: dict[str, object] = {
+                "attempt_sequence": self._trace_attempt_seq,
+                "requested_mode": requested_mode,
+                "source_ts": float(msg.ts),
+                "local_point_count": len(msg),
+                "required_local_points": self._required_local_points(),
+                "premap_point_count": self._premap_point_count(),
+                "succeeded": succeeded,
+                "fast_icp_failure_count": self._fast_icp_fail_count,
+                "cached_start_attempts": self._cached_start_attempts,
+            }
+            if started_ns is not None:
+                fields["duration_ns"] = max(0, finished_ns - started_ns)
+            self._navigation_trace.record(
+                "relocalization_attempt_completed",
+                fields,
+                estimated_bytes=1024,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+    def _trace_relocalization_candidate(
+        self,
+        T_map_world: np.ndarray,
+        world_to_map_tf: Transform,
+        fitness: float,
+        n_pts: int,
+        match_mode: str,
+    ) -> None:
+        if not self._navigation_trace.accepts("summary"):
+            return
+        try:
+            fields: dict[str, object] = {
+                "attempt_sequence": self._trace_attempt_seq + 1,
+                "match_mode": match_mode,
+                "source_ts": self._trace_source_ts,
+                "fitness": fitness,
+                "local_point_count": n_pts,
+                "T_map_world": _matrix_trace_fields(T_map_world),
+                "T_world_map": _matrix_trace_fields(world_to_map_tf.to_matrix()),
+                "candidate_accepted": True,
+            }
+            if self._json_init_T_map_world is not None:
+                trans_delta_m, yaw_delta_deg = self._pose_delta_m_and_yaw_deg(
+                    T_map_world,
+                    self._json_init_T_map_world,
+                )
+                fields["json_initial_delta"] = {
+                    "translation_m": trans_delta_m,
+                    "yaw_deg": yaw_delta_deg,
+                }
+            self._navigation_trace.record(
+                "relocalization_candidate_accepted",
+                fields,
+                estimated_bytes=2048,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+    def _trace_relocalization_published(self, tf: Transform) -> None:
+        if not self._navigation_trace.accepts("summary"):
+            return
+        try:
+            self._trace_transform_version += 1
+            candidate = self._trace_last_candidate
+            fields: dict[str, object] = {
+                "transform_version": self._trace_transform_version,
+                "source_ts": self._trace_source_ts,
+                "publish_completed": True,
+                "frame_id": tf.frame_id,
+                "child_frame_id": tf.child_frame_id,
+                "T_world_map": _matrix_trace_fields(tf.to_matrix()),
+            }
+            if candidate is not None:
+                T_map_world, fitness, n_pts, match_mode = candidate
+                fields.update(
+                    {
+                        "fitness": fitness,
+                        "local_point_count": n_pts,
+                        "match_mode": match_mode,
+                        "T_map_world": _matrix_trace_fields(T_map_world),
+                    }
+                )
+                previous = self._trace_last_published_T_map_world
+                if previous is not None:
+                    trans_delta_m, yaw_delta_deg = self._pose_delta_m_and_yaw_deg(
+                        T_map_world,
+                        previous,
+                    )
+                    fields["previous_version_delta"] = {
+                        "translation_m": trans_delta_m,
+                        "yaw_deg": yaw_delta_deg,
+                    }
+                self._trace_last_published_T_map_world = T_map_world
+            else:
+                fields["match_mode"] = "forced_or_unknown"
+            self._navigation_trace.record(
+                "relocalization_tf_published",
+                fields,
+                estimated_bytes=2304,
+            )
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
 
     def _try_relocalize(self, msg: PointCloud2) -> Transform | None:
         # start() 已加载 premap 后才会注册本回调；这里用 assert 保护类型假设。
         assert self._premap is not None
 
-        # 有合法缓存且策略允许时，先走不含 FPFH/RANSAC 的快速 ICP。
-        if self._can_try_fast_icp():
-            fast_tf = self._try_fast_icp_relocalize(msg)
-            if fast_tf is not None:
-                return fast_tf
-            # 现场可关闭 fallback，用于单独测量快配成功率和耗时。
-            if not self.config.fast_icp_fallback_global:
-                return None
-            # 快配只需 1 万点，但原全局算法仍需 5 万点；不足时延后 fallback。
-            if len(msg) < self.config.min_local_points:
-                logger.warning(
-                    f"global fallback deferred: n_pts={len(msg)} "
-                    f"< min_local_points={self.config.min_local_points}"
-                )
-                return None
+        trace_enabled = self._navigation_trace.accepts("summary")
+        requested_mode = self._current_relocalization_mode() if trace_enabled else "off"
+        started_ns = time.monotonic_ns() if trace_enabled else None
+        self._trace_source_ts = float(msg.ts) if trace_enabled else None
+        result: Transform | None = None
+        try:
+            # 有合法缓存且策略允许时，先走不含 FPFH/RANSAC 的快速 ICP。
+            if self._can_try_fast_icp():
+                fast_tf = self._try_fast_icp_relocalize(msg)
+                if fast_tf is not None:
+                    result = fast_tf
+                    return result
+                # 现场可关闭 fallback，用于单独测量快配成功率和耗时。
+                if not self.config.fast_icp_fallback_global:
+                    return None
+                # 快配只需 1 万点，但原全局算法仍需 5 万点；不足时延后 fallback。
+                if len(msg) < self.config.min_local_points:
+                    logger.warning(
+                        f"global fallback deferred: n_pts={len(msg)} "
+                        f"< min_local_points={self.config.min_local_points}"
+                    )
+                    return None
 
-        # 没有缓存、后续模式为 global，或快配失败后的 fallback 都走原算法。
-        return self._try_global_relocalize(msg)
+            # 没有缓存、后续模式为 global，或快配失败后的 fallback 都走原算法。
+            result = self._try_global_relocalize(msg)
+            return result
+        finally:
+            self._trace_relocalization_attempt(
+                msg,
+                requested_mode=requested_mode,
+                started_ns=started_ns,
+                succeeded=result is not None,
+            )
 
     def _try_fast_icp_relocalize(self, msg: PointCloud2) -> Transform | None:
         # 调用前由 _can_try_fast_icp 保证 premap 和初始矩阵都已存在。
@@ -847,6 +1008,7 @@ class RelocalizationModule(Module):
 
     def _on_merge_input(self, pair: tuple[PointCloud2, Transform | None]) -> None:
         local, tf = pair
+        self._trace_pointcloud_evidence("global_map", local)
         # 没有 premap 时无法合并旧地图，直接返回。
         if self._premap is None:
             return
@@ -861,15 +1023,110 @@ class RelocalizationModule(Module):
         if self.config.use_carving:
             # 临时 VoxelGrid 只用于本次合并，frame_id 跟 local 保持一致。
             grid = VoxelGrid(carve_columns=True, frame_id=local.frame_id, show_startup_log=False)
+            merged: PointCloud2 | None = None
             try:
                 # 先放 premap，再放 local；local 后插入，才能覆盖同列旧结构。
                 grid.add_frame(premap_in_world)
                 grid.add_frame(local)
                 # 导出合并后的体素点云，并发布给 CostMapper 优先使用。
-                self.merged_map.publish(grid.get_global_pointcloud2())
+                merged = grid.get_global_pointcloud2()
+                self.merged_map.publish(merged)
             finally:
                 # VoxelGrid 可能占 GPU/CPU 资源，即使 publish 出错也要释放。
                 grid.dispose()
+            self._trace_merged_map(local, merged, use_carving=True)
         else:
             # 非 carving 模式只做点云拼接，速度快但不会清理重叠列的旧点。
-            self.merged_map.publish(local + premap_in_world)
+            merged = local + premap_in_world
+            self.merged_map.publish(merged)
+            self._trace_merged_map(local, merged, use_carving=False)
+
+    def _trace_merged_map(
+        self,
+        local: PointCloud2,
+        merged: PointCloud2,
+        *,
+        use_carving: bool,
+    ) -> None:
+        if not self._navigation_trace.accepts("summary"):
+            return
+        try:
+            self._trace_merged_map_seq += 1
+            self._navigation_trace.record(
+                "merged_map_published",
+                {
+                    "merged_map_sequence": self._trace_merged_map_seq,
+                    "transform_version": self._trace_transform_version,
+                    "local_source_ts": float(local.ts),
+                    "merged_source_ts": float(merged.ts),
+                    "local_point_count": len(local),
+                    "premap_point_count": self._premap_point_count(),
+                    "merged_point_count": len(merged),
+                    "frame_id": merged.frame_id,
+                    "use_carving": use_carving,
+                    "publish_completed": True,
+                    "planner_association": "UNKNOWN",
+                },
+                estimated_bytes=1024,
+            )
+            self._trace_pointcloud_evidence("merged_map", merged)
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+    def _trace_pointcloud_evidence(
+        self,
+        source_kind: str,
+        pointcloud: PointCloud2,
+    ) -> None:
+        if not self._navigation_trace.accepts("full"):
+            return
+        try:
+            now_ns = time.monotonic_ns()
+            self._navigation_trace.record(
+                "mapping_pointcloud_observed",
+                {
+                    "source_kind": source_kind,
+                    "source_ts": float(pointcloud.ts),
+                    "host_observed_monotonic_ns": now_ns,
+                    "frame_id": pointcloud.frame_id,
+                    "point_count": len(pointcloud),
+                },
+                estimated_bytes=768,
+            )
+            if not self._navigation_trace.accepts("forensic"):
+                return
+            last_ns = (
+                self._trace_last_global_map_roi_ns
+                if source_kind == "global_map"
+                else self._trace_last_merged_map_roi_ns
+            )
+            interval_ns = int(
+                max(5.0, self.config.g.navigation_trace_roi_interval_sec) * 1_000_000_000
+            )
+            if now_ns - last_ns < interval_ns:
+                return
+            accepted = self._navigation_trace.record_blob(
+                "pointcloud",
+                pointcloud.points().numpy(),  # type: ignore[no-untyped-call]
+                {
+                    "source_kind": source_kind,
+                    "source_ts": float(pointcloud.ts),
+                    "frame_id": pointcloud.frame_id,
+                    "roi_bounds_m": [-5.0, 5.0, -5.0, 5.0, -2.0, 2.0],
+                    "voxel_size_m": 0.1,
+                    "maximum_sample_hz": 0.2,
+                    "transform_version": self._trace_transform_version,
+                },
+                stem=f"pointcloud-roi-{source_kind}",
+            )
+            if accepted:
+                if source_kind == "global_map":
+                    self._trace_last_global_map_roi_ns = now_ns
+                else:
+                    self._trace_last_merged_map_roi_ns = now_ns
+        except Exception as exc:
+            isolate_trace_failure(self._navigation_trace, exc)
+
+
+def _matrix_trace_fields(matrix: np.ndarray) -> list[list[float]]:
+    return np.asarray(matrix, dtype=float).reshape(4, 4).tolist()

@@ -89,16 +89,26 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
             Disposable(self.global_costmap.subscribe(self._planner.handle_global_costmap))
         )
         self.register_disposable(
-            Disposable(self.goal_request.subscribe(self._planner.handle_goal_request))
+            Disposable(
+                self.goal_request.subscribe(
+                    lambda msg: self._planner.handle_goal_request(msg, entry_source="goal_request")
+                )
+            )
         )
         self.register_disposable(
-            Disposable(self.target.subscribe(self._planner.handle_goal_request))
+            Disposable(
+                self.target.subscribe(
+                    lambda msg: self._planner.handle_goal_request(msg, entry_source="target")
+                )
+            )
         )
 
         self.register_disposable(
             Disposable(
                 self.clicked_point.subscribe(
-                    lambda pt: self._planner.handle_goal_request(pt.to_pose_stamped())
+                    lambda pt: self._planner.handle_goal_request(
+                        pt.to_pose_stamped(), entry_source="clicked_point"
+                    )
                 )
             )
         )
@@ -134,7 +144,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
 
     @rpc
     def set_goal(self, goal: PoseStamped) -> bool:
-        self._planner.handle_goal_request(goal)
+        self._planner.handle_goal_request(goal, entry_source="rpc_set_goal")
         return True
 
     @rpc

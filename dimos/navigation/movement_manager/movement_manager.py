@@ -34,6 +34,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.navigation.diagnostics.sink import TraceSink, isolate_trace_failure
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -67,6 +68,7 @@ class MovementManager(Module):
         self._lock = threading.Lock()
         self._teleop_active = False
         self._last_teleop_time = 0.0
+        self._trace = TraceSink("mux", config=self.config.g)
 
     @rpc
     def start(self) -> None:
@@ -80,6 +82,7 @@ class MovementManager(Module):
         with self._lock:
             self._teleop_active = False
         super().stop()
+        self._trace.close()
 
     def _on_click(self, msg: PointStamped) -> None:
         if not all(math.isfinite(v) for v in (msg.x, msg.y, msg.z)):
@@ -110,14 +113,27 @@ class MovementManager(Module):
         logger.debug("Navigation cancelled — waiting for new goal")
 
     def _on_nav(self, msg: Twist) -> None:
+        suppressed_elapsed: float | None = None
         with self._lock:
             if self._teleop_active:
                 # check if cooldown has expired
                 elapsed = time.monotonic() - self._last_teleop_time
                 if elapsed < self.config.tele_cooldown_sec:
-                    return
-                self._teleop_active = False
-            self.cmd_vel.publish(msg)
+                    suppressed_elapsed = elapsed
+                else:
+                    self._teleop_active = False
+            if suppressed_elapsed is None:
+                self.cmd_vel.publish(msg)
+
+        if suppressed_elapsed is not None:
+            self._trace_mux(
+                "nav_command_suppressed",
+                msg,
+                source="navigation",
+                cooldown_elapsed_sec=suppressed_elapsed,
+            )
+            return
+        self._trace_mux("mux_command_published", msg, source="navigation")
 
     def _on_teleop(self, msg: Twist) -> None:
         with self._lock:
@@ -140,3 +156,48 @@ class MovementManager(Module):
             ),
         )
         self.cmd_vel.publish(scaled)
+        self._trace_mux(
+            "mux_command_published",
+            scaled,
+            source="teleop",
+            input_twist=_twist_fields(msg),
+        )
+
+    def _trace_mux(
+        self,
+        event: str,
+        twist: Twist,
+        *,
+        source: str,
+        cooldown_elapsed_sec: float | None = None,
+        input_twist: dict[str, float] | None = None,
+    ) -> None:
+        if not self._trace.accepts("full"):
+            return
+        try:
+            fields: dict[str, object] = {
+                "source": source,
+                "command_muxed_ts": time.time(),
+                "command_muxed_monotonic_ns": time.monotonic_ns(),
+                "twist": _twist_fields(twist),
+            }
+            if cooldown_elapsed_sec is not None:
+                fields["cooldown_elapsed_sec"] = cooldown_elapsed_sec
+                fields["tele_cooldown_sec"] = self.config.tele_cooldown_sec
+            if input_twist is not None:
+                fields["input_twist"] = input_twist
+                fields["teleop_scaling"] = _twist_fields(self.config.tele_cmd_vel_scaling)
+            self._trace.record(event, fields, estimated_bytes=896)
+        except Exception as exc:
+            isolate_trace_failure(self._trace, exc)
+
+
+def _twist_fields(twist: Twist) -> dict[str, float]:
+    return {
+        "linear_x": float(twist.linear.x),
+        "linear_y": float(twist.linear.y),
+        "linear_z": float(twist.linear.z),
+        "angular_x": float(twist.angular.x),
+        "angular_y": float(twist.angular.y),
+        "angular_z": float(twist.angular.z),
+    }

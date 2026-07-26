@@ -115,6 +115,7 @@ dependencies = [
     "plum-dispatch==2.5.7",
     # Logging
     "structlog>=25.5.0,<26",
+    "orjson>=3.11.7,<4",
     # Core Msgs
     # Contrib variant (superset of opencv-python) because cv2.legacy CSRT
     # trackers (perception/drone) are contrib-only. <5 defers the OpenCV 5

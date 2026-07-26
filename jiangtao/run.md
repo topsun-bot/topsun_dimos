@@ -33,6 +33,66 @@ dimos --robot-ip 192.168.12.1 run unitree-go2
 # 或依赖 .env 里的 ROBOT_IP / UNITREE_AES_128_KEY
 ```
 
+## 4G Remote 重定位导航与诊断日志
+
+原来的真机命令仍然适用，但诊断追踪默认关闭。需要记录导航链路时，在命令前增加 `--navigation-trace-level`：
+
+```bash
+# 账号、密码和序列号只从环境变量读取，不要写入命令或日志
+export UNITREE_WEBRTC_METHOD=remote
+export UNITREE_USERNAME='你的宇树账号'
+export UNITREE_PASSWORD='你的密码'
+export UNITREE_SERIAL='B42D........'
+export UNITREE_REGION=cn
+
+# Gate 3 静止测试：低负载摘要日志
+dimos --viewer none \
+  --navigation-trace-level summary \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region "$UNITREE_REGION" \
+  run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+
+# 低速/路线诊断：完整规划、控制链和 costmap 日志
+# 仅在 summary 静止门禁通过后使用
+dimos --viewer none \
+  --navigation-trace-level full \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region "$UNITREE_REGION" \
+  run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+`summary`/`full` 会自动在本次 run 目录下写入：
+
+```text
+logs/<run-id>/navigation/
+```
+
+停止运行后生成离线报告：
+
+```bash
+dimos status
+dimos nav analyze logs/<run-id>
+```
+
+静止测试可在另一个终端启动只读采集器（不会发布运动指令）：
+
+```bash
+uv run python -m dimos.navigation.diagnostics.static_capture \
+  /tmp/go2-stationary.json --duration-sec 600 --check
+```
+
+原命令不加 `--navigation-trace-level` 时仍能正常运行，但不会创建 `navigation/` 诊断文件。`forensic` 会额外记录点云，须在 `full` 门禁通过后再单独启用。
+
 本机 2026-07-20 验收（4G）：`lidar≈6.9Hz`，`odom≈18Hz`，`color_image≈14Hz`，`global_map` 有输出。
 完整流程见：`jiangtao/plan/2026-07-20-Go2-4G远程WebRTC跨电脑完整测试指南.md`。
 
