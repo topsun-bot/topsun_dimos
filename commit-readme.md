@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 启动默认清空 landmarks / CLIP（new_memory） | `597dc068f` |
 | 导航诊断 trace / `dimos nav analyze` | `0ed24b321` |
 | Go2 4G Remote WebRTC / unitree-go2 remote | `fe4b31a77` |
 | uv.lock 去重 / bugfix §12-13 / free_avoid 默认关 | `94b2cf002` |
@@ -39,6 +40,57 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 597dc068f — fix(memory): default-clear landmarks and CLIP memory on start
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-26 16:50:17 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/core/global_config.py` | `new_memory` 默认改为 `True` |
+| `dimos/perception/detection/door/door_spatial_memory_module.py` | `new_memory=True` 时 start 清空 landmarks.json / snapshots |
+| `dimos/robot/unitree/go2/blueprints/smart/unitree_go2_spatial.py` | landmark 模块传入 `global_config.new_memory` |
+| `dimos/perception/detection/door/test_landmark_memory_dedup.py` | 启动清空 / 保留记忆单测 |
+| `docs/usage/cli.md` / `configuration.md` | 文档默认值同步 |
+| `jiangtao/run.md` | Step 5 说明默认清空与 `--no-new-memory` |
+
+**改进点**
+
+1. 重启后不再误加载旧 odom 坐标系下的 landmarks / CLIP 房间图，避免「视觉像办公室但坐标差 11m」拒航。
+2. 原先 `--new-memory` 只清 Chroma，现已同时清 `landmarks.json`。
+3. 需要跨次保留记忆时显式 `--no-new-memory` 或 `DIMOS_NEW_MEMORY=false`。
+
+**用法**
+
+```bash
+# 默认清空记忆后启动
+dimos --robot-ip 10.10.155.110 run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+
+# 保留上次 landmarks / CLIP
+dimos --no-new-memory --robot-ip 10.10.155.110 \
+  run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module \
+  -o relocalizationmodule.map_file=recording_go2
+```
+
+**回滚**
+
+```bash
+git checkout 52165b6aa -- \
+  dimos/core/global_config.py \
+  dimos/perception/detection/door/door_spatial_memory_module.py \
+  dimos/robot/unitree/go2/blueprints/smart/unitree_go2_spatial.py
+```
+
+---
 
 ### 0ed24b321 — feat(nav): add bounded navigation diagnostics trace and offline analyze
 
