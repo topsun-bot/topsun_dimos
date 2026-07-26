@@ -362,8 +362,14 @@ export DIMOS_SEARCH_CANCEL_WAIT_S=2.0
 # 返回图片拍摄观察位置的导航超时
 export DIMOS_SEARCH_REWIND_TIMEOUT_S=120.0
 
-# 回到观察位置后等待新相机帧的最长时间
-export DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S=3.0
+# 每次转向结束后，先等待 0.3 秒让机器人和视频管线稳定
+export DIMOS_SEARCH_CONFIRM_SETTLE_S=0.3
+
+# 稳定窗口结束后至少跨过 1 个新的相机回调，禁止复用缓存旧帧
+export DIMOS_SEARCH_CONFIRM_MIN_NEW_FRAMES=1
+
+# 稳定窗口结束后，等待合格新相机帧的最长时间
+export DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S=2.0
 
 # 二次确认最多检查 2 帧；首帧偏离中心时会转向并用下一帧复核
 export DIMOS_SEARCH_CONFIRM_MAX_CHECKS=2
@@ -375,6 +381,11 @@ export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=5.0
 # 减小运动模糊和 image/odom 同步误差, 提高 VLM 检测与拍照位姿的准确性
 export DIMOS_NAV_SPEED=0.5
 ```
+
+最终物体确认采用关闭失败策略：新帧超时、VLM 未命中、bbox 不合理或两次
+检查后仍未居中时，都不会回复“找到”或执行打招呼动作，而是继续扫描当前房间
+或进入后续寻物 fallback。单轮新帧等待上限约为 `0.3 + 2.0` 秒；不会在超时后
+降级复用旧画面。
 
 建议首轮真机测试只设置总开关，其他参数先使用默认值：
 

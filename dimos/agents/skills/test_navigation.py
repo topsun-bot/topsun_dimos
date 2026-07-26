@@ -24,10 +24,11 @@ from dimos.agents.skills.navigation import (
     NavigationSkillContainer,
     _EnrouteHitOutcome,
     _EnrouteHitStatus,
-    _EnrouteVisualConfirmation,
     _ObjectSearchContext,
     _SearchFrameSnapshot,
     _SearchHit,
+    _VisualLockResult,
+    _VisualLockStatus,
 )
 from dimos.core.core import rpc
 from dimos.core.module import Module
@@ -233,6 +234,22 @@ def _nav_container() -> NavigationSkillContainer:
     nav._relocalization = None
     nav._ensure_search_runtime()
     return nav
+
+
+def _confirmed_visual_lock(
+    target_name: str,
+    *,
+    ts: float = 12.0,
+    bbox: tuple[float, float, float, float] = (35.0, 10.0, 65.0, 50.0),
+) -> _VisualLockResult:
+    return _VisualLockResult(
+        status=_VisualLockStatus.CONFIRMED,
+        message=f"Visually confirmed '{target_name}' in a fresh centered frame",
+        image=Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=ts),
+        bbox=bbox,
+        offset_deg=0.0,
+        checks=1,
+    )
 
 
 class _FakeNavigation:
@@ -465,10 +482,13 @@ def test_enroute_hit_returns_to_capture_pose_faces_and_greets_once(
     monkeypatch.setattr(
         nav,
         "_confirm_enroute_hit",
-        lambda context: _EnrouteVisualConfirmation(
+        lambda context: _VisualLockResult(
+            status=_VisualLockStatus.CONFIRMED,
             message=f"Visually confirmed '{context.query}' in a fresh centered frame",
             image=confirmed_image,
             bbox=(35.0, 10.0, 65.0, 50.0),
+            offset_deg=0.0,
+            checks=1,
         ),
     )
     monkeypatch.setattr(
@@ -585,11 +605,9 @@ def test_enroute_confirmation_uses_fresh_bbox_and_rechecks_after_servo(
             Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=12.0),
         ]
     )
-    requested_after: list[float] = []
     boxes = iter([(65.0, 10.0, 95.0, 50.0), (35.0, 10.0, 65.0, 50.0)])
 
-    def fake_wait(after_ts: float) -> Image:
-        requested_after.append(after_ts)
+    def fake_wait() -> Image:
         return next(frames)
 
     monkeypatch.setattr(nav, "_wait_for_fresh_search_image", fake_wait)
@@ -601,11 +619,12 @@ def test_enroute_confirmation_uses_fresh_bbox_and_rechecks_after_servo(
 
     confirmation = nav._confirm_enroute_hit(context)
 
-    assert confirmation is not None
+    assert confirmation.confirmed
     assert confirmation.message == "Visually confirmed '灭火器' in a fresh centered frame"
+    assert confirmation.image is not None
     assert confirmation.image.ts == pytest.approx(12.0)
     assert confirmation.bbox == (35.0, 10.0, 65.0, 50.0)
-    assert requested_after == [10.0, 11.0]
+    assert confirmation.checks == 2
     assert len(nav._unitree_skill_container.rotations) == 1
     assert nav._unitree_skill_container.rotations[0] < 0.0
 
@@ -613,6 +632,7 @@ def test_enroute_confirmation_uses_fresh_bbox_and_rechecks_after_servo(
 def test_enroute_confirmation_waits_past_cached_camera_frame(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_CONFIRM_SETTLE_S", "0")
     nav = _nav_container()
     nav._latest_image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=10.0)
     published = False
@@ -625,11 +645,141 @@ def test_enroute_confirmation_waits_past_cached_camera_frame(
 
     monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", publish_next_frame)
 
-    image = nav._wait_for_fresh_search_image(10.0)
+    image = nav._wait_for_fresh_search_image()
 
     assert image is not None
     assert image.ts == pytest.approx(11.0)
     assert published is True
+
+
+def test_fresh_frame_gate_rejects_new_callback_with_stale_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_CONFIRM_SETTLE_S", "0")
+    monkeypatch.setenv("DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S", "0.1")
+    nav = _nav_container()
+    nav._latest_image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=10.0)
+    ticks = iter([0.0, 0.0, 0.01, 1.0])
+    published = False
+
+    def publish_stale_frame(_seconds: float) -> None:
+        nonlocal published
+        if not published:
+            published = True
+            nav._on_color_image(Image.from_numpy(np.ones((60, 100, 3), dtype=np.uint8), ts=10.0))
+
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", publish_stale_frame)
+
+    image = nav._wait_for_fresh_search_image()
+
+    assert image is None
+    assert published is True
+    assert nav._latest_image_sequence == 1
+
+
+def test_visual_lock_rotation_success_but_fresh_frame_miss_is_unconfirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._vl_model = object()
+    nav._unitree_skill_container = _FakeUnitree()
+    fresh = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=11.0)
+    monkeypatch.setattr(nav, "_wait_for_fresh_search_image", lambda: fresh)
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation.get_object_bbox_from_image",
+        lambda _model, _image, _query: None,
+    )
+
+    result = nav._confirm_visual_lock("灭火器", trace_id="test")
+
+    assert result.status == _VisualLockStatus.UNCONFIRMED
+    assert result.reason == "vlm_miss_or_bad_bbox"
+    assert result.checks == 1
+    assert nav._unitree_skill_container.commands == []
+
+
+def test_visual_lock_stops_after_max_checks_when_target_never_centers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIMOS_SEARCH_CONFIRM_MAX_CHECKS", "2")
+    nav = _nav_container()
+    nav._vl_model = object()
+    nav._unitree_skill_container = _FakeUnitree()
+    frames = iter(
+        [
+            Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=11.0),
+            Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=12.0),
+        ]
+    )
+    monkeypatch.setattr(nav, "_wait_for_fresh_search_image", lambda: next(frames))
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation.get_object_bbox_from_image",
+        lambda _model, _image, _query: (65.0, 10.0, 95.0, 50.0),
+    )
+
+    result = nav._confirm_visual_lock("灭火器", trace_id="test")
+
+    assert result.status == _VisualLockStatus.UNCONFIRMED
+    assert result.reason == "not_centered"
+    assert result.checks == 2
+    assert len(nav._unitree_skill_container.rotations) == 1
+    assert nav._unitree_skill_container.commands == []
+
+
+def test_detect_and_servo_freezes_source_frame_and_saves_confirmed_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    source = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=10.0)
+    nav._on_color_image(source)
+    nav._vl_model = object()
+    existing = SpatialRecord(
+        name="灭火器",
+        record_type=RecordType.LANDMARK,
+        record_id="rec_extinguisher",
+    )
+    saved: list[str] = []
+    nav._landmark_memory = SimpleNamespace(
+        find_by_name=lambda _name: existing,
+        save_snapshot=lambda stem, _data: saved.append(stem) or f"/snapshots/{stem}.jpg",
+    )
+    detector_images: list[Image] = []
+    servo_images: list[Image] = []
+
+    def detect(_model: Any, image: Image, _query: str) -> tuple[float, float, float, float]:
+        detector_images.append(image)
+        nav._on_color_image(Image.from_numpy(np.zeros((120, 200, 3), dtype=np.uint8), ts=11.0))
+        return (65.0, 10.0, 95.0, 50.0)
+
+    def servo(_bbox: tuple[float, float, float, float], image: Image) -> bool:
+        servo_images.append(image)
+        return True
+
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation.get_object_bbox_from_image",
+        detect,
+    )
+    monkeypatch.setattr(nav, "_servo_to_bbox", servo)
+    monkeypatch.setattr(
+        nav,
+        "_confirm_visual_lock",
+        lambda _target, **_kwargs: _confirmed_visual_lock("灭火器"),
+    )
+    monkeypatch.setattr(
+        "dimos.agents.skills.navigation._timestamped_snapshot_stem",
+        lambda record_id: f"20260724-120000_{record_id}",
+    )
+
+    result = nav._detect_and_servo("灭火器")
+
+    assert result is not None
+    assert result.confirmed
+    assert detector_images[0].ts == pytest.approx(10.0)
+    assert servo_images[0].ts == pytest.approx(10.0)
+    assert servo_images[0].data.shape == (60, 100, 3)
+    assert saved == ["20260724-120000_rec_extinguisher"]
+    assert result.snapshot_path == "/snapshots/20260724-120000_rec_extinguisher.jpg"
 
 
 def test_unconfirmed_enroute_hit_does_not_store_greet_or_finish_search(
@@ -647,7 +797,15 @@ def test_unconfirmed_enroute_hit_does_not_store_greet_or_finish_search(
         query_by_type=lambda _record_type: [],
         record=lambda record: recorded.append(record) or record.record_id,
     )
-    monkeypatch.setattr(nav, "_confirm_enroute_hit", lambda _context: None)
+    monkeypatch.setattr(
+        nav,
+        "_confirm_enroute_hit",
+        lambda _context: _VisualLockResult(
+            status=_VisualLockStatus.UNCONFIRMED,
+            message="not confirmed",
+            reason="vlm_miss_or_bad_bbox",
+        ),
+    )
     now = time.time()
     snapshot = _SearchFrameSnapshot(
         search_id="search_unconfirmed",
@@ -788,6 +946,7 @@ def test_room_sweep_forwards_enroute_search_and_stops_after_terminal_hit(
     def fake_navigation(target: SpatialRecord, **kwargs: Any) -> str:
         assert kwargs["search_context"] is context
         context.terminal_result = "Found '灭火器' en route"
+        context.terminal_status = _EnrouteHitStatus.CONFIRMED
         return context.terminal_result
 
     monkeypatch.setattr(nav, "_navigate_to_landmark", fake_navigation)
@@ -799,7 +958,9 @@ def test_room_sweep_forwards_enroute_search_and_stops_after_terminal_hit(
 
     result = nav._room_anchor_sweep_for_object("灭火器", search_context=context)
 
-    assert result == "Found '灭火器' en route"
+    assert result is not None
+    assert result.confirmed
+    assert result.message == "Found '灭火器' en route"
     assert scanned_rooms == []
 
 
@@ -946,19 +1107,21 @@ def test_scan_room_rotation_uses_list_recognition_not_query(
     )
     calls: list[str] = []
 
-    def fake_query(_name: str) -> str | None:
+    def fake_query(_name: str) -> _VisualLockResult | None:
         calls.append("query")
         return None
 
-    def fake_list(_name: str) -> str | None:
+    def fake_list(_name: str) -> _VisualLockResult | None:
         calls.append("list")
-        return "Visually acquired '垃圾桶' (list recognition)"
+        return _confirmed_visual_lock("垃圾桶")
 
     nav._detect_and_servo = fake_query  # type: ignore[method-assign]
     nav._detect_and_servo_by_list_recognition = fake_list  # type: ignore[method-assign]
 
     result = nav._scan_room_for_object("垃圾桶")
-    assert result == "Visually acquired '垃圾桶' (list recognition)"
+    assert result is not None
+    assert result.confirmed
+    assert result.message == "Visually confirmed '垃圾桶' in a fresh centered frame"
     assert calls == ["query", "list"]
     assert len(fake.rotations) == 1
 
@@ -986,6 +1149,55 @@ def test_list_recognition_skips_when_target_not_in_results() -> None:
     assert nav._detect_and_servo_by_list_recognition("垃圾桶") is None
 
 
+def test_list_recognition_candidate_uses_common_visual_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._on_color_image(Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=10.0))
+    nav._recognize_objects_simple = lambda _image: [  # type: ignore[method-assign]
+        {"name": "垃圾桶", "bbox": [350, 100, 650, 900]}
+    ]
+    nav._landmark_memory = SimpleNamespace(
+        find_by_name=lambda _name: None,
+        save_snapshot=lambda _stem, _data: "",
+    )
+    confirmed_queries: list[str] = []
+
+    def confirm(target_name: str, **_kwargs: Any) -> _VisualLockResult:
+        confirmed_queries.append(target_name)
+        return _confirmed_visual_lock(target_name)
+
+    monkeypatch.setattr(nav, "_confirm_visual_lock", confirm)
+
+    result = nav._detect_and_servo_by_list_recognition("垃圾桶")
+
+    assert result is not None
+    assert result.confirmed
+    assert confirmed_queries == ["垃圾桶"]
+
+
+def test_room_sweep_does_not_greet_unconfirmed_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._navigation = _FakeNavigation()
+    nav._unitree_skill_container = _FakeUnitree()
+    monkeypatch.setattr(
+        nav,
+        "_room_anchor_sweep_for_object",
+        lambda _query, **_kwargs: _VisualLockResult(
+            status=_VisualLockStatus.UNCONFIRMED,
+            message="not confirmed",
+            reason="vlm_miss_or_bad_bbox",
+        ),
+    )
+
+    result = nav._nav_fallback_step_room_sweep("灭火器")
+
+    assert result is None
+    assert nav._unitree_skill_container.commands == []
+
+
 def test_room_anchor_sweep_scans_rooms_until_object_found(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     nav = _nav_container()
@@ -1004,17 +1216,83 @@ def test_room_anchor_sweep_scans_rooms_until_object_found(monkeypatch: pytest.Mo
         visited.append(target.name)
         return f"Arrived near {target.name}."
 
-    def fake_detect(query: str) -> str | None:
+    def fake_detect(query: str) -> _VisualLockResult | None:
         if visited[-1] == "lab":
-            return f"Visually acquired '{query}'"
+            return _confirmed_visual_lock(query)
         return None
 
     nav._navigate_to_landmark = fake_landmark_nav
     nav._detect_and_servo = fake_detect
 
-    assert nav._room_anchor_sweep_for_object("toolbox") == "Visually acquired 'toolbox'"
+    result = nav._room_anchor_sweep_for_object("toolbox")
+    assert result is not None
+    assert result.confirmed
+    assert result.message == "Visually confirmed 'toolbox' in a fresh centered frame"
     assert visited == ["office", "lab"]
     assert nav._unitree_skill_container.rotations == [70.0, 70.0, 70.0, 70.0, 70.0, 70.0]
+
+
+def test_tracking_arrival_requires_live_visual_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._navigation = _FakeNavigation()
+    nav._latest_image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=10.0)
+    stops: list[bool] = []
+    nav._object_tracking = SimpleNamespace(
+        track=lambda _bbox: {"status": "tracking_started"},
+        is_tracking=lambda: True,
+        stop_track=lambda: stops.append(True),
+    )
+    monkeypatch.setattr(
+        nav,
+        "_get_bbox_for_current_frame",
+        lambda _query, **_kwargs: (35.0, 10.0, 65.0, 50.0),
+    )
+    monkeypatch.setattr(
+        nav,
+        "_confirm_visual_lock",
+        lambda _query, **_kwargs: _VisualLockResult(
+            status=_VisualLockStatus.UNCONFIRMED,
+            message="fresh frame miss",
+            reason="vlm_miss_or_bad_bbox",
+        ),
+    )
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda _seconds: None)
+
+    result = nav._navigate_to_object("灭火器", timeout=1.0)
+
+    assert result is None
+    assert stops == [True]
+
+
+def test_vlm_memory_candidate_is_not_hit_without_live_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    nav._navigation = _FakeNavigation()
+    nav._spatial_memory = SimpleNamespace(
+        query_by_text_with_images=lambda _query, limit=3: [
+            {
+                "image": np.zeros((60, 100, 3), dtype=np.uint8),
+                "metadata": {"pos_x": 1.0, "pos_y": 2.0},
+            }
+        ],
+        get_room_images=lambda: [],
+    )
+    nav._vlm_query_all_images = lambda _images, _prompt: "[0]"  # type: ignore[method-assign]
+    nav._resolve_landmark_from_query = lambda _query: SpatialRecord(  # type: ignore[method-assign]
+        name="灭火器",
+        record_type=RecordType.LANDMARK,
+        rotation=(0.0, 0.0, 0.5),
+    )
+    nav._visual_acquire_object = lambda _query, _yaw=None: None  # type: ignore[method-assign]
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda _seconds: None)
+
+    result = nav._query_memory_images_with_vlm("灭火器")
+
+    assert result is None
+    assert len(nav._navigation.goals) == 1
 
 
 def test_periodic_visual_drift_correction_soft_shifts_goal() -> None:
@@ -1106,7 +1384,9 @@ def test_arrival_action_point_recovers_after_gesture(monkeypatch: pytest.MonkeyP
     assert nav._unitree_skill_container.commands == ["Hello", "RecoveryStand"]
 
 
-def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
+def test_object_landmark_accepts_safe_standoff_without_churn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     nav = _nav_container()
     target = SpatialRecord(
         name="垃圾桶",
@@ -1118,6 +1398,7 @@ def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
     nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
     nav._relocalize_interval_s = 30.0
     nav._coordinate_frame_stale_reason = lambda target: None
+    monkeypatch.setattr(nav, "_visual_acquire_object", lambda _name, _yaw=None: None)
 
     result = nav._navigate_to_landmark(
         target,
@@ -1128,6 +1409,76 @@ def test_object_landmark_accepts_safe_standoff_without_churn() -> None:
 
     assert "Arrived near" in result
     assert nav._navigation.goals == []
+
+
+def test_object_landmark_does_not_run_arrival_action_without_visual_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="灭火器",
+        record_type=RecordType.LANDMARK,
+        position=(0.0, 0.0, 0.0),
+    )
+    nav._navigation = _FakeNavigation()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_odom = _pose(0.8, 0.0)
+    nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
+    nav._relocalize_interval_s = 30.0
+    nav._coordinate_frame_stale_reason = lambda _target: None
+    monkeypatch.setattr(
+        nav,
+        "_visual_acquire_object",
+        lambda _name, _yaw=None: _VisualLockResult(
+            status=_VisualLockStatus.UNCONFIRMED,
+            message="fresh frame miss",
+            reason="vlm_miss_or_bad_bbox",
+        ),
+    )
+
+    result = nav._navigate_to_landmark(
+        target,
+        arrival_action="point",
+        arrival_distance=0.5,
+        run_arrival_action=True,
+    )
+
+    assert "could not visually acquire" in result
+    assert "arrival_action not run" in result
+    assert nav._unitree_skill_container.commands == []
+
+
+def test_object_landmark_runs_arrival_action_once_after_visual_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="灭火器",
+        record_type=RecordType.LANDMARK,
+        position=(0.0, 0.0, 0.0),
+    )
+    nav._navigation = _FakeNavigation()
+    nav._unitree_skill_container = _FakeUnitree()
+    nav._latest_odom = _pose(0.8, 0.0)
+    nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
+    nav._relocalize_interval_s = 30.0
+    nav._coordinate_frame_stale_reason = lambda _target: None
+    monkeypatch.setattr(
+        nav,
+        "_visual_acquire_object",
+        lambda _name, _yaw=None: _confirmed_visual_lock("灭火器"),
+    )
+    monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda _seconds: None)
+
+    result = nav._navigate_to_landmark(
+        target,
+        arrival_action="point",
+        arrival_distance=0.5,
+        run_arrival_action=True,
+    )
+
+    assert "Visually confirmed '灭火器'" in result
+    assert nav._unitree_skill_container.commands == ["Hello", "RecoveryStand"]
 
 
 def test_stop_all_motion_cancels_tracking_and_recovers() -> None:

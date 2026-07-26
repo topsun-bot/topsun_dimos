@@ -215,12 +215,39 @@ class _EnrouteHitOutcome:
 
 
 @dataclass(frozen=True)
-class _EnrouteVisualConfirmation:
-    """保存二次确认成功时的新图像, bbox 和说明."""
+class _CameraFrameCheckpoint:
+    """记录等待新相机帧时使用的缓存基线."""
 
+    sequence: int
+    image_ts: float
+    received_monotonic: float
+
+
+class _VisualLockStatus(Enum):
+    """描述物体最终视觉闭环的确认结果."""
+
+    CONFIRMED = "confirmed"
+    UNCONFIRMED = "unconfirmed"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class _VisualLockResult:
+    """保存物体视觉闭环的状态, 确认帧和诊断信息."""
+
+    status: _VisualLockStatus
     message: str
-    image: Image
-    bbox: BBox
+    image: Image | None = None
+    bbox: BBox | None = None
+    offset_deg: float | None = None
+    checks: int = 0
+    reason: str = ""
+    snapshot_path: str = ""
+
+    @property
+    def confirmed(self) -> bool:
+        """仅在新帧 VLM 命中且目标居中时返回 True."""
+        return self.status == _VisualLockStatus.CONFIRMED
 
 
 @dataclass
@@ -459,6 +486,8 @@ class NavigationSkillContainer(Module):
         # room_sweep 时跳过的房间集合, 避免重复扫描已确认无目标物体的房间
         self._sweep_skip_rooms: set[str] = set()
         self._sensor_lock = threading.Lock()
+        self._latest_image_sequence = 0
+        self._latest_image_received_monotonic = 0.0
         self._odom_history: deque[PoseStamped] = deque(maxlen=512)
         self._active_object_search: _ObjectSearchContext | None = None
 
@@ -486,6 +515,8 @@ class NavigationSkillContainer(Module):
         self._ensure_search_runtime()
         with self._sensor_lock:
             self._latest_image = image
+            self._latest_image_sequence += 1
+            self._latest_image_received_monotonic = time.monotonic()
 
     def _odom_euler_tuple(self) -> tuple[float, float, float] | None:
         """将最新里程计的四元数姿态转换为欧拉角元组 (roll, pitch, yaw)."""
@@ -692,6 +723,10 @@ class NavigationSkillContainer(Module):
             self._odom_history = deque(maxlen=512)
         if "_active_object_search" not in self.__dict__:
             self._active_object_search = None
+        if "_latest_image_sequence" not in self.__dict__:
+            self._latest_image_sequence = 0
+        if "_latest_image_received_monotonic" not in self.__dict__:
+            self._latest_image_received_monotonic = 0.0
 
     @staticmethod
     def _copy_pose(pose: PoseStamped) -> PoseStamped:
@@ -1058,9 +1093,11 @@ class NavigationSkillContainer(Module):
         self,
         context: _ObjectSearchContext,
         hit: _SearchHit,
-        confirmation: _EnrouteVisualConfirmation,
+        confirmation: _VisualLockResult,
     ) -> str:
         """写入二次确认后的物体地标, 元数据和最终确认 JPG."""
+        if not confirmation.confirmed or confirmation.image is None or confirmation.bbox is None:
+            return ""
         capture_pose = self._capture_pose_for_hit(hit)
         if capture_pose is None:
             return ""
@@ -1106,57 +1143,125 @@ class NavigationSkillContainer(Module):
             session_id=self._memory_session_id,
         )
 
-        # 与房间初始朝向快照共用 landmark_memory/snapshots 目录。已有同名物体时
-        # 复用其 record_id；时间前缀让历次确认图都能保留，地标记录指向最新一张。
-        try:
-            existing = self._landmark_memory.find_by_name(context.query)
-            snapshot_record_id = existing.record_id if existing is not None else record.record_id
-            snapshot_stem = _timestamped_snapshot_stem(snapshot_record_id)
-            # Go2 相机为 RGB, cv2.imencode 按 BGR 编码; 直接用 .data 会红蓝互换
-            encoded, jpg = cv2.imencode(".jpg", confirmation.image.to_opencv())
-            if encoded:
-                image_path = self._landmark_memory.save_snapshot(
-                    snapshot_stem,
-                    jpg.tobytes(),
-                )
-                if image_path:
-                    record.image_snapshot_path = image_path
-                    logger.info(
-                        "[search:%s] saved confirmed object snapshot path=%s",
-                        context.search_id,
-                        image_path,
-                    )
-                else:
-                    logger.warning(
-                        "[search:%s] failed to write confirmed object snapshot",
-                        context.search_id,
-                    )
-            else:
-                logger.warning(
-                    "[search:%s] failed to encode confirmed object snapshot as JPEG",
-                    context.search_id,
-                )
-        except Exception:
-            # 快照是附加信息；写盘失败不能阻止已确认物体的地标记录和到达动作。
-            logger.exception(
-                "[search:%s] failed to save confirmed object snapshot",
-                context.search_id,
-            )
+        existing = self._landmark_memory.find_by_name(context.query)
+        snapshot_record_id = existing.record_id if existing is not None else record.record_id
+        record.image_snapshot_path = self._save_confirmed_object_snapshot(
+            context.query,
+            confirmation,
+            record_id=snapshot_record_id,
+            trace_id=f"search:{context.search_id}",
+        )
         return self._landmark_memory.record(record)
 
-    def _wait_for_fresh_search_image(self, after_ts: float) -> Image | None:
-        """等待相机发布一帧时间戳晚于 ``after_ts`` 的图像.
+    def _save_confirmed_object_snapshot(
+        self,
+        target_name: str,
+        confirmation: _VisualLockResult,
+        *,
+        record_id: str | None = None,
+        trace_id: str = "visual_lock",
+    ) -> str:
+        """把最终确认使用的新帧写入地标快照目录."""
+        if not confirmation.confirmed or confirmation.image is None:
+            return ""
+        try:
+            if record_id is None:
+                existing = self._landmark_memory.find_by_name(target_name)
+                record_id = (
+                    existing.record_id
+                    if existing is not None
+                    else SpatialRecord(
+                        name=target_name,
+                        record_type=RecordType.LANDMARK,
+                    ).record_id
+                )
+            snapshot_stem = _timestamped_snapshot_stem(record_id)
+            # Go2 图像内部保留 RGB 格式, 必须通过 to_opencv 转为 BGR 后再编码。
+            encoded, jpg = cv2.imencode(".jpg", confirmation.image.to_opencv())
+            if not encoded:
+                logger.warning("[%s] failed to encode confirmed object snapshot", trace_id)
+                return ""
+            image_path = self._landmark_memory.save_snapshot(snapshot_stem, jpg.tobytes())
+            if not image_path:
+                logger.warning("[%s] failed to write confirmed object snapshot", trace_id)
+                return ""
+            logger.info("[%s] saved confirmed object snapshot path=%s", trace_id, image_path)
+            return image_path
+        except Exception:
+            # 快照是附加证据；写盘异常不能反向否定已经完成的实时视觉确认。
+            logger.exception("[%s] failed to save confirmed object snapshot", trace_id)
+            return ""
+
+    def _attach_confirmed_object_snapshot(
+        self,
+        target_name: str,
+        confirmation: _VisualLockResult,
+        *,
+        trace_id: str,
+    ) -> _VisualLockResult:
+        """保存确认帧并把最终 JPG 路径附加到视觉锁定结果."""
+        path = self._save_confirmed_object_snapshot(
+            target_name,
+            confirmation,
+            trace_id=trace_id,
+        )
+        return replace(confirmation, snapshot_path=path)
+
+    def _freeze_latest_image(self) -> Image | None:
+        """在线程锁内复制当前相机帧, 保证一次 VLM 推理使用固定像素."""
+        self._ensure_search_runtime()
+        with self._sensor_lock:
+            if self._latest_image is None or not hasattr(self._latest_image, "data"):
+                return None
+            return self._latest_image.copy()
+
+    def _camera_frame_checkpoint(self) -> _CameraFrameCheckpoint:
+        """读取当前相机缓存的序号和时间戳基线."""
+        self._ensure_search_runtime()
+        with self._sensor_lock:
+            image_ts = float(self._latest_image.ts) if self._latest_image is not None else 0.0
+            return _CameraFrameCheckpoint(
+                sequence=self._latest_image_sequence,
+                image_ts=image_ts,
+                received_monotonic=self._latest_image_received_monotonic,
+            )
+
+    def _wait_for_fresh_search_image(self) -> Image | None:
+        """等待稳定窗口结束后至少一帧真正更新的相机图像.
 
         返回观察位姿或完成原地旋转后, 缓存中的 ``_latest_image`` 可能仍是运动前的
-        旧画面. 二次确认必须等待新帧, 否则会用同一张旧图重复证明自己.
+        旧画面. 先等待画面稳定并建立检查点, 然后同时检查回调序号和图像时间戳,
+        从而保证不会用同一张缓存图重复确认.
         """
-        timeout = _search_float_env("DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S", 3.0, minimum=0.1)
+        settle = _search_float_env("DIMOS_SEARCH_CONFIRM_SETTLE_S", 0.3, minimum=0.0)
+        if settle > 0.0:
+            time.sleep(settle)
+        checkpoint = self._camera_frame_checkpoint()
+        min_new_frames = max(
+            1,
+            int(_search_float_env("DIMOS_SEARCH_CONFIRM_MIN_NEW_FRAMES", 1.0, minimum=1.0)),
+        )
+        timeout = _search_float_env("DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S", 2.0, minimum=0.1)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self._ensure_search_runtime()
             with self._sensor_lock:
                 image = self._latest_image
-                if image is not None and float(image.ts) > after_ts + 1e-6:
+                sequence_advanced = (
+                    self._latest_image_sequence >= checkpoint.sequence + min_new_frames
+                )
+                timestamp_advanced = (
+                    image is not None and float(image.ts) > checkpoint.image_ts + 1e-6
+                )
+                receive_time_advanced = (
+                    self._latest_image_received_monotonic > checkpoint.received_monotonic
+                )
+                if (
+                    image is not None
+                    and sequence_advanced
+                    and timestamp_advanced
+                    and receive_time_advanced
+                ):
                     # 冻结确认帧，避免 VLM 推理期间相机回调替换底层图像数据。
                     return image.copy()
             time.sleep(0.05)
@@ -1175,14 +1280,13 @@ class NavigationSkillContainer(Module):
         )
         return math.degrees(offset)
 
-    def _confirm_enroute_hit(
-        self, context: _ObjectSearchContext
-    ) -> _EnrouteVisualConfirmation | None:
-        """使用新画面重新检测沿途命中, 并将目标调整到相机中央."""
-        with self._sensor_lock:
-            # 以当前缓存帧为时间基线，保证下面的 VLM 不会复用回退前的画面。
-            latest_ts = float(self._latest_image.ts) if self._latest_image is not None else 0.0
-
+    def _confirm_visual_lock(
+        self,
+        target_name: str,
+        *,
+        trace_id: str = "visual_lock",
+    ) -> _VisualLockResult:
+        """用转向后的新画面复核目标, 必要时再转一次形成视觉闭环."""
         # 默认最多两次：第一次重新检测，若偏离中心则转向，第二次用新帧复核。
         max_checks = max(
             1,
@@ -1193,67 +1297,110 @@ class NavigationSkillContainer(Module):
             "DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG", 5.0, minimum=1.0
         )
         for check_index in range(max_checks):
-            image = self._wait_for_fresh_search_image(latest_ts)
+            image = self._wait_for_fresh_search_image()
             if image is None:
                 logger.warning(
-                    "[search:%s] confirmation failed: no fresh camera frame",
-                    context.search_id,
+                    "[%s] confirmation failed: no fresh camera frame",
+                    trace_id,
                 )
-                return None
-            latest_ts = float(image.ts)
+                return _VisualLockResult(
+                    status=_VisualLockStatus.UNCONFIRMED,
+                    message=f"Could not confirm '{target_name}': no fresh camera frame.",
+                    checks=check_index,
+                    reason="no_fresh_frame",
+                )
 
             try:
-                bbox = get_object_bbox_from_image(self._vl_model, image, context.query)
+                bbox = get_object_bbox_from_image(self._vl_model, image, target_name)
             except Exception:
                 logger.exception(
-                    "[search:%s] confirmation VLM failed check=%d/%d",
-                    context.search_id,
+                    "[%s] confirmation VLM failed check=%d/%d",
+                    trace_id,
                     check_index + 1,
                     max_checks,
                 )
-                return None
+                return _VisualLockResult(
+                    status=_VisualLockStatus.ERROR,
+                    message=f"Could not confirm '{target_name}': VLM request failed.",
+                    image=image,
+                    checks=check_index + 1,
+                    reason="vlm_error",
+                )
             if bbox is None or not self._bbox_reasonable_for_tracking(bbox, image=image):
                 logger.warning(
-                    "[search:%s] confirmation miss check=%d/%d bbox=%s",
-                    context.search_id,
+                    "[%s] confirmation miss check=%d/%d bbox=%s",
+                    trace_id,
                     check_index + 1,
                     max_checks,
                     bbox,
                 )
-                return None
+                return _VisualLockResult(
+                    status=_VisualLockStatus.UNCONFIRMED,
+                    message=f"Could not confirm '{target_name}' in the fresh camera frame.",
+                    image=image,
+                    bbox=bbox,
+                    checks=check_index + 1,
+                    reason="vlm_miss_or_bad_bbox",
+                )
 
             # bbox 中心偏差既用于最终居中判定，也用于计算下一次原地转向角度。
             offset_deg = self._bbox_yaw_offset_degrees(bbox, image)
             logger.info(
-                "[search:%s] confirmation hit check=%d/%d bbox=%s offset=%.1fdeg",
-                context.search_id,
+                "[%s] confirmation hit check=%d/%d bbox=%s offset=%.1fdeg",
+                trace_id,
                 check_index + 1,
                 max_checks,
                 bbox,
                 offset_deg,
             )
             if abs(offset_deg) <= centre_tolerance:
-                return _EnrouteVisualConfirmation(
-                    message=f"Visually confirmed '{context.query}' in a fresh centered frame",
+                return _VisualLockResult(
+                    status=_VisualLockStatus.CONFIRMED,
+                    message=f"Visually confirmed '{target_name}' in a fresh centered frame",
                     image=image,
                     bbox=bbox,
+                    offset_deg=offset_deg,
+                    checks=check_index + 1,
                 )
             if check_index + 1 >= max_checks:
                 break
             # 目标在画面右侧时 offset 为正，因此机器人需要按负角度转向。
             if not self._rotate_in_place_degrees(-offset_deg):
                 logger.warning(
-                    "[search:%s] confirmation servo failed offset=%.1fdeg",
-                    context.search_id,
+                    "[%s] confirmation servo failed offset=%.1fdeg",
+                    trace_id,
                     offset_deg,
                 )
-                return None
+                return _VisualLockResult(
+                    status=_VisualLockStatus.ERROR,
+                    message=f"Could not confirm '{target_name}': corrective rotation failed.",
+                    image=image,
+                    bbox=bbox,
+                    offset_deg=offset_deg,
+                    checks=check_index + 1,
+                    reason="servo_failed",
+                )
 
         logger.warning(
-            "[search:%s] confirmation failed: object did not become centered",
-            context.search_id,
+            "[%s] confirmation failed: object did not become centered",
+            trace_id,
         )
-        return None
+        return _VisualLockResult(
+            status=_VisualLockStatus.UNCONFIRMED,
+            message=f"Could not confirm '{target_name}': object did not become centered.",
+            image=image,
+            bbox=bbox,
+            offset_deg=offset_deg,
+            checks=max_checks,
+            reason="not_centered",
+        )
+
+    def _confirm_enroute_hit(self, context: _ObjectSearchContext) -> _VisualLockResult:
+        """沿途命中返回观察位姿后, 复用通用实时视觉闭环."""
+        return self._confirm_visual_lock(
+            context.query,
+            trace_id=f"search:{context.search_id}",
+        )
 
     @staticmethod
     def _reset_unconfirmed_enroute_hit(context: _ObjectSearchContext) -> None:
@@ -1367,7 +1514,7 @@ class NavigationSkillContainer(Module):
                 self._rotate_in_place_degrees(math.degrees(yaw_delta))
 
         confirmation = self._confirm_enroute_hit(context)
-        if confirmation is None:
+        if not confirmation.confirmed:
             # 不记忆、不打招呼、不回复“找到”；清除误命中后恢复原搜索路线。
             self._reset_unconfirmed_enroute_hit(context)
             result = (
@@ -1736,12 +1883,12 @@ class NavigationSkillContainer(Module):
                 )
                 return None
         logger.info("[in_frame] VLM bbox + tracking for %r (timeout=%.0fs) ...", query, timeout)
-        msg = self._navigate_to_object(query, timeout=timeout)
-        if msg:
-            logger.info("[in_frame] ✓ HIT: %s", msg)
-        else:
-            logger.info("[in_frame] ✗ MISS")
-        return msg
+        result = self._navigate_to_object(query, timeout=timeout)
+        if result is not None and result.confirmed:
+            logger.info("[in_frame] ✓ HIT: %s", result.message)
+            return result.message
+        logger.info("[in_frame] ✗ MISS")
+        return None
 
     def _nav_fallback_step_landmark(
         self,
@@ -1829,15 +1976,14 @@ class NavigationSkillContainer(Module):
         找到目标后执行 point 动作指向物体, 并将扫描结果拼入返回消息.
         """
         logger.info("[room_sweep] Sweeping room anchors for %r ...", query)
-        msg = self._room_anchor_sweep_for_object(query, search_context=search_context)
-        if msg:
-            logger.info("[room_sweep] ✓ HIT: %s", msg)
-            if search_context is not None and search_context.terminal_result is not None:
-                return msg
-            return f"{self._run_arrival_action('point', query)} ({msg})"
-        else:
-            logger.info("[room_sweep] ✗ MISS")
-            return None
+        result = self._room_anchor_sweep_for_object(query, search_context=search_context)
+        if search_context is not None and search_context.terminal_result is not None:
+            return search_context.terminal_result
+        if result is not None and result.confirmed:
+            logger.info("[room_sweep] ✓ HIT: %s", result.message)
+            return f"{self._run_arrival_action('point', query)} ({result.message})"
+        logger.info("[room_sweep] ✗ MISS")
+        return None
 
     def _nav_fallback_step_vlm_memory(self, query: str) -> str | None:
         """fallback 步骤: 对历史存储的图像批量执行 VLM 查询.
@@ -2032,7 +2178,12 @@ class NavigationSkillContainer(Module):
             f"To cancel movement call the 'stop_navigation' tool."
         )
 
-    def _navigate_to_object(self, query: str, *, timeout: float = 30.0) -> str | None:
+    def _navigate_to_object(
+        self,
+        query: str,
+        *,
+        timeout: float = 30.0,
+    ) -> _VisualLockResult | None:
         """基于视觉跟踪的导航: 用 VLM 在当前帧定位物体, 然后边跟踪边导航过去.
 
         策略: 先用 VLM 在当前画面里框出物体 -> 启动 object tracking ->
@@ -2045,8 +2196,11 @@ class NavigationSkillContainer(Module):
         if self._object_tracking is None:
             return None
 
+        source_image = self._freeze_latest_image()
+        if source_image is None:
+            return None
         try:
-            bbox = self._get_bbox_for_current_frame(query)
+            bbox = self._get_bbox_for_current_frame(query, image=source_image)
         except Exception:
             logger.error(f"Failed to get bbox for {query}", exc_info=True)
             return None
@@ -2055,7 +2209,7 @@ class NavigationSkillContainer(Module):
             logger.info("[L2]   VLM did not find %r in current frame", query)
             return None
 
-        if not self._bbox_reasonable_for_tracking(bbox):
+        if not self._bbox_reasonable_for_tracking(bbox, image=source_image):
             # bbox 过大或过小都不适合跟踪: 过大说明物体占满画面 (已到跟前),
             # 过小说明距离太远跟踪器容易丢
             logger.warning(
@@ -2090,9 +2244,27 @@ class NavigationSkillContainer(Module):
                     self._object_tracking.stop_track()
                     return None
                 else:
-                    logger.info("[L2]   ✓ Reached '%s'", query)
+                    logger.info(
+                        "[L2]   Reached tracking goal for '%s'; starting fresh-frame confirmation",
+                        query,
+                    )
                     self._object_tracking.stop_track()
-                    return f"Successfully arrived at '{query}'"
+                    confirmation = self._confirm_visual_lock(
+                        query,
+                        trace_id=f"tracking:{query}",
+                    )
+                    if not confirmation.confirmed:
+                        logger.warning(
+                            "[L2]   Tracking arrival for '%s' was not visually confirmed: %s",
+                            query,
+                            confirmation.reason,
+                        )
+                        return None
+                    return self._attach_confirmed_object_snapshot(
+                        query,
+                        confirmation,
+                        trace_id=f"tracking:{query}",
+                    )
 
             # 快速回退: 如果跟踪连续丢失超过 5s, 提前退出让外层回退链接管.
             # 宽限期是为了应对短暂遮挡 (如机器人转向时物体暂时出画面)
@@ -2170,7 +2342,7 @@ class NavigationSkillContainer(Module):
         self,
         query: str,
         search_context: _ObjectSearchContext | None = None,
-    ) -> str | None:
+    ) -> _VisualLockResult | None:
         """逐个房间锚点扫描找物: 导航到每个房间的锚点, 到达后原地扫描查找目标物体.
 
         这是导航回退链的最后一层 (L4). 排序策略: 物体记录所在房间优先,
@@ -2243,7 +2415,15 @@ class NavigationSkillContainer(Module):
                 search_context=search_context,
             )
             if search_context is not None and search_context.terminal_result is not None:
-                return nav_msg
+                status = (
+                    _VisualLockStatus.CONFIRMED
+                    if search_context.terminal_status == _EnrouteHitStatus.CONFIRMED
+                    else _VisualLockStatus.ERROR
+                )
+                return _VisualLockResult(
+                    status=status,
+                    message=nav_msg,
+                )
             # 漂移/超时/中止时跳过当前房间继续下一个, 不中断整个扫描流程
             if "severe visual/odom drift" in nav_msg.lower():
                 logger.warning("Room sweep: drift abort at %r; trying next room", rname)
@@ -2685,7 +2865,7 @@ class NavigationSkillContainer(Module):
         out = us.execute_sport_command(cmd)
         return f"Reached '{target_name}', executing arrival_action={action!r}: {out}"
 
-    def _servo_to_bbox(self, bbox: BBox) -> bool:
+    def _servo_to_bbox(self, bbox: BBox, image: Image) -> bool:
         """原地旋转, 将目标物体的水平中心对准相机视野正中.
 
         将像素坐标的 bbox 转换到 0-1000 归一化坐标系, 再通过
@@ -2693,13 +2873,12 @@ class NavigationSkillContainer(Module):
 
         Args:
             bbox: 目标在当前画面中的像素边界框, 格式为 (x1, y1, x2, y2).
+            image: 产生该 bbox 的冻结图像, 用于固定尺寸和角度计算基准.
 
         Returns:
             True 表示旋转成功或本身已居中无需旋转, False 表示因无图像等原因失败.
         """
-        if self._latest_image is None:
-            return False
-        h, w = self._latest_image.data.shape[:2]
+        h, w = image.data.shape[:2]
         x1_px, y1_px, x2_px, y2_px = bbox
         # 像素坐标归一化到 0-1000 空间, 与 _scale_bbox_to_image 中 Qwen 分支的逆变换保持一致,
         # 这样 yaw_offset_from_bbox 才能用统一的归一化坐标计算角度
@@ -2725,7 +2904,7 @@ class NavigationSkillContainer(Module):
         )
         return self._rotate_in_place_degrees(turn_deg)
 
-    def _detect_and_servo(self, target_name: str) -> str | None:
+    def _detect_and_servo(self, target_name: str) -> _VisualLockResult | None:
         """在当前帧中检测目标物体并原地旋转伺服对准它.
 
         整合了 VLM 检测和视觉伺服两个步骤: 先用 VLM 获取目标 bbox, 校验合理性后
@@ -2736,14 +2915,14 @@ class NavigationSkillContainer(Module):
             target_name: 要检测和伺服对准的目标物体名称.
 
         Returns:
-            成功时返回描述性字符串, 失败(无图像/VLM 失败/未找到/bbox 不合理/伺服失败)
-            返回 None.
+            成功时返回经过新帧复核的视觉锁定结果, 初次检测失败返回 None.
         """
-        if self._latest_image is None:
+        source_image = self._freeze_latest_image()
+        if source_image is None:
             return None
         # VLM 查询可能因网络超时或模型异常而失败, 捕获后返回 None 让调用方降级处理
         try:
-            bbox = self._get_bbox_for_current_frame(target_name)
+            bbox = self._get_bbox_for_current_frame(target_name, image=source_image)
         except Exception:
             logger.exception("[detect+servo] VLM query failed for '%s'", target_name)
             return None
@@ -2753,7 +2932,7 @@ class NavigationSkillContainer(Module):
 
         # 过大/过小的 bbox 不可靠: 过大可能是 VLM 误检框住整个画面,
         # 过小则目标太远无法精确伺服, 两种情况都跳过
-        if not self._bbox_reasonable_for_tracking(bbox):
+        if not self._bbox_reasonable_for_tracking(bbox, image=source_image):
             logger.warning(
                 "[detect+servo] bbox for '%s' too large/small for servoing (%s) — skip",
                 target_name,
@@ -2762,12 +2941,30 @@ class NavigationSkillContainer(Module):
             return None
 
         logger.info("[detect+servo] ✓ found '%s' at bbox=%s, servoing ...", target_name, bbox)
-        if not self._servo_to_bbox(bbox):
+        if not self._servo_to_bbox(bbox, source_image):
             logger.warning("[detect+servo] servo rotation failed for '%s'", target_name)
             return None
 
-        logger.info("[detect+servo] ✓ servoed to '%s'", target_name)
-        return f"Visually acquired '{target_name}'"
+        logger.info(
+            "[detect+servo] servo completed for '%s'; waiting for fresh-frame confirmation",
+            target_name,
+        )
+        confirmation = self._confirm_visual_lock(
+            target_name,
+            trace_id=f"detect_servo:{target_name}",
+        )
+        if not confirmation.confirmed:
+            logger.warning(
+                "[detect+servo] visual confirmation failed for '%s': %s",
+                target_name,
+                confirmation.reason,
+            )
+            return confirmation
+        return self._attach_confirmed_object_snapshot(
+            target_name,
+            confirmation,
+            trace_id=f"detect_servo:{target_name}",
+        )
 
     def _recognize_objects_simple(self, image: Image) -> list[dict[str, Any]]:
         """用 VLM 列出图中所有物体, 返回紧凑格式的识别结果列表.
@@ -2823,22 +3020,28 @@ class NavigationSkillContainer(Module):
             key=lambda item: self._bbox_area_0to1000(list(item.get("bbox", []))),
         )
 
-    def _bbox_from_simple_recognition_item(self, item: dict[str, Any]) -> BBox | None:
+    def _bbox_from_simple_recognition_item(
+        self,
+        item: dict[str, Any],
+        image: Image,
+    ) -> BBox | None:
         """将识别结果中的 0-1000 归一化 bbox 转换为像素坐标 bbox.
 
         _scale_bbox_to_image 会自动判断坐标是 0-1 分数 / 0-1000 / 还是
-        绝对像素, 因此这里直接透传即可. 需要同时校验 _latest_image 存在,
-        因为缩放依赖图像尺寸.
+        绝对像素, 因此这里直接透传即可. 图像必须与列表识别使用的帧一致.
         """
         bbox_list = item.get("bbox")
-        if not isinstance(bbox_list, list) or len(bbox_list) != 4 or self._latest_image is None:
+        if not isinstance(bbox_list, list) or len(bbox_list) != 4:
             return None
         return _scale_bbox_to_image(
             (float(bbox_list[0]), float(bbox_list[1]), float(bbox_list[2]), float(bbox_list[3])),
-            self._latest_image,
+            image,
         )
 
-    def _detect_and_servo_by_list_recognition(self, target_name: str) -> str | None:
+    def _detect_and_servo_by_list_recognition(
+        self,
+        target_name: str,
+    ) -> _VisualLockResult | None:
         """用列表识别方式检测当前帧中的目标物体并伺服转向它.
 
         与 _detect_and_servo 的区别: 后者用 query prompt 单独询问某一物体
@@ -2846,10 +3049,11 @@ class NavigationSkillContainer(Module):
         在房间扫描的每一步旋转后调用, 列表识别比逐个 query 更高效 --
         一次 VLM 调用就能覆盖所有可能的目标, 无需为每个候选物体单独请求.
         """
-        if self._latest_image is None:
+        source_image = self._freeze_latest_image()
+        if source_image is None:
             return None
         try:
-            items = self._recognize_objects_simple(self._latest_image)
+            items = self._recognize_objects_simple(source_image)
         except Exception:
             logger.exception("[room_scan] VLM list recognition failed for '%s'", target_name)
             return None
@@ -2869,12 +3073,12 @@ class NavigationSkillContainer(Module):
         if obj is None:
             return None
 
-        bbox = self._bbox_from_simple_recognition_item(obj)
+        bbox = self._bbox_from_simple_recognition_item(obj, source_image)
         if bbox is None:
             return None
         # 过滤过大/过小的 bbox: 过大说明 VLM 框错了整个画面, 过小说明物体
         # 太远无法可靠伺服, 两种情况都不值得转向
-        if not self._bbox_reasonable_for_tracking(bbox):
+        if not self._bbox_reasonable_for_tracking(bbox, image=source_image):
             logger.warning(
                 "[room_scan] bbox for '%s' unreasonable after list recognition: %s",
                 want,
@@ -2883,18 +3087,40 @@ class NavigationSkillContainer(Module):
             return None
 
         logger.info("[room_scan] ✓ '%s' in list at bbox=%s, servoing ...", want, obj.get("bbox"))
-        if not self._servo_to_bbox(bbox):
+        if not self._servo_to_bbox(bbox, source_image):
             logger.warning("[room_scan] servo rotation failed for '%s'", want)
             return None
-        logger.info("[room_scan] ✓ servoed to '%s' via list recognition", want)
-        return f"Visually acquired '{want}' (list recognition)"
+        logger.info(
+            "[room_scan] servo completed for '%s'; waiting for fresh-frame confirmation",
+            want,
+        )
+        confirmation = self._confirm_visual_lock(
+            target_name,
+            trace_id=f"room_scan:{target_name}",
+        )
+        if not confirmation.confirmed:
+            logger.warning(
+                "[room_scan] visual confirmation failed for '%s': %s",
+                want,
+                confirmation.reason,
+            )
+            return confirmation
+        confirmed = replace(
+            confirmation,
+            message=f"{confirmation.message} (list recognition candidate)",
+        )
+        return self._attach_confirmed_object_snapshot(
+            target_name,
+            confirmed,
+            trace_id=f"room_scan:{target_name}",
+        )
 
     def _scan_room_for_object(
         self,
         target_name: str,
         *,
         stored_yaw: float | None = None,
-    ) -> str | None:
+    ) -> _VisualLockResult | None:
         """在房间内做 360 度旋转扫描以搜索目标物体.
 
         策略分三步:
@@ -2935,9 +3161,14 @@ class NavigationSkillContainer(Module):
         # 先检测当前视角: 如果 stored_yaw 已经把目标带入视野就不用扫描了
         try:
             result = self._detect_and_servo(target_name)
-            if result:
+            if result is not None and result.confirmed:
                 logger.info("[room_scan] ✓ '%s' found in initial view", target_name)
                 return result
+            if result is not None:
+                logger.info(
+                    "[room_scan] initial candidate for '%s' was not confirmed; continuing scan",
+                    target_name,
+                )
         except Exception:
             logger.exception("[room_scan] detect-and-servo error for '%s'", target_name)
 
@@ -2959,7 +3190,7 @@ class NavigationSkillContainer(Module):
             time.sleep(0.5)
             try:
                 result = self._detect_and_servo_by_list_recognition(target_name)
-                if result:
+                if result is not None and result.confirmed:
                     logger.info(
                         "[room_scan] ✓ '%s' found at scan step %d/%d",
                         target_name,
@@ -2967,6 +3198,13 @@ class NavigationSkillContainer(Module):
                         n_steps,
                     )
                     return result
+                if result is not None:
+                    logger.info(
+                        "[room_scan] candidate for '%s' at step %d/%d was not confirmed",
+                        target_name,
+                        step + 1,
+                        n_steps,
+                    )
             except Exception:
                 # 单步识别失败不中断整个扫描, 继续转下一步 -- 可能只是
                 # 这一帧画面模糊或 VLM 抽风, 下一个角度也许就能识别
@@ -2980,7 +3218,7 @@ class NavigationSkillContainer(Module):
 
     def _visual_acquire_object(
         self, target_name: str, stored_yaw: float | None = None
-    ) -> str | None:
+    ) -> _VisualLockResult | None:
         """到达目标坐标后, 用视觉定位并面向物体.
 
         到达导航终点只保证机器人在物体附近, 但不一定正对物体.
@@ -2992,11 +3230,11 @@ class NavigationSkillContainer(Module):
             stored_yaw: 已知时为世界坐标系下的偏航角(弧度), 扫描前优先面朝此方向.
 
         Returns:
-            成功视觉锁定物体时返回描述信息, 失败返回 None.
+            成功时返回带新帧证据的视觉锁定结果, 扫描结束仍未确认时返回 None.
         """
         # 扫描整个房间寻找目标物体; stored_yaw 可让扫描从最可能的方向开始
         result = self._scan_room_for_object(target_name, stored_yaw=stored_yaw)
-        if result:
+        if result is not None and result.confirmed:
             return result
         logger.warning("[visual_acquire] ✗ '%s' not found visually", target_name)
         return None
@@ -3576,7 +3814,12 @@ class NavigationSkillContainer(Module):
             return False
         return True
 
-    def _get_bbox_for_current_frame(self, query: str) -> BBox | None:
+    def _get_bbox_for_current_frame(
+        self,
+        query: str,
+        *,
+        image: Image | None = None,
+    ) -> BBox | None:
         """获取当前帧中目标物体的 bbox.
 
         调用 VLM 在最新相机帧中定位指定物体, 返回其边界框.
@@ -3588,10 +3831,11 @@ class NavigationSkillContainer(Module):
         Returns:
             bbox [x1, y1, x2, y2] 像素坐标, 或 None(无图像/VLM 未找到).
         """
-        if self._latest_image is None:
+        source_image = image if image is not None else self._freeze_latest_image()
+        if source_image is None:
             return None
 
-        return get_object_bbox_from_image(self._vl_model, self._latest_image, query)
+        return get_object_bbox_from_image(self._vl_model, source_image, query)
 
     def _query_memory_images_with_vlm(self, query: str) -> str | None:
         """方式一: 让 VLM 检查已存储的记忆图片, 查找目标物体.
@@ -3746,17 +3990,21 @@ class NavigationSkillContainer(Module):
                             obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
                         )
                     if stored_yaw is not None:
-                        vis_msg = self._visual_acquire_object(query, stored_yaw)
-                        if vis_msg:
-                            return vis_msg
+                        visual_lock = self._visual_acquire_object(query, stored_yaw)
+                        if visual_lock is not None and visual_lock.confirmed:
+                            return visual_lock.message
                     # 无存储朝向时, 在当前位置做有限时长的物体搜索
-                    found = self._navigate_to_object(query, timeout=15.0)
-                    if found:
-                        return found
-                    return (
-                        f"VLM found '{query}' in room '{room_name}' image; "
-                        f"reached the room but could not track '{query}' in view. {nav_msg}"
+                    tracking_lock = self._navigate_to_object(query, timeout=15.0)
+                    if tracking_lock is not None and tracking_lock.confirmed:
+                        return tracking_lock.message
+                    logger.info(
+                        "[vlm_memory] historical room image matched '%s', but live visual "
+                        "confirmation failed after reaching '%s': %s",
+                        query,
+                        room_name,
+                        nav_msg,
                     )
+                    return None
 
         # 非 room 来源: 候选图携带了 pos_x/pos_y 坐标, 可以直接导航到该位置
         if "pos_x" not in meta or "pos_y" not in meta:
@@ -3789,15 +4037,25 @@ class NavigationSkillContainer(Module):
             f"(source={source}, index={idx})."
         )
         if not arrived:
-            return f"{prefix} Navigation started but did not reach target within timeout."
-        # 到达后, 若物体有存储朝向, 再尝试视觉获取确认物体在视野中
+            logger.warning(
+                "[vlm_memory] candidate navigation for '%s' timed out before live confirmation",
+                query,
+            )
+            return None
+        # 历史图片只能提供候选位置；到达后必须通过实时新帧确认才能返回 HIT。
         obj_rec = self._resolve_landmark_from_query(query)
+        candidate_yaw: float | None = None
         if obj_rec is not None and obj_rec.record_type == RecordType.LANDMARK:
-            stored_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
-            vis_msg = self._visual_acquire_object(query, stored_yaw)
-            if vis_msg:
-                return f"{prefix} ({vis_msg})"
-        return prefix
+            candidate_yaw = obj_rec.rotation[2] if abs(obj_rec.rotation[2]) > 1e-6 else None
+        visual_lock = self._visual_acquire_object(query, candidate_yaw)
+        if visual_lock is not None and visual_lock.confirmed:
+            return f"{prefix} ({visual_lock.message})"
+        logger.info(
+            "[vlm_memory] historical candidate for '%s' reached, but live visual "
+            "confirmation failed",
+            query,
+        )
+        return None
 
     def _navigate_using_semantic_map(self, query: str) -> str | None:
         """通过 CLIP 语义检索在空间记忆中查找与查询文本最匹配的位置并导航过去.
@@ -4039,8 +4297,10 @@ class NavigationSkillContainer(Module):
                 )
 
             sweep_result = self._room_anchor_sweep_for_object(name)
-            if sweep_result:
-                return f"{self._run_arrival_action(effective_action, name)} ({sweep_result})"
+            if sweep_result is not None and sweep_result.confirmed:
+                return (
+                    f"{self._run_arrival_action(effective_action, name)} ({sweep_result.message})"
+                )
             return f"{result} (fallback: swept all rooms — '{name}' not found in any known room)"
 
         return result
@@ -4353,26 +4613,24 @@ class NavigationSkillContainer(Module):
                 )
             self._end_search_leg(search_context)
             tname = target.name or target.record_id
-            vis_msg = ""
+            visual_lock: _VisualLockResult | None = None
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
-                if vis_msg:
-                    logger.info("[L3] Visual acquire: %s", vis_msg)
+                visual_lock = self._visual_acquire_object(tname, stored_yaw)
+                if visual_lock is not None and visual_lock.confirmed:
+                    logger.info("[L3] Visual acquire: %s", visual_lock.message)
                 else:
                     logger.warning("[L3] Visual acquire: '%s' not found in view", tname)
-            if run_arrival_action and vis_msg:
-                return f"{self._run_arrival_action(arrival_action, tname)} ({vis_msg})"
+            if run_arrival_action and visual_lock is not None and visual_lock.confirmed:
+                return f"{self._run_arrival_action(arrival_action, tname)} ({visual_lock.message})"
             if is_object_landmark:
                 base = f"Arrived near '{tname}' standoff"
-                if vis_msg:
-                    return f"{base} ({vis_msg})"
+                if visual_lock is not None and visual_lock.confirmed:
+                    return f"{base} ({visual_lock.message})"
                 return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
             if run_arrival_action:
                 return self._run_arrival_action(arrival_action, tname)
             base = f"Arrived near '{tname}' standoff"
-            if vis_msg:
-                return f"{base} ({vis_msg})"
             return f"{base} (arrival_action not run)."
 
         # 严重漂移恢复: 从当前 odom 位置重新规划拓扑路径再试一次
@@ -4409,26 +4667,24 @@ class NavigationSkillContainer(Module):
                 )
             self._end_search_leg(search_context)
             tname = target.name or target.record_id
-            vis_msg = ""
+            visual_lock = None
             if is_object_landmark:
                 stored_yaw = target.rotation[2] if abs(target.rotation[2]) > 1e-6 else None
-                vis_msg = self._visual_acquire_object(tname, stored_yaw) or ""
-                if vis_msg:
-                    logger.info("[L3] Visual acquire (retry): %s", vis_msg)
+                visual_lock = self._visual_acquire_object(tname, stored_yaw)
+                if visual_lock is not None and visual_lock.confirmed:
+                    logger.info("[L3] Visual acquire (retry): %s", visual_lock.message)
                 else:
                     logger.warning("[L3] Visual acquire (retry): '%s' not found in view", tname)
-            if run_arrival_action and vis_msg:
-                return f"{self._run_arrival_action(arrival_action, tname)} ({vis_msg})"
+            if run_arrival_action and visual_lock is not None and visual_lock.confirmed:
+                return f"{self._run_arrival_action(arrival_action, tname)} ({visual_lock.message})"
             if is_object_landmark:
                 base = f"Arrived near '{tname}' standoff after drift recovery"
-                if vis_msg:
-                    return f"{base} ({vis_msg})"
+                if visual_lock is not None and visual_lock.confirmed:
+                    return f"{base} ({visual_lock.message})"
                 return f"{base} (could not visually acquire '{tname}'; arrival_action not run)."
             if run_arrival_action:
                 return self._run_arrival_action(arrival_action, tname)
             base = f"Arrived near '{tname}' standoff after drift recovery"
-            if vis_msg:
-                return f"{base} ({vis_msg})"
             return f"{base} (arrival_action not run)."
 
         self._end_search_leg(search_context)
