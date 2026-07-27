@@ -2,65 +2,40 @@
 
 > 环境：在 `topsun_dimos` 根目录执行 `deactivate 2>/dev/null; source .venv/bin/activate`，确认 `echo $VIRTUAL_ENV` 以 `topsun_dimos/.venv` 结尾。详见 `jiangtao/bugfix.md` §9/§13。
 
-## 4G Remote 跑 unitree-go2（云 TURN，不改 LAN）
-
-默认仍是 **LocalSTA**（`--robot-ip` / `.env` 的 `ROBOT_IP`），行为与原来一致。
-只有显式指定 `unitree_webrtc_method=remote` 才走 4G。
-
-```bash
-# 个人账号密码放在 jiangtao/run-self.md（已 gitignore），这里只用占位符
-export UNITREE_WEBRTC_METHOD=remote
-export UNITREE_USERNAME='你的宇树账号'
-export UNITREE_PASSWORD='你的密码'
-export UNITREE_SERIAL='B42D........'
-export UNITREE_REGION=cn
-
-dimos --viewer none \
-  --unitree-webrtc-method remote \
-  --unitree-username "$UNITREE_USERNAME" \
-  --unitree-password "$UNITREE_PASSWORD" \
-  --unitree-serial "$UNITREE_SERIAL" \
-  --unitree-region cn \
-  run unitree-go2
-
-# 或后台：末尾加 --daemon
-```
-
-LAN 用法不变：
-
-```bash
-dimos --robot-ip 192.168.12.1 run unitree-go2
-# 或依赖 .env 里的 ROBOT_IP / UNITREE_AES_128_KEY
-```
-
 ## 4G Remote 重定位导航与诊断日志
 
 原来的真机命令仍然适用，但诊断追踪默认关闭。需要记录导航链路时，在命令前增加 `--navigation-trace-level`：
 
 ```bash
+------------------- 配置环境 ---------------------------------
+# 狗三 key / API key 放在 jiangtao/run-self.md（已 gitignore）或本机 .env
+export UNITREE_AES_128_KEY='你的AES128密钥'
+export OPENAI_API_KEY="你的OpenAI密钥"
+export DIMOS_ROTATION_STEP_DEG=60
+export DIMOS_ROOM_SCAN_ROTATIONS=5
+export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=10.0
+
+# 云端 VLM fallback (本地不可用时自动切换)
+export DIMOS_VLM_CLOUD_API_KEY="你的云端VLM密钥"
+export DIMOS_VLM_CLOUD_BASE_URL="https://ws-sy431890c06kqcoz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+export DIMOS_VLM_CLOUD_MODEL_NAME="qwen3-vl-plus"
+export DIMOS_VLM_FALLBACK_COOLDOWN=60
+
+
 # 账号、密码和序列号只从环境变量读取，不要写入命令或日志
 export UNITREE_WEBRTC_METHOD=remote
 export UNITREE_USERNAME='你的宇树账号'
 export UNITREE_PASSWORD='你的密码'
 export UNITREE_SERIAL='B42D........'
 export UNITREE_REGION=cn
+------------------- 配置环境 ---------------------------------
+# 第一步，建图，只跑一遍
+dimos --robot-ip 192.168.12.1 run unitree-go2-memory
+# 第二部，第一步stop后，解析图
+dimos map global recording_go2 --export
 
-# Gate 3 静止测试：低负载摘要日志
-dimos --viewer none \
-  --navigation-trace-level summary \
-  --unitree-webrtc-method remote \
-  --unitree-username "$UNITREE_USERNAME" \
-  --unitree-password "$UNITREE_PASSWORD" \
-  --unitree-serial "$UNITREE_SERIAL" \
-  --unitree-region "$UNITREE_REGION" \
-  run unitree-go2-relocalization-memory-agentic-deepseek \
-  --disable security-module \
-  -o relocalizationmodule.map_file=recording_go2
-
-# 低速/路线诊断：完整规划、控制链和 costmap 日志
-# 仅在 summary 静止门禁通过后使用
-dimos --viewer none \
-  --navigation-trace-level full \
+# 基于重定位的空间记忆：完整规划、控制链和 costmap 日志
+dimos --navigation-trace-level full \
   --unitree-webrtc-method remote \
   --unitree-username "$UNITREE_USERNAME" \
   --unitree-password "$UNITREE_PASSWORD" \
@@ -96,7 +71,40 @@ uv run python -m dimos.navigation.diagnostics.static_capture \
 本机 2026-07-20 验收（4G）：`lidar≈6.9Hz`，`odom≈18Hz`，`color_image≈14Hz`，`global_map` 有输出。
 完整流程见：`jiangtao/plan/2026-07-20-Go2-4G远程WebRTC跨电脑完整测试指南.md`。
 
+## 4G Remote 跑 unitree-go2（云 TURN，不改 LAN）
+
+默认仍是 **LocalSTA**（`--robot-ip` / `.env` 的 `ROBOT_IP`），行为与原来一致。
+只有显式指定 `unitree_webrtc_method=remote` 才走 4G。
+
+```bash
+# 个人账号密码放在 jiangtao/run-self.md（已 gitignore），这里只用占位符
+export UNITREE_WEBRTC_METHOD=remote
+export UNITREE_USERNAME='你的宇树账号'
+export UNITREE_PASSWORD='你的密码'
+export UNITREE_SERIAL='B42D........'
+export UNITREE_REGION=cn
+
+dimos --viewer none \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region cn \
+  run unitree-go2
+
+# 或后台：末尾加 --daemon
+```
+
+LAN 用法不变：
+
+```bash
+dimos --robot-ip 192.168.12.1 run unitree-go2
+# 或依赖 .env 里的 ROBOT_IP / UNITREE_AES_128_KEY
+```
+
 ---
+
+
 
 ## Step 1: 录制（真机遛一圈）
 
@@ -104,6 +112,8 @@ uv run python -m dimos.navigation.diagnostics.static_capture \
 dimos --robot-ip 192.168.12.1 run unitree-go2-memory
 # 生成 recording_go2.db
 ```
+
+
 
 ## Step 2: 离线 PGO 导出 premap
 
@@ -114,6 +124,8 @@ dimos map global recording_go2 --export
 # 生成 ./recording_go2.pc2.lcm
 # CUDA 异常时加 --device CPU:0
 ```
+
+
 
 ## Step 3: 重定位导航
 
@@ -133,6 +145,8 @@ dimos --robot-ip 192.168.12.1 run unitree-go2-relocalization \
 
 ---
 
+
+
 ## 数据解析脚本
 
 ```bash
@@ -145,6 +159,8 @@ python jiangtao/scripts/parse_recording_db.py --skip-imgs --skip-odom
 # 更改体素大小
 python jiangtao/scripts/parse_recording_db.py --skip-imgs --skip-odom --voxel 0.03
 ```
+
+
 
 ## 可视化脚本
 
@@ -164,6 +180,8 @@ python jiangtao/scripts/visualize_global_map.py --z-min 0.2 --z-max 0.8 --save o
 # 俯视图
 python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 90 --azimuth -90
 ```
+
+
 
 ## 开机 odom 一致性诊断
 
@@ -213,17 +231,17 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 
 ---
 
+
+
 ## Step 4: 空间找物（单次会话, 无 premap）
 
 环境变量：
 
 ```bash
-# 二狗
-export UNITREE_AES_128_KEY='0a7d97828984ec332984571244318f30'
-# 三狗
-export UNITREE_AES_128_KEY='a84c9f3171fb9ceaa1629ec0d3a82031'
+# 二狗 / 三狗 key 见 jiangtao/run-self.md
+export UNITREE_AES_128_KEY='你的AES128密钥'
 
-export OPENAI_API_KEY="sk-b1c3c485844d49a6a2782a20a790ba20"
+export OPENAI_API_KEY="你的OpenAI密钥"
 export OPENAI_BASE_URL="https://api.deepseek.com"
 export DIMOS_VLM_API_KEY="EMPTY"
 export DIMOS_VLM_BASE_URL="http://10.10.153.172:8080/v1"
@@ -232,7 +250,7 @@ export DIMOS_ROTATION_STEP_DEG=60
 export DIMOS_ROOM_SCAN_ROTATIONS=6
 
 # 云端 VLM fallback (本地不可用时自动切换)
-export DIMOS_VLM_CLOUD_API_KEY="sk-ws-H.EDDREER.p3xq.MEUCIQDdBEwnddKuZEg2EXYSeqpWRBGlATod78ixRpzjHrew8wIgH0sJMDzpuZJdyORYcnsOQLDuP5gpF5ZDqfnW_WDpbto"
+export DIMOS_VLM_CLOUD_API_KEY="你的云端VLM密钥"
 export DIMOS_VLM_CLOUD_BASE_URL="https://ws-sy431890c06kqcoz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 export DIMOS_VLM_CLOUD_MODEL_NAME="qwen3-vl-plus"
 export DIMOS_VLM_FALLBACK_COOLDOWN=60
@@ -257,6 +275,8 @@ dimos tell '标记一下当前是办公室'
 dimos tell '去找饮水机'
 ```
 
+
+
 ## Step 5: 重定位空间找物（基于 premap）
 
 前置：已完成 Step 1 ~ Step 2, 生成了 `recording_go2.pc2.lcm`。
@@ -267,12 +287,12 @@ dimos tell '去找饮水机'
 
 重启后 **odom 原点会重置**，但磁盘上的 `landmarks.json` / CLIP 房间图若残留，CLIP 仍可能认出旧房间名（如「办公室」），再和旧坐标交叉验证就会报坐标过期、拒绝导航。
 
-因此 `GlobalConfig.new_memory` **默认 `True`**：启动时自动清空
+因此 `GlobalConfig.new_memory` **默认** `True`：启动时自动清空
 
 - `~/.local/state/dimos/landmark_memory/landmarks.json` 与 `snapshots/`
 - SpatialMemory 的 CLIP / Chroma 持久化库
 
-**一般不必再手动 `rm`。** 启动日志应看到：
+**一般不必再手动** `rm`**。** 启动日志应看到：
 
 ```text
 Cleared landmark memory on start (new_memory=True, ...)
@@ -316,6 +336,8 @@ dimos tell '去找饮水机'
     └── <record_id>.jpg        ← 每个地标的 JPG 快照
 ```
 
+
+
 ## Step 6: 可选沿途 VLM 寻物（默认关闭）
 
 环境变量必须在启动 blueprint 之前设置：
@@ -332,6 +354,8 @@ dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-dee
 ```bash
 dimos tell '去找饮水机'
 ```
+
+
 
 ### 沿途寻物调参（可选）
 
@@ -392,3 +416,4 @@ export DIMOS_NAV_SPEED=0.5
 ```bash
 export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
 ```
+
