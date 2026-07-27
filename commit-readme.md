@@ -41,7 +41,46 @@ git reset --hard <sha>
 
 ## 提交记录
 
-### 597dc068f — fix(memory): default-clear landmarks and CLIP memory on start
+### 4a810400 — docs: update Go2 4G relocalization run guide in jiangtao/run.md
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-27 09:04:18 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiang.tao` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `jiangtao/run.md` | 重组 4G 重定位导航流程、环境变量与建图/导出步骤；敏感 key 改为占位符 |
+
+**改进点**
+
+1. 将 4G Remote 重定位导航、建图、导出 premap 命令集中到文档前部，便于真机一条龙执行。
+2. 补充 VLM 云端 fallback 与导航 trace 相关环境变量说明。
+3. 推送前将 AES/API/VLM key 脱敏为占位符，避免明文入库。
+
+**用法**
+
+```bash
+# 参考 jiangtao/run.md「4G Remote 重定位导航与诊断日志」章节
+source .venv/bin/activate
+# key 填 jiangtao/run-self.md 或本机 .env 后按文档 export
+dimos --navigation-trace-level full --unitree-webrtc-method remote run unitree-go2-relocalization-memory-agentic-deepseek \
+  --disable security-module -o relocalizationmodule.map_file=recording_go2
+```
+
+**回滚**
+
+```bash
+git checkout 13267db3 -- jiangtao/run.md
+# 或
+git reset --hard 13267db3
+```
+
+---
+
 
 | 字段 | 内容 |
 |---|---|
