@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| Web 空间记忆控制台（房间/地标/门） | `02ab7490` |
 | 启动默认清空 landmarks / CLIP（new_memory） | `597dc068f` |
 | 导航诊断 trace / `dimos nav analyze` | `0ed24b321` |
 | Go2 4G Remote WebRTC / unitree-go2 remote | `fe4b31a77` |
@@ -40,6 +41,46 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 02ab7490 — feat(web): add spatial memory console for rooms, landmarks, and doors
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-27 09:46:25 +0800 |
+| **分支** | `feat/web-spatial-memory-ui` |
+| **作者** | `dijirong` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/agents/web_human_input.py` | 注册 `/spatial/*` API，接相机流与 landmark memory（RPC 失败回退磁盘） |
+| `dimos/web/dimos_interface/api/templates/index_fastapi.html` | 改造为中文空间记忆控制台（列表、寻找/导航/检测、视频预览） |
+
+**改进点**
+
+1. 在 `http://localhost:5555` 提供房间 / 地标 / 门的查询与「去找 / 导航到 / 检测」操作入口。
+2. 优先走 landmark memory RPC，不可用时回退读取 `STATE_DIR/landmark_memory/landmarks.json`。
+3. 前端改为中文暗色控制台，并接入相机 MJPEG 预览便于现场操作。
+
+**用法**
+
+```bash
+source .venv/bin/activate
+dimos --replay run unitree-go2-agentic
+# 浏览器打开 http://localhost:5555
+# API: GET /spatial/rooms|objects|doors|all ; POST /spatial/find|goto|detect
+```
+
+**回滚**
+
+```bash
+git checkout 32e3adf7 -- dimos/agents/web_human_input.py dimos/web/dimos_interface/api/templates/index_fastapi.html
+# 或
+git reset --hard 32e3adf7
+```
+
+---
 
 ### 4a810400 — docs: update Go2 4G relocalization run guide in jiangtao/run.md
 
