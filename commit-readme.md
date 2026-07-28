@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 原地旋转最小摇杆 \|rx\|=0.2 | `ba00a2136` |
 | 启动默认清空 landmarks / CLIP（new_memory） | `597dc068f` |
 | 导航诊断 trace / `dimos nav analyze` | `0ed24b321` |
 | Go2 4G Remote WebRTC / unitree-go2 remote | `fe4b31a77` |
@@ -40,6 +41,47 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### ba00a2136 — fix(go2): lower rotate min stick to 0.2 after 4G calibration
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-28 18:56:12 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/robot/unitree/unitree_skill_container.py` | `DIMOS_ROTATE_MIN_RAD_S` 默认 `0.4`→`0.2`；注释标明为摇杆 \|rx\| 非 rad/s |
+| `jiangtao/run.md` | 补充 `DIMOS_ROTATE_MIN_RAD_S=0.2`、`OPENAI_BASE_URL`；确认容差改为 10° |
+| `jiangtao/scripts/demo_go2_rotate_calibration.py` | 4G 旋转角速度/最小角标定脚本 |
+| `jiangtao/scripts/demo_go2_rotate_calibration_safe.py` | 低幅 yaw 摇杆安全表征脚本 |
+
+**改进点**
+
+1. 4G 真机复验：`|rx|<0.15` 基本不转，`0.20` 起才可靠；把默认最小摇杆从过猛的 0.4 降到 0.2，减轻小角度过冲。
+2. 文档与标定脚本落地，便于后续复测死区与 °/s 换算。
+
+**用法**
+
+```bash
+export DIMOS_ROTATE_MIN_RAD_S=0.2
+# 可选复测
+python jiangtao/scripts/demo_go2_rotate_calibration.py --hold 2.0
+```
+
+**回滚**
+
+```bash
+git checkout 32e3adf7c -- dimos/robot/unitree/unitree_skill_container.py jiangtao/run.md
+git rm -f jiangtao/scripts/demo_go2_rotate_calibration.py jiangtao/scripts/demo_go2_rotate_calibration_safe.py
+# 或
+git reset --hard 32e3adf7c
+```
+
+---
 
 ### 4a810400 — docs: update Go2 4G relocalization run guide in jiangtao/run.md
 
