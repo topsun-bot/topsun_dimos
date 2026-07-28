@@ -282,8 +282,9 @@ class UnitreeSkillContainer(Module):
                 if global_config.simulation and abs(omega) < 0.8:
                     omega = 0.8 if remaining >= 0 else -0.8
 
-                # 真机模式下设最小角速度, 避免 omega 太小电机不响应导致卡在死区
-                min_omega = float(os.getenv("DIMOS_ROTATE_MIN_RAD_S", "0.4"))
+                # 真机: angular.z 实为摇杆 |rx| 比例, 非 SI rad/s.
+                # 4G 实测 |rx|<0.15 基本不转, 0.20 起才可靠; 默认 0.2.
+                min_omega = float(os.getenv("DIMOS_ROTATE_MIN_RAD_S", "0.2"))
                 if not global_config.simulation and abs(omega) < min_omega:
                     omega = min_omega if remaining >= 0 else -min_omega
 
