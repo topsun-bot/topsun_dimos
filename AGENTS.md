@@ -389,3 +389,34 @@ CI asserts the file is current — if it's stale, CI fails.
 - CLI / dimos run: `docs/development/dimos_run.md`
 - LFS data: `docs/development/large_file_management.md`
 - Agent system: `docs/agents/`
+
+---
+
+## Cursor Cloud specific instructions
+
+The cloud VM comes with system deps (`portaudio19-dev`, `libturbojpeg`, `libgl1`, `libegl1`, `python3-dev`, `git-lfs`, `iproute2`) and `uv` already installed. The startup update script runs `uv sync --all-groups`, so `tests` + `lint` + all extras (agents, perception, sim, unitree, manipulation, …) are present. Run everything through `uv run` (e.g. `uv run dimos …`, `uv run pytest …`, `uv run mypy`); no manual venv activation is needed.
+
+### LCM multicast is required and is runtime-only
+DimOS modules run in separate forkserver worker processes and talk over LCM multicast (`udpm://239.255.76.67:7667`). Cross-worker streams and `dimos mcp call` RPCs need a loopback multicast route. This is kernel runtime state that does NOT survive a VM reboot, so if `dimos run` modules never exchange data, or `dimos mcp call` / stream tests time out, (re)apply:
+
+```bash
+sudo ip link set lo multicast on
+sudo ip route add 224.0.0.0/4 dev lo          # ignore "File exists" if already set
+sudo sysctl -w net.core.rmem_max=67108864 net.core.rmem_default=67108864
+```
+
+Verify with a quick loopback pub/sub before deeper debugging. This route is the single most important non-obvious setup step for running any blueprint.
+
+### Git LFS is over budget on this repo
+`get_data()` / `LfsPath` pull datasets from this repo's Git LFS, which currently returns "repository exceeded its LFS budget". Until the repo owner raises the budget, these cannot be fetched: replay datasets (`go2_short.db`, …), MuJoCo sim assets (`mujoco_sim`, `person`, `models_clip`), and xArm meshes. Consequently **`--replay` blueprints and MuJoCo `--simulation` blueprints (Go2/G1/xArm) fail**, and a few LFS-backed tests error at collection (e.g. `dimos/memory2/codecs/test_codecs.py`, `dimos/perception/detection/type/detection2d/test_bbox.py`). This is an external account limit, not an environment bug.
+
+LFS-free blueprints run fine and are the way to smoke-test the stack, e.g.:
+```bash
+uv run dimos --viewer none run demo-mcp-stress-test --daemon
+uv run dimos mcp call ping                       # -> pong (RPC to a worker over LCM)
+uv run dimos status && uv run dimos stop
+```
+Use the global `--viewer none` BEFORE the subcommand for headless runs. Do NOT pipe a `--daemon` launch through `tail`/`head` — the detached child keeps the pipe open and the wrapper appears to hang.
+
+### Tests
+`uv run pytest --numprocesses=auto dimos` runs the default suite (green in CI). Timing-sensitive E2E tests marked `@pytest.mark.skipif_in_ci` (e.g. `dimos/core/test_core.py::test_basic_deployment`, `dimos/e2e_tests/test_control_coordinator.py`) are excluded from CI and may fail locally due to tight timing windows even when LCM is healthy; set `CI=1` to skip them (`CI=1 uv run pytest …`).
