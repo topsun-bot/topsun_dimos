@@ -240,7 +240,7 @@ class UnitreeSkillContainer(Module):
         target_rad = math.radians(degrees)
         tolerance_rad = math.radians(float(os.getenv("DIMOS_ROTATE_TOLERANCE_DEG", "5")))
         timeout_s = float(os.getenv("DIMOS_ROTATE_TIMEOUT_S", "60"))
-        max_omega = float(os.getenv("DIMOS_ROTATE_MAX_RAD_S", "0.8"))
+        max_omega = float(os.getenv("DIMOS_ROTATE_MAX_RAD_S", "0.25"))
         k_omega = float(os.getenv("DIMOS_ROTATE_KP", "1.2"))
         control_hz = 20.0
         settle_s = 0.35

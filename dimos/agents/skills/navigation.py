@@ -106,17 +106,17 @@ def _rotation_step_deg() -> float:
     """读取房间标记和扫描共用的原地旋转步长, 单位为度."""
     import os
 
-    return float(os.getenv("DIMOS_ROTATION_STEP_DEG", "90"))
+    return float(os.getenv("DIMOS_ROTATION_STEP_DEG", "60"))
 
 
 def _panorama_rotations() -> int:
-    """全景拍摄时在初始朝向之后的额外旋转次数 (步长 x 3 约等于完整覆盖 360 度)."""
+    """全景拍摄时在初始朝向之后的额外旋转次数 (默认 60° x 5 约等于完整覆盖 360 度)."""
     import os
 
     override = os.getenv("DIMOS_ROOM_SCAN_ROTATIONS")
     if override:
         return max(1, int(override))
-    return 3
+    return 6
 
 
 def _search_rotation_step_deg() -> float:
@@ -1292,9 +1292,9 @@ class NavigationSkillContainer(Module):
             1,
             int(_search_float_env("DIMOS_SEARCH_CONFIRM_MAX_CHECKS", 2.0, minimum=1.0)),
         )
-        # 5° 以内的偏移会直接判定为已居中，不再触发小角度微调旋转
+        # 10° 以内的偏移会直接判定为已居中，不再触发小角度微调旋转
         centre_tolerance = _search_float_env(
-            "DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG", 5.0, minimum=1.0
+            "DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG", 10.0, minimum=1.0
         )
         for check_index in range(max_checks):
             image = self._wait_for_fresh_search_image()
@@ -1823,7 +1823,7 @@ class NavigationSkillContainer(Module):
     def tag_room(self, name: str, num_photos: int = 0) -> str:
         """用 360 度全景拍照标记当前房间.
 
-        默认每步旋转 100 度 (DIMOS_ROTATION_STEP_DEG), 步数足够覆盖约 360 度,
+        默认每步旋转 60 度 (DIMOS_ROTATION_STEP_DEG), 5 步覆盖约 360 度,
         每帧拍摄后执行 VLM 目标检测.
 
         这是 tag_location() 的便捷封装. 传 num_photos=0 (默认) 自动计算步数;
