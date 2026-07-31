@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 合并 upstream/main（99 commits，0709~0729）前的基线 | `dde106238` |
 | spatial memory search V1 默认参数 | `28796439d` |
 | 原地旋转最小摇杆 \|rx\|=0.2 | `ba00a2136` |
 | 启动默认清空 landmarks / CLIP（new_memory） | `597dc068f` |
@@ -42,6 +43,73 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### bc31f3dae — merge: sync upstream/main into jtlinux
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-31 18:11:46 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**（合并提交涉及冲突解决的主要文件，完整列表见 `git show --stat bc31f3dae`）
+
+| 文件 | 改动 |
+|---|---|
+| `.gitignore` | 合并本地 `jiangtao/` 忽略项与上游新增的 `apriltags.pdf`/`*.ignore*` |
+| `pyproject.toml` | 合并 CLI entry points（`doclinks`/`dtop`/`tell-robot`）、package include；追加 largefiles ignore 白名单（历史 PDF） |
+| `uv.lock` | 手动合并依赖条目，随后由 pre-commit 自动校验通过 |
+| `dimos/cli/dimos.py`、`dimos/cli/tell.py`、`dimos/cli/tell_robot.py` | `tell-robot` 迁移到 `dimos.cli`；合并 typer 子命令（`nav_app`/`piper_app`/`shell`/`cache_app`） |
+| `dimos/constants.py` | 抽出 `_resolve_project_relative_dir()`，统一 `LOG_DIR`/`RECORDINGS_DIR` 解析优先级 |
+| `dimos/agents/mcp/mcp_client.py` | HTTP 客户端由 `httpx` 切换为 `requests.Session`，保留本地代理清理逻辑与 `model_provider`/`model_kwargs` |
+| `dimos/agents/skills/navigation.py` | `ObjectTrackingSpec`/`SpatialMemorySpec` 导入路径迁移到 `dimos.perception.experimental.*` |
+| `dimos/perception/experimental/*` | 上游把 `spatial_memory`/`object_tracker_2d`/`perceive_loop_skill` 等移动到 `experimental/` 子目录，随迁移更新全部引用方 |
+| `dimos/robot/all_blueprints.py` | 合并本地 `crow-agent` 与上游 `dan-holonomic-tc`/`dan-local-planner`，更新 `spatial-memory`/`object-tracker` 路径 |
+| `dimos/core/global_config.py` | 合并本地导航 tracing 参数与上游 `zenoh_scouting`/`dimsim_headless`/`local_relay` 等新字段 |
+| `dimos/mapping/relocalization/module.py`、`relocalize.py` | `VoxelGrid` 导入路径更新；`tf` 端口改为 `Out[TFMessage]` 包装；`open3d` 改为函数内惰性导入（`_o3d_registration()`），修复合并后 `NameError` |
+| `dimos/navigation/replanning_a_star/global_planner.py` | 调整 `_find_wide_path` 中 `_clear_robot_footprint` 与计时起点的先后顺序 |
+| `dimos/robot/unitree/connection.py`、`go2/connection.py`、`dimsim_connection.py`、`mujoco_connection.py` | 合并 `velocity_api`、`trace_sink` 参数链路；合并 `free_avoid`/`set_light`/`switch_joystick`/`sport_command` 等 RPC 方法 |
+| `dimos/robot/unitree/unitree_skill_container.py` | 合并 `tf: In[TFMessage]` 端口声明与本地 `start()` 中的提前初始化 TF 逻辑（合并前 stash 冲突） |
+| `dimos/robot/unitree/test_connection.py`、`go2/test_connection.py` | 补齐 `DEFAULT_THREAD_JOIN_TIMEOUT` 导入；合并新增 TF 测试与 `velocity_api=False` 断言 |
+| `docs/usage/cli.md` | 保留本地 `<run-id>/<run-id>.jsonl` 日志路径格式，对齐上游 `ROBOT_IP` 环境变量命名 |
+
+**改进点**
+
+1. 落后上游 main 分支 99 个提交（约合并周期 0709~0729），本次一次性同步完毕，涉及 CLI 重构、感知模块 `experimental/` 目录整理、Zenoh 支持、WebRTC `velocity_api` 等大量特性。
+2. 手动解决约 20 个文件的内容冲突，均已通过 `ast.parse` 语法校验，并对受影响模块跑过 `pytest`（`unitree/`、`mapping/relocalization/`、`navigation/replanning_a_star/`、`agents/mcp/`、`core/`、`perception/experimental/`）。
+3. 剩余的 8 个测试失败（`mapping/relocalization/test_module.py` 7 个 + `agents/skills/test_navigation.py` 1 个）经与合并前 `jtlinux`（`dde106238`）detached HEAD 对比验证，均为**合并前已存在的问题**，与本次合并无关，未在本次处理。
+4. 合并提交触发的 `largefiles-check` 钩子拦截了 6 个历史遗留超限 PDF（`jiangtao/cursor/*.pdf`，非本次新增），已加入 `pyproject.toml` 的 `[tool.largefiles].ignore` 白名单后完成提交。
+
+**用法**
+
+```bash
+# 查看合并引入的完整改动统计
+git show --stat bc31f3dae
+
+# 查看某个冲突文件合并前后差异
+git diff dde106238 bc31f3dae -- dimos/mapping/relocalization/relocalize.py
+
+# 验证语法 / 跑受影响模块测试
+uv run pytest dimos/robot/unitree/ dimos/mapping/relocalization/test_relocalize.py \
+  dimos/navigation/replanning_a_star/ dimos/agents/mcp/ dimos/core/ \
+  dimos/perception/experimental/test_spatial_memory_lightweight.py \
+  dimos/robot/test_all_blueprints_generation.py -q
+```
+
+**依赖 / 前置**
+
+- 合并前对本地未提交改动执行了 `git stash push -u -m "wip before upstream merge 20260731-1731"`，合并完成后已 `git stash pop` 并解决其中 `dimos/robot/unitree/unitree_skill_container.py` 的二次冲突（工作区未提交，未纳入本次 merge commit）。
+
+**回滚**
+
+```bash
+# 回滚到合并前基线（丢弃本次同步的全部上游改动，谨慎使用）
+git reset --hard dde106238
+# 或仅回退单个文件
+git checkout dde106238 -- <file>
+```
+
+---
 
 ### 28796439d — feat(nav): tune Go2 spatial memory search defaults for V1
 
