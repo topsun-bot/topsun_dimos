@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| spatial memory search V1 默认参数 | `28796439d` |
 | 原地旋转最小摇杆 \|rx\|=0.2 | `ba00a2136` |
 | 启动默认清空 landmarks / CLIP（new_memory） | `597dc068f` |
 | 导航诊断 trace / `dimos nav analyze` | `0ed24b321` |
@@ -41,6 +42,48 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 28796439d — feat(nav): tune Go2 spatial memory search defaults for V1
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-31 16:18:27 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/agents/skills/navigation.py` | 默认 `DIMOS_ROTATION_STEP_DEG=60`、`DIMOS_ROOM_SCAN_ROTATIONS=5`、确认容差 10° |
+| `dimos/robot/unitree/unitree_skill_container.py` | 默认 `DIMOS_ROTATE_MAX_RAD_S=0.25`（MIN 仍为 0.2） |
+| `pyproject.toml` | `navigation.py` 加入 largefiles ignore（>75KB 历史大文件） |
+
+**改进点**
+
+1. 真机验证通过的寻物/标记参数写入代码默认，无需每次 export env。
+2. 标记全景 60°×5、搜索步长自动 40°、视觉确认容差 10°、原地转最大摇杆 0.25。
+
+**用法**
+
+```bash
+# 直接跑 agentic blueprint，默认即 V1 参数
+dimos run unitree-go2-agentic-deepseek --robot-ip <ip>
+# 或 relocalization-memory 版
+dimos run unitree-go2-relocalization-memory-agentic-deepseek --robot-ip <ip>
+# 打 tag  checkout
+git checkout spatial_memory_search_V1
+```
+
+**回滚**
+
+```bash
+git checkout c11458b9f -- dimos/agents/skills/navigation.py dimos/robot/unitree/unitree_skill_container.py pyproject.toml
+# 或
+git reset --hard c11458b9f
+```
+
+---
 
 ### ba00a2136 — fix(go2): lower rotate min stick to 0.2 after 4G calibration
 
