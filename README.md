@@ -9,6 +9,7 @@
 [![Stars](https://img.shields.io/github/stars/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/stargazers)
 [![Forks](https://img.shields.io/github/forks/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/fork)
 [![Contributors](https://img.shields.io/github/contributors/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/graphs/contributors)
+[![Docs](https://img.shields.io/badge/Docs-docs.dimensionalos.com-1682a3?style=flat-square&logo=readthedocs&logoColor=white)](https://docs.dimensionalos.com)
 ![Nix](https://img.shields.io/badge/Nix-flakes-5277C3?style=flat-square&logo=NixOS&logoColor=white)
 ![NixOS](https://img.shields.io/badge/NixOS-supported-5277C3?style=flat-square&logo=NixOS&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-supported-76B900?style=flat-square&logo=nvidia&logoColor=white)
@@ -18,10 +19,12 @@
 
 <big><big>
 
+[Docs](https://docs.dimensionalos.com) •
 [Hardware](#hardware) •
 [Installation](#installation) •
 [Agent CLI & MCP](#agent-cli-and-mcp) •
 [Blueprints](#blueprints) •
+[dimTELE: Remote Teleop](#dimtele-remote-teleop) •
 [Development](#development)
 
 ⚠️ **Pre-Release Beta** ⚠️
@@ -30,7 +33,7 @@
 
 </div>
 
-# Intro
+# About
 
 Dimensional is the modern operating system for generalist robotics. We are setting the next-generation SDK standard, integrating with the majority of robot manufacturers.
 
@@ -58,7 +61,7 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
   </tr>
   <tr>
     <td align="center" width="50%">
-      <a href="docs/capabilities/agents/readme.md"><img src="assets/readme/agentic_control.gif" alt="Agents" width="100%"></a>
+      <a href="docs/capabilities/agents/index.md"><img src="assets/readme/agentic_control.gif" alt="Agents" width="100%"></a>
     </td>
     <td align="center" width="50%">
       <img src="assets/readme/spatial_memory.gif" alt="Spatial Memory" width="100%">
@@ -66,11 +69,11 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
   </tr>
   <tr>
     <td align="center" width="50%">
-      <h3><a href="docs/capabilities/agents/readme.md">Agentive Control, MCP</a></h3>
+      <h3><a href="docs/capabilities/agents/index.md">Agentive Control, MCP</a></h3>
       "hey Robot, go find the kitchen"<br><a href="https://x.com/stash_pomichter/status/2015912688854200322">Watch video</a>
     </td>
     <td align="center" width="50%">
-      <h3>Spatial Memory</a></h3>
+      <h3>Spatial Memory</h3>
       Spatio-temporal RAG, Dynamic memory, Object localization and permanence<br><a href="https://x.com/stash_pomichter/status/1980741077205414328">Watch video</a>
     </td>
   </tr>
@@ -112,8 +115,8 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
       🟨 <a href="docs/platforms/humanoid/g1/index.md">Unitree G1</a><br>
     </td>
     <td align="center" width="20%">
-      🟨 <a href="docs/capabilities/manipulation/readme.md">Xarm</a><br>
-      🟨 <a href="docs/capabilities/manipulation/readme.md">AgileX Piper</a><br>
+      🟨 <a href="docs/capabilities/manipulation/index.md">Xarm</a><br>
+      🟨 <a href="docs/capabilities/manipulation/index.md">AgileX Piper</a><br>
     </td>
     <td align="center" width="20%">
       🟧 <a href="dimos/robot/drone/README.md">MAVLink</a><br>
@@ -216,6 +219,27 @@ dimos stop                                # Shut down
 
 > Full CLI reference: [docs/usage/cli.md](docs/usage/cli.md)
 
+# dimTELE: Remote Teleop
+
+**dimTELE** is hosted teleoperation for DimOS robots: operate them remotely from any browser or Quest headset over WebRTC. The robot dials out to a hosted broker, so you don't need to open any inbound ports on the robot's network. It works behind a home router, on Wi-Fi, wired LAN, or cellular.
+
+1. Open [teleop.dimensionalos.com](https://teleop.dimensionalos.com), log in, and grab an API key (**API Keys → + New Key**).
+2. Run a teleop blueprint on the robot, passing the key as `TRANSPORTS__BROKER__API_KEY`:
+
+   ```bash
+   # Robot dials out to the broker with your API key
+   TRANSPORTS__BROKER__API_KEY=<your-api-key> \
+   dimos run teleop-hosted-go2-transport
+   ```
+
+3. Your robot appears under **Available Robots** — click **Connect** and drive the robot from the browser.
+
+| Blueprint | Notes |
+|-----------|-------|
+| `teleop-hosted-go2-transport` | Browser teleop — drive + camera + minimap + click-to-nav (recommended) |
+| `teleop-hosted-go2-multicam` | Adds a second RealSense, operator-selectable, mux'd into one video track |
+
+> Full guide: [dimTELE](docs/capabilities/teleoperation/hosted.md) • [WebRTC internals](dimos/teleop/hosted/README.md)
 
 # Usage
 
@@ -296,8 +320,8 @@ if __name__ == "__main__":
 - [Modules](docs/usage/modules.md)
 - [LCM](docs/usage/lcm.md)
 - [Blueprints](docs/usage/blueprints.md)
-- [Transports](docs/usage/transports/index.md) — LCM, SHM, DDS, ROS 2
-- [Data Streams](docs/usage/data_streams/README.md)
+- [Transports](docs/usage/transports/index.md) — LCM, SHM, DDS, Zenoh, ROS 2
+- [Data Streams](docs/usage/data_streams/index.md)
 - [Configuration](docs/usage/configuration.md)
 - [Visualization](docs/usage/visualization.md)
 

@@ -31,11 +31,12 @@ from dimos.mapping.relocalization.relocalize import (
     relocalize as _relocalize,
     relocalize_with_initial as _relocalize_with_initial,
 )
-from dimos.mapping.voxels import VoxelGrid
+from dimos.mapping.voxels.grid import VoxelGrid
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.navigation.diagnostics.sink import TraceSink, isolate_trace_failure
 from dimos.utils.data import resolve_named_path
 from dimos.utils.logging_config import setup_logger
@@ -130,6 +131,7 @@ class RelocalizationModule(Module):
     loaded_map: Out[PointCloud2]
     # 输出：把 premap 变换到当前 world 后，与 local 融合得到的导航地图。
     merged_map: Out[PointCloud2]
+    tf: Out[TFMessage]
 
     def __init__(self, **kwargs: Any) -> None:
         # 初始化 Module 基类，完成配置解析、RPC/TF 等基础设施设置。
@@ -1004,7 +1006,7 @@ class RelocalizationModule(Module):
         if self.config.publish_loaded_map:
             self.loaded_map.publish(self._premap)
         # 周期性刷新 TF 时间戳，保证下游/可视化能持续看到最新坐标变换。
-        self.tf.publish(tf.now())
+        self.tf.publish(TFMessage(tf.now()))
 
     def _on_merge_input(self, pair: tuple[PointCloud2, Transform | None]) -> None:
         local, tf = pair

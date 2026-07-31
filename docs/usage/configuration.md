@@ -79,7 +79,6 @@ Config(
     rpc_transport=<class 'dimos.protocol.rpc.pubsubrpc.LCMRPC'>,
     default_rpc_timeout=120.0,
     rpc_timeouts={'build': 86400.0, 'start': 1200.0},
-    tf_transport=<class 'dimos.protocol.tf.tf.LCMTF'>,
     frame_id_prefix=None,
     frame_id='frame_id_override',
     g=GlobalConfig(
@@ -111,7 +110,6 @@ Config(
         robot_width=0.3,
         robot_rotation_diameter=0.6,
         nerf_speed=1.0,
-        planner_robot_speed=None,
         mcp_port=9990,
         build_native=False,
         dtop=False,

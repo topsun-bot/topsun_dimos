@@ -23,7 +23,7 @@ from typing import (
     cast,
 )
 
-from dimos.core.stream import In, Out, Stream, Transport
+from dimos.core.stream import In, Stream, Transport
 from dimos.msgs.protocol import DimosMsg
 from dimos.utils import colors
 
@@ -83,19 +83,24 @@ class PubSubTransport(Transport[T]):
     def __init__(self, topic: Any) -> None:
         self.topic = topic
 
-    @classmethod
-    def spec(cls, *args: Any, **kwargs: Any) -> TransportSpec:
-        """Defer construction: capture ctor args for the coordinator to build later."""
-        from dimos.core.coordination.blueprints import TransportSpec
-
-        return TransportSpec(cls, args, kwargs)
-
     def __str__(self) -> str:
         return (
             colors.green(f"{self.__class__.__name__}(")
             + colors.blue(self.topic)
             + colors.green(")")
         )
+
+    @property
+    def channel(self) -> str:
+        """The channel string this transport publishes and subscribes on."""
+        return str(self.topic)
+
+    @classmethod
+    def spec(cls, *args: Any, **kwargs: Any) -> TransportSpec:
+        """Defer construction: capture ctor args for the coordinator to build later."""
+        from dimos.core.coordination.blueprints import TransportSpec
+
+        return TransportSpec(cls, args, kwargs)
 
 
 class pLCMTransport(PubSubTransport[T]):
@@ -108,7 +113,7 @@ class pLCMTransport(PubSubTransport[T]):
     def __reduce__(self):  # type: ignore[no-untyped-def]
         return (pLCMTransport, (self.topic,))
 
-    def broadcast(self, _: Out[T] | None, msg: T) -> None:
+    def broadcast(self, _: Stream[T] | None, msg: T) -> None:
         if not self._started:
             self.start()
 
@@ -295,7 +300,7 @@ class ROSTransport(PubSubTransport[DimosMsg]):
     def __reduce__(self) -> tuple[Any, ...]:
         return (ROSTransport, (self.topic.topic, self.topic.msg_type))
 
-    def broadcast(self, _: Out[DimosMsg] | None, msg: DimosMsg) -> None:
+    def broadcast(self, _: Stream[DimosMsg] | None, msg: DimosMsg) -> None:
         if self._ros is None:
             self.start()
             assert self._ros is not None  # for type narrowing
@@ -408,7 +413,7 @@ class WebRTCTransport(PubSubTransport[M]):
     def __reduce__(self):  # type: ignore[no-untyped-def]
         return (_rebuild_webrtc_transport, (type(self), self.topic, self._msg_type, self._config))
 
-    def broadcast(self, _: Out[M] | None, msg: M) -> None:
+    def broadcast(self, _: Stream[M] | None, msg: M) -> None:
         if not self._started:
             self.start()
         assert self._pubsub is not None
@@ -501,7 +506,7 @@ class WebRTCVideoTransport(Transport[Any]):
     def stop(self) -> None:
         pass  # shared provider is process-scoped (see WebRTCTransport.stop)
 
-    def broadcast(self, _: Out[Any] | None, msg: Any) -> None:
+    def broadcast(self, _: Stream[Any] | None, msg: Any) -> None:
         provider = self._config.provider()
         set_frame = getattr(provider, "set_video_frame", None)
         if set_frame is None:
@@ -543,6 +548,15 @@ class ZenohTransport(PubSubTransport[T]):
         self.zenoh = Zenoh(**kwargs)
         self._start_lock = threading.RLock()
 
+    @property
+    def channel(self) -> str:
+        return cast("str", self.topic.key_expr)
+
+    @property
+    def publish_qos(self) -> dict[str, str] | None:
+        qos = self.topic.qos
+        return qos.to_wire() if qos is not None else None
+
     def __reduce__(self) -> tuple[Any, ...]:
         return (ZenohTransport, (self.topic,))
 
@@ -558,7 +572,7 @@ class ZenohTransport(PubSubTransport[T]):
                 self.zenoh.stop()
                 self._started = False
 
-    def broadcast(self, _: Out[T] | None, msg: T) -> None:
+    def broadcast(self, _: Stream[T] | None, msg: T) -> None:
         if not self._started:
             self.start()
         self.zenoh.publish(self.topic, cast("DimosMsg", msg))
@@ -586,6 +600,15 @@ class pZenohTransport(PubSubTransport[T]):
         self.zenoh = PickleZenoh(**kwargs)
         self._start_lock = threading.RLock()
 
+    @property
+    def channel(self) -> str:
+        return self._zenoh_topic.key_expr
+
+    @property
+    def publish_qos(self) -> dict[str, str] | None:
+        qos = self._zenoh_topic.qos
+        return qos.to_wire() if qos is not None else None
+
     def __reduce__(self) -> tuple[Any, ...]:
         return (pZenohTransport, (self._zenoh_topic,))
 
@@ -601,7 +624,7 @@ class pZenohTransport(PubSubTransport[T]):
                 self.zenoh.stop()
                 self._started = False
 
-    def broadcast(self, _: Out[T] | None, msg: T) -> None:
+    def broadcast(self, _: Stream[T] | None, msg: T) -> None:
         if not self._started:
             self.start()
         self.zenoh.publish(self._zenoh_topic, msg)

@@ -19,12 +19,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
-import open3d as o3d  # type: ignore[import-untyped]
 
-_reg = o3d.pipelines.registration
+if TYPE_CHECKING:
+    import open3d as o3d  # type: ignore[import-untyped]
 
 # 多尺度全局搜索计划：(voxel_size, 该尺度 RANSAC 重启次数)。
 # (voxel_size, total RANSAC runs at that scale). 0.8m is the coarsest, cheapest
@@ -44,10 +44,20 @@ RERANK_DIST = FINE_VOXEL * 1.5  # inlier dist for fine-scale candidate scoring
 GRAVITY_TILT_MAX_DEG = 10.0  # reject candidates whose z-axis tilts more than this
 
 
+def _o3d_registration() -> Any:
+    """Lazily import open3d and return its ``pipelines.registration`` module."""
+    import open3d as o3d
+
+    return o3d.pipelines.registration
+
+
 def _preprocess(
     pcd: o3d.geometry.PointCloud, voxel_size: float
 ) -> tuple[o3d.geometry.PointCloud, Any]:
     """Downsample, estimate normals, compute FPFH descriptors."""
+    import open3d as o3d
+
+    _reg = _o3d_registration()
     # 先按 voxel_size 下采样，降低点数，让 FPFH/RANSAC 可承受。
     down = pcd.voxel_down_sample(voxel_size)
     # FPFH 依赖法向；半径取 2 个 voxel，局部几何比较稳定。
@@ -84,6 +94,8 @@ def _global_preprocess(
 
 
 def _global_fine(global_map: o3d.geometry.PointCloud, voxel_size: float) -> o3d.geometry.PointCloud:
+    import open3d as o3d
+
     # fine cache 专供候选评分和 final ICP 使用，避免每次重算 premap 细尺度点云。
     key = ("fine", voxel_size, len(global_map.points))
     cached = _GLOBAL_CACHE.get(key)
@@ -105,6 +117,8 @@ def _prepare_fine_cloud(
     voxel_size: float = FINE_VOXEL,
 ) -> o3d.geometry.PointCloud:
     """Prepare a downsampled cloud with normals for point-to-plane ICP."""
+    import open3d as o3d
+
     # local 点云每次都会变化，因此不能像固定 premap 一样放入全局缓存。
     down = cloud.voxel_down_sample(voxel_size)
     # point-to-plane ICP 和墙面筛选都依赖法向，半径沿用原 final ICP 参数。
@@ -114,6 +128,8 @@ def _prepare_fine_cloud(
 
 def _wall_subset(cloud: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
     """Keep mostly vertical surfaces so floor points cannot hide a bad yaw."""
+    import open3d as o3d
+
     # 读取法向，法向 z 分量较小的点对应近似竖直的墙面。
     normals = np.asarray(cloud.normals)
     mask = np.abs(normals[:, 2]) < 0.7
@@ -206,6 +222,7 @@ def _evaluate_stage(
     max_dist: float,
     transform: np.ndarray,
 ) -> IcpStageMetrics:
+    _reg = _o3d_registration()
     source_pts = len(source.points)
     if source_pts == 0:
         return IcpStageMetrics(0.0, float("nan"), 0, 0)
@@ -227,6 +244,7 @@ def _icp_estimation_method(
     max_correspondence_distance: float,
 ) -> Any:
     """Build Open3D ICP estimation; point-to-plane matches global relocalize() TukeyLoss."""
+    _reg = _o3d_registration()
     if icp_estimation == "point_to_point":
         return _reg.TransformationEstimationPointToPoint()
     return _reg.TransformationEstimationPointToPlane(
@@ -260,6 +278,8 @@ def _crop_target_around_source(
     crop_radius: float,
 ) -> tuple[o3d.geometry.PointCloud, dict[str, Any]]:
     """Crop the target around the source transformed by the cached pose."""
+    import open3d as o3d
+
     meta: dict[str, Any] = {
         "crop_enabled": True,
         "crop_radius_m": crop_radius,
@@ -307,6 +327,9 @@ def _ransac(
     Docs:
       https://www.open3d.org/docs/latest/python_api/open3d.registration.registration_ransac_based_on_feature_matching.html
     """
+    import open3d as o3d
+
+    _reg = o3d.pipelines.registration
     # RANSAC 的对应点距离阈值随尺度放大，粗尺度允许更大的几何误差。
     dist = voxel_size * 1.5
     # Open3D 全局注册：用 FPFH 特征配对，随机采样 3 对点估计粗变换。
@@ -352,6 +375,10 @@ def relocalize(
     rerank catches z-degenerate and wrong-room busts: at FINE_VOXEL a
     5m-off candidate has ~0 inliers while RANSAC reports it as fit.
     """
+    import open3d as o3d
+
+    _reg = o3d.pipelines.registration
+
     # Step 0：把当前 local_map 做一次细尺度下采样，供候选评分和 final ICP 复用。
     # Fine downsample once — used for both candidate scoring and the final ICP.
     src_fine = _prepare_fine_cloud(local_map)
@@ -469,6 +496,7 @@ def relocalize_with_initial(
     icp_estimation: IcpEstimation = "point_to_point",
 ) -> tuple[np.ndarray, float, FastIcpDiagnostics]:
     """Refine ``map <- world`` from a cached transform without global RANSAC."""
+    _reg = _o3d_registration()
     # JSON 或调用方传入的初值必须是有限的 4x4 刚体变换矩阵。
     initial = np.asarray(init_T_map_world, dtype=float)
     if initial.shape != (4, 4) or not np.isfinite(initial).all():

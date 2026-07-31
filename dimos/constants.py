@@ -30,27 +30,33 @@ else:
 DIMOS_PROJECT_ROOT = Path(__file__).parent.parent
 
 
-def resolve_log_dir() -> Path:
-    """Base directory for per-run log folders (``<log_dir>/<run-id>/<run-id>.jsonl``).
+def _resolve_project_relative_dir(name: str, env_override: str) -> Path:
+    """Base directory for a per-project data folder (logs, recordings, ...).
 
     Priority:
-    1. ``DIMOS_LOG_DIR`` env var (absolute path)
+    1. ``<env_override>`` env var (absolute path)
     2. Current working directory when it looks like a dimos project checkout
     3. Installed package git root (``DIMOS_PROJECT_ROOT``)
     4. XDG state dir (pip install without ``.git``)
     """
-    if override := os.environ.get("DIMOS_LOG_DIR"):
+    if override := os.environ.get(env_override):
         return Path(override).expanduser().resolve()
     cwd = Path.cwd()
     if (cwd / "pyproject.toml").is_file() and (cwd / "dimos").is_dir():
-        return cwd / "logs"
+        return cwd / name
     if (DIMOS_PROJECT_ROOT / ".git").exists():
-        return DIMOS_PROJECT_ROOT / "logs"
-    return STATE_DIR / "logs"
+        return DIMOS_PROJECT_ROOT / name
+    return STATE_DIR / name
+
+
+def resolve_log_dir() -> Path:
+    """Base directory for per-run log folders (``<log_dir>/<run-id>/<run-id>.jsonl``)."""
+    return _resolve_project_relative_dir("logs", "DIMOS_LOG_DIR")
 
 
 # Resolved at import for legacy callers; CLI uses resolve_log_dir() after load_dotenv().
 LOG_DIR = resolve_log_dir()
+RECORDINGS_DIR = _resolve_project_relative_dir("recordings", "DIMOS_RECORDINGS_DIR")
 
 """
 Constants for shared memory

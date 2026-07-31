@@ -26,6 +26,7 @@ from reactivex import operators as ops
 from reactivex.observable import Observable
 from reactivex.subject import Subject
 from unitree_webrtc_connect.constants import (
+    DATA_CHANNEL_TYPE,
     RTC_TOPIC,
     SPORT_CMD,
     VUI_COLOR,
@@ -53,6 +54,7 @@ from dimos.types.timestamped import Timestamped
 from dimos.utils.decorators.decorators import simple_mcache
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import backpressure, callback_to_observable
+from dimos.utils.sequential_ids import SequentialIds
 
 VideoMessage: TypeAlias = NDArray[np.uint8]  # Shape: (height, width, 3)
 
@@ -184,6 +186,7 @@ class UnitreeWebRTCConnection(Resource):
         ip: str | None = None,
         mode: str = "ai",
         aes_128_key: str | None = None,
+        velocity_api: bool = False,
         *,
         connection_method: str = "local",
         username: str | None = None,
@@ -203,6 +206,8 @@ class UnitreeWebRTCConnection(Resource):
         self._trace_roi_interval_sec = max(5.0, trace_roi_interval_sec)
         self._trace_heartbeat_handle: asyncio.TimerHandle | None = None
         self._trace_heartbeat_interval_sec = 0.1
+        self._velocity_api = velocity_api
+        self._move_ids = SequentialIds()
         # 接受 4g / sta-t 作为 remote 的易读别名, 其余未知值继续按历史
         # local 行为处理, 从而保持旧命令兼容.
         method = (connection_method or "local").strip().lower()
@@ -296,6 +301,13 @@ class UnitreeWebRTCConnection(Resource):
         try:
             asyncio.run_coroutine_threadsafe(async_connect(), self.loop).result()
         except Exception:
+            # Best-effort disconnect — don't leave a half-open peer on the dog.
+            try:
+                asyncio.run_coroutine_threadsafe(self.conn.disconnect(), self.loop).result(
+                    timeout=3.0
+                )
+            except Exception:
+                logger.warning("best-effort disconnect on connect failure failed", exc_info=True)
             self.loop.call_soon_threadsafe(self.loop.stop)
             self.thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
             raise
@@ -314,10 +326,7 @@ class UnitreeWebRTCConnection(Resource):
             try:
                 # 先发送零速度, 再关闭 PeerConnection. 这是网络层兜底,
                 # 上层 GO2Connection.stop() 还会先发送一次 StandDown.
-                self.conn.datachannel.pub_sub.publish_without_callback(
-                    RTC_TOPIC["WIRELESS_CONTROLLER"],
-                    data={"lx": 0, "ly": 0, "rx": 0, "ry": 0},
-                )
+                self._publish_movement(0, 0, 0)
             except Exception as exc:
                 # 链路可能已经被云端关闭；零速度发不出去时仍必须继续执行
                 # disconnect()，否则 aiortc 的 ICE/DTLS 资源会残留。
@@ -343,11 +352,33 @@ class UnitreeWebRTCConnection(Resource):
             if self.thread.is_alive():
                 logger.warning("Unitree WebRTC event-loop thread did not stop in time")
 
+    def _publish_movement(self, x: float, y: float, yaw: float) -> None:
+        if self._velocity_api:
+            self.conn.datachannel.pub_sub.publish_without_callback(
+                RTC_TOPIC["SPORT_MOD"],
+                data={
+                    "header": {
+                        "identity": {
+                            "id": self._move_ids.next() + 1,
+                            "api_id": SPORT_CMD["Move"],
+                        }
+                    },
+                    "parameter": json.dumps({"x": x, "y": y, "z": yaw}),
+                },
+                msg_type=DATA_CHANNEL_TYPE["REQUEST"],
+            )
+            return
+
+        self.conn.datachannel.pub_sub.publish_without_callback(
+            RTC_TOPIC["WIRELESS_CONTROLLER"],
+            data={"lx": -y, "ly": x, "rx": -yaw, "ry": 0},
+        )
+
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
-        """Send movement command to the robot using Twist commands.
+        """Send a body-frame movement command using the configured wire API.
 
         Args:
-            twist: Twist message with linear and angular velocities
+            twist: Linear x/y and angular z command
             duration: How long to move (seconds). If 0, command is continuous
 
         Returns:
@@ -355,28 +386,27 @@ class UnitreeWebRTCConnection(Resource):
         """
         x, y, yaw = twist.linear.x, twist.linear.y, twist.angular.z
 
-        # WebRTC coordinate mapping:
-        # x - Positive right, negative left
-        # y - positive forward, negative backwards
-        # yaw - Positive rotate right, negative rotate left
         async def async_move() -> None:
-            joystick = {"lx": -y, "ly": x, "rx": -yaw, "ry": 0}
+            # 记录实际下发的载荷: velocity_api 走 SPORT_MOD 的 x/y/yaw 报文,
+            # 否则走传统的 WIRELESS_CONTROLLER 摇杆模拟.
+            command_payload: dict[str, float | int] = (
+                {"x": x, "y": y, "yaw": yaw, "api": "sport_mod"}
+                if self._velocity_api
+                else {"lx": -y, "ly": x, "rx": -yaw, "ry": 0}
+            )
             trace_send = self._trace_full_enabled()
             send_wall_ts = time.time() if trace_send else None
             send_monotonic_ns = time.monotonic_ns() if trace_send else None
             send_error: Exception | None = None
             try:
-                self.conn.datachannel.pub_sub.publish_without_callback(
-                    RTC_TOPIC["WIRELESS_CONTROLLER"],
-                    data=joystick,
-                )
+                self._publish_movement(x, y, yaw)
             except Exception as exc:
                 send_error = exc
                 raise
             finally:
                 self._trace_webrtc_send(
                     twist,
-                    joystick,
+                    command_payload,
                     send_wall_ts,
                     send_monotonic_ns,
                     send_error,
@@ -515,7 +545,11 @@ class UnitreeWebRTCConnection(Resource):
             self.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": SPORT_CMD["BalanceStand"]})
         )
 
-    def set_obstacle_avoidance(self, enabled: bool = True) -> None:
+    def sport_command(self, api_id: int) -> bool:
+        """Send a parameterless SPORT_MOD command by api_id (Hello, Stretch, ...)."""
+        return bool(self.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": api_id}))
+
+    def set_obstacle_avoidance(self, enabled: bool = True) -> bool:
         try:
             response = self.publish_request(
                 RTC_TOPIC["OBSTACLES_AVOID"],
@@ -530,12 +564,15 @@ class UnitreeWebRTCConnection(Resource):
                 error=exc,
             )
             raise
+        result = bool(response)
         self._trace_avoidance_response(
             "obstacles_avoid",
             enabled,
             response,
             api_id=1001,
+            acknowledged_value=result,
         )
+        return result
 
     def set_motion_mode(self, name: str) -> None:
         """Select the top-level motion controller via the motion switcher.
@@ -608,14 +645,23 @@ class UnitreeWebRTCConnection(Resource):
         """Activate FreeWalk locomotion mode — enables walking and velocity commands."""
         return bool(self.publish_request(RTC_TOPIC["SPORT_MOD"], {"api_id": SPORT_CMD["FreeWalk"]}))
 
+    def switch_joystick(self, enable: bool = True) -> bool:
+        """Firmware joystick listening on/off. move()'s WIRELESS_CONTROLLER
+        stick emulation is silently ignored while this is off."""
+        return bool(
+            self.publish_request(
+                RTC_TOPIC["SPORT_MOD"],
+                {"api_id": SPORT_CMD["SwitchJoystick"], "parameter": {"data": enable}},
+            )
+        )
+
     def set_rage_mode(self, enable: bool) -> bool:
         """Toggle Rage Mode (api 2059) over WebRTC, both directions.
 
-        BalanceStand → 2059 {data:enable} → SwitchJoystick(enable). When on,
+        BalanceStand → 2059 {data:enable} → SwitchJoystick(True). When on,
         normal move() twists drive at the ~2.5 m/s rage envelope.
         """
-        # Re-establish BalanceStand before toggling (notes: always BalanceStand
-        # before flipping Rage).
+        # Always BalanceStand before flipping Rage.
         if not self.balance_stand():
             logger.warning("balance_stand() failed before rage toggle — proceeding")
         time.sleep(0.3)
@@ -629,16 +675,11 @@ class UnitreeWebRTCConnection(Resource):
         if not rage_ok:
             return False
 
-        if enable:
-            time.sleep(2.0)  # let FsmRageMode transition settle
-        joystick_ok = bool(
-            self.publish_request(
-                RTC_TOPIC["SPORT_MOD"],
-                {"api_id": SPORT_CMD["SwitchJoystick"], "parameter": {"data": enable}},
-            )
-        )
+        # Settle both directions — FSM transition needs time before SwitchJoystick.
+        time.sleep(2.0)
+        joystick_ok = self.switch_joystick(True)
         if not joystick_ok:
-            logger.warning("SwitchJoystick failed after rage toggle", enabled=enable)
+            logger.warning("SwitchJoystick failed after rage toggle")
         return joystick_ok
 
     def liedown(self) -> bool:
@@ -662,6 +703,16 @@ class UnitreeWebRTCConnection(Resource):
                     "time": colortime,
                 },
             },
+        )
+
+    def set_light(self, level: int) -> bool:
+        """Head LED brightness via the VUI api (1005): levels 0-10, 0 = off."""
+        level = max(0, min(10, int(level)))
+        return bool(
+            self.publish_request(
+                RTC_TOPIC["VUI"],
+                {"api_id": 1005, "parameter": {"brightness": level}},
+            )
         )
 
     @simple_mcache
@@ -957,10 +1008,20 @@ class UnitreeWebRTCConnection(Resource):
             isolate_trace_failure(trace, exc)
 
     def stop_movement(self) -> None:
-        """Cancel the auto-stop timer (used by move() for continuous commands)."""
+        """Halt the base: publish a zero twist and cancel the auto-stop timer."""
         if self.stop_timer:
             self.stop_timer.cancel()
             self.stop_timer = None
+
+        async def async_stop() -> None:
+            self._publish_movement(0, 0, 0)
+
+        if not self.loop.is_running():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(async_stop(), self.loop).result(timeout=1.0)
+        except Exception as e:
+            logger.warning("Failed to publish stop twist: %s", e)
 
     def disconnect(self) -> None:
         """Disconnect from the robot and clean up resources."""

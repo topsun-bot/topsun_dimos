@@ -2,9 +2,8 @@
 title: "Manipulation"
 ---
 
-Motion planning and teleoperation for robotic manipulators. Drake remains the default
-world backend, RoboPlan is available as an optional planning backend, and
-manipulation visualization supports Meshcat or Viser.
+Motion planning and teleoperation for robotic manipulators. RoboPlan provides
+the default world and native path planner.
 
 ## Quick Start
 
@@ -84,39 +83,72 @@ execute()               # Execute via coordinator
 Manipulation planning separates the world backend from the planner algorithm:
 
 - `world_backend` selects the robot/world/collision representation.
-- `planner_name` selects the path-planning algorithm.
+- `planner.backend` selects the path-planning algorithm.
 - `kinematics.backend` selects the IK backend. The legacy `kinematics_name`
   field remains available as a compatibility shim.
 
-Drake remains the default:
 
 ```bash
 dimos run xarm7-planner-coordinator
 ```
 
-RoboPlan is available as an optional backend for evaluating a non-Drake world
-implementation. Select it explicitly with module options:
+Select the legacy Drake world and generic RRT planner explicitly when needed:
 
 ```bash
 dimos run xarm7-planner-coordinator \
-  -o manipulationmodule.world_backend=roboplan \
-  -o manipulationmodule.planner_name=rrt_connect
+  -o manipulationmodule.world_backend=drake \
+  -o manipulationmodule.planner.backend=rrt_connect
 ```
 
 Valid combinations:
 
-| `world_backend` | `planner_name` | `kinematics.backend` | Status |
+| `world_backend` | `planner.backend` | `kinematics.backend` | Status |
 |-----------------|----------------|-------------------|--------|
-| `drake` | `rrt_connect` | `pink` | Default path |
+| `roboplan` | `roboplan` | `pink` or `jacobian` | Default path; RoboPlan-native planner |
+| `drake` | `rrt_connect` | `pink` | Legacy Drake world |
 | `drake` | `rrt_connect` | `jacobian` | Legacy Jacobian IK |
 | `drake` | `rrt_connect` | `drake_optimization` | Drake-only IK |
 | `roboplan` | `rrt_connect` | `pink` or `jacobian` | Generic RRT over RoboPlan collision checks |
-| `roboplan` | `roboplan` | `pink` or `jacobian` | RoboPlan-native planner, using the RoboPlan world object |
 
 Invalid combinations fail during startup instead of waiting for the first plan
-request. For example, `planner_name=roboplan` requires
+request. For example, `planner.backend=roboplan` requires
 `world_backend=roboplan`, and `kinematics.backend=drake_optimization` requires
 `world_backend=drake`.
+
+RoboPlan Cartesian options are supplied per planning request:
+
+```python skip
+from dimos.manipulation.planning.planners.config import (
+    RoboPlanCartesianPathConfig,
+)
+
+path_config = RoboPlanCartesianPathConfig(
+    speed_mode="bounded",
+    max_linear_speed=0.1,
+    max_angular_speed=0.5,
+    max_position_error=0.005,
+    max_orientation_error=0.01,
+)
+
+module.plan_cartesian_targets(
+    {"arm/manipulator": (current_tcp_pose, goal_tcp_pose)},
+    path_config,
+)
+```
+
+The remaining settings mirror RoboPlan's standard Cartesian planner options,
+including bounded and time-optimal speed modes, sample time, solver weights,
+linear/angular acceleration limits, joint velocity/acceleration scaling,
+TOPP-RA corner blending, joint-limit handling, and per-step attempts.
+
+Cartesian path planning remains a low-level internal capability in this
+release. `ManipulationModule.plan_cartesian_targets()` accepts an ordered
+waypoint sequence for each target planning group. A sequence contains only
+`PoseStamped` absolute waypoints or only `Transform` displacements relative to
+the planning start, and begins at the current TCP pose or identity transform.
+RoboPlan plans all target groups simultaneously. The Viser panel constructs a
+two-waypoint absolute path for interactive planning. There is no skill, MCP
+tool, or CLI motion command yet.
 
 Install the manipulation dependencies:
 
@@ -149,8 +181,9 @@ Backend choices:
 
 - `meshcat`: embedded Drake/Meshcat visualizer. The planning world must be created with
   embedded visualization enabled, so this is selected through the visualization config.
-- `viser`: in-process Viser visualizer. It renders current robot state, target controls,
-  transient preview ghosts, planned path previews, and optional panel controls.
+- `viser`: in-process Viser visualizer. It renders pushed current robot state,
+  target controls, transient preview ghosts, synchronized trajectory previews,
+  and optional panel controls.
 - `none`: no manipulation planning visualization.
 
 CLI example:
@@ -185,20 +218,41 @@ Viser support is included in the `manipulation` extra:
 uv sync --extra manipulation --inexact
 ```
 
-The Viser panel uses existing manipulation planning, preview, execute, cancel, and clear-plan
-RPC methods through a small in-process adapter. GUI callbacks enqueue operations instead of
-touching `WorldSpec`, IK, planner objects, or live Drake contexts directly. Rendering copies
-mutable joint state/path containers at the read boundary, then updates the Viser scene after
-manipulation/world accessors have returned.
+The Viser panel talks to the concrete `ManipulationOperator` bound into its
+`VisualizationSession`. GUI callbacks enqueue operations through that operator
+for target evaluation, planning, preview, execution, cancellation, reset, and
+clear-plan actions. The panel owns only target drafts, selection state, and
+callback generations; it does not touch `WorldSpec`, IK, planner objects,
+`ManipulationModule`, `WorldMonitor`, or live Drake contexts directly.
 
-External manipulation visualizers are initialized from a backend-neutral planning-scene snapshot
-after the planning world has added its robots. This snapshot maps world robot IDs to
-`RobotModelConfig` metadata so Viser can prepare current, target, and transient preview robot
-visuals without `WorldMonitor` depending on Viser-specific hooks. Embedded Meshcat visualization
-does not need extra setup because it observes the Drake world directly.
+The panel's **Planning mode** selector chooses how the current target is
+reached:
 
-When the Viser panel is enabled, it can call the existing manipulation execution path after a
-fresh feasible plan is available and the current robot joints still match the plan start.
+- **Joint space** is the default. It resolves the target to joints and invokes
+  the configured collision-free joint-path planner.
+- **Cartesian space** sends the existing transform-control poses as absolute
+  world-frame TCP goals to RoboPlan's Cartesian path planner. Selected groups
+  without a TCP participate as auxiliary groups.
+
+Cartesian planning failure never falls back to joint-space planning. A backend
+without Cartesian path support reports `UNSUPPORTED`; collision or tracking
+failure leaves the plan unavailable. Preview and execution use RoboPlan's
+original synchronized timestamps and velocities.
+
+External manipulation visualizers are initialized from a backend-neutral
+`VisualizationSession` after the planning world has added its robots. The
+session contains static `PlanningSceneInfo` metadata: world robot IDs,
+`RobotModelConfig` values, and resolved planning groups. Runtime joint state is
+then pushed through `VisualizationStateFrame` updates so renderers do not poll
+world/module state or own freshness policy. Embedded Meshcat visualization does
+not need extra setup because it observes the Drake world directly.
+
+Previews use the stored synchronized `JointTrajectory` from the generated plan.
+Viser projects the globally named trajectory into robot-local preview ghosts and
+plays the stored timestamped points directly; optional preview duration only
+scales the stored delays. Execute freshness is enforced by the manipulation
+module/operator immediately before dispatch, not by Viser-side telemetry
+snapshots.
 
 ### Perception + Agent
 
@@ -206,6 +260,8 @@ fresh feasible plan is available and the current robot joints still match the pl
 # Coordinator + perception + manipulation + LLM agent (single command)
 XARM7_IP=<ip> dimos run coordinator-xarm7 xarm-perception-agent
 ```
+
+For a simulation walkthrough, see [Agentic xArm simulation](/docs/capabilities/manipulation/agentic.md).
 
 ## Architecture
 
@@ -228,6 +284,16 @@ kinematics behavior. Meshcat preview and publishing are exposed separately
 through `VisualizationSpec`, so non-visual planning paths do not require a
 visualization backend.
 
+All `WorldSpec` obstacle operations are runtime operations and require the
+world to be finalized first. `update_obstacle(obstacle)` replaces the complete
+obstacle identified by `obstacle.name`; callers must provide every geometry and
+appearance field. `update_obstacle_pose(name, pose)` is the pose-only fast path
+and preserves the other fields. Each update is serialized with native scene
+queries, so collision checking sees either the old obstacle or the new one,
+never the remove/add intermediate state. This boundary applies to each native
+operation, not to an entire generic planning run; RoboPlan's opaque native
+planner is locked for its whole native call.
+
 ## Blueprints
 
 | Blueprint | Description |
@@ -236,12 +302,12 @@ visualization backend.
 | `keyboard-teleop-piper` | Piper 6-DOF keyboard teleop with Drake viz |
 | `keyboard-teleop-xarm6` | XArm6 6-DOF keyboard teleop with Drake viz |
 | `keyboard-teleop-xarm7` | XArm7 7-DOF keyboard teleop with Drake viz |
-| `xarm6-planner-only` | XArm6 standalone planner (no coordinator) |
 | `xarm7-planner-coordinator` | XArm7 planner with coordinator integration |
-| `dual-xarm6-planner` | Dual XArm6 planning |
+| `dual-xarm6-planner-coordinator` | Dual XArm6 planning with mock coordinator hardware |
 | `xarm-perception` | XArm7 + RealSense camera for perception |
 | `xarm-perception-agent` | XArm7 perception + LLM agent |
 | `xarm-perception-sim` | XArm7 simulation perception stack |
+| [`xarm-perception-sim-agent`](/docs/capabilities/manipulation/agentic.md) | XArm7 simulation perception stack + LLM agent |
 
 ## Supported Robots
 

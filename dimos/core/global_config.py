@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import platform
 import re
 from typing import Literal, TypeAlias
@@ -71,6 +72,14 @@ class GlobalConfig(BaseSettings):
     # 避免重启后旧 odom 坐标与 CLIP 房间图残留导致误匹配. 需要跨次运行保留记忆时用
     # --no-new-memory 或 DIMOS_NEW_MEMORY=false.
     new_memory: bool = True
+    # Discover zenoh peers across the network.
+    # Toggling off drops back to loopback-only discovery:
+    # Sibling worker processes still find each other,
+    # remote peers come solely from the connect endpoints derived from --robot-ip
+    zenoh_scouting: bool = False
+    # Seconds ZenohService.start() blocks for the configured connect endpoints to
+    # link before giving up and continuing. 0 disables the wait.
+    zenoh_connect_timeout: float = 1.0
     viewer: ViewerBackend = "rerun"
     rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT
     rerun_web: bool = RERUN_ENABLE_WEB
@@ -91,7 +100,6 @@ class GlobalConfig(BaseSettings):
     robot_width: float = 0.3
     robot_rotation_diameter: float = 0.6
     nerf_speed: float = 1.0
-    planner_robot_speed: float | None = None
     mcp_port: int = 9990
     # `DIMOS_TRANSPORT` (or `.env`) is the single switch read by every process
     # (dimos, humancli, agentspy, dtop). The `transport` alias keeps the bare
@@ -111,7 +119,7 @@ class GlobalConfig(BaseSettings):
     free_avoid: bool = False
     detection_model: VlModelName = "moondream"
     listen_host: str = "127.0.0.1"
-    dimsim_scene: str = "apt"
+    dimsim_scene: str = "apartment"
     dimsim_port: int = 8090
     # Navigation tracing is intentionally disabled by default.  The online
     # path only queues bounded records; report generation is always offline.
@@ -127,6 +135,9 @@ class GlobalConfig(BaseSettings):
     navigation_trace_blob_max_item_bytes: int = 33_554_432
     navigation_trace_min_free_disk_bytes: int = 5_368_709_120
     navigation_trace_forensic_ack: bool = False
+    dimsim_headless: bool = True
+    local_relay: bool = False
+    relay_url: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -138,7 +149,7 @@ class GlobalConfig(BaseSettings):
     def update(self, **kwargs: object) -> None:
         """Update config fields in place."""
         for key, value in kwargs.items():
-            if not hasattr(self, key):
+            if key not in type(self).model_fields:
                 raise AttributeError(f"GlobalConfig has no field '{key}'")
             setattr(self, key, value)
 
@@ -160,6 +171,14 @@ class GlobalConfig(BaseSettings):
         if self.mujoco_camera_position is None:
             return (-0.906, 0.008, 1.101, 4.931, 89.749, -46.378)
         return tuple(_get_all_numbers(self.mujoco_camera_position))
+
+    @property
+    def processed_robot_ips(self) -> tuple[str, ...]:
+        ips = [x.strip() for x in (self.robot_ips or "").split(",") if x.strip()]
+        is_running_tests = "PYTEST_CURRENT_TEST" in os.environ
+        if not ips and not is_running_tests:
+            raise ValueError("No robot IPs specified. Must have at least one IP.")
+        return tuple(ips)
 
 
 global_config = GlobalConfig()

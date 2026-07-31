@@ -55,8 +55,8 @@ from dimos.navigation.visual.query import (
     parse_simple_bbox_line,
     yaw_offset_from_bbox,
 )
-from dimos.perception.object_tracking_spec import ObjectTrackingSpec
-from dimos.perception.spatial_memory_spec import SpatialMemorySpec
+from dimos.perception.experimental.object_tracking_spec import ObjectTrackingSpec
+from dimos.perception.experimental.spatial_memory_spec import SpatialMemorySpec
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 from dimos.types.door_memory_spec import SpatialLandmarkMemorySpec
 from dimos.types.relocalization_spec import RelocalizationStateSpec

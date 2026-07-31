@@ -22,8 +22,8 @@ from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.perception.detection.door.door_spatial_memory_module import (
     SpatialLandmarkMemoryModule,
 )
-from dimos.perception.spatial_memory_spec import SpatialMemorySpec
-from dimos.perception.spatial_perception import SpatialMemory
+from dimos.perception.experimental.spatial_memory_spec import SpatialMemorySpec
+from dimos.perception.experimental.spatial_perception import SpatialMemory
 from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_relocalization_memory_agentic_deepseek import (
     unitree_go2_relocalization_memory_agentic_deepseek,
 )
@@ -67,8 +67,12 @@ def test_navigation_and_memory_resolve_to_jtlinux_platform_chain() -> None:
     assert navigation_refs["_relocalization"].optional is True
     assert unitree_refs["_navigation"].spec is NavigationInterfaceSpec
 
-    movement_streams = {(stream.name, stream.type, stream.direction) for stream in _atom(MovementManager).streams}
-    connection_streams = {(stream.name, stream.type, stream.direction) for stream in _atom(GO2Connection).streams}
+    movement_streams = {
+        (stream.name, stream.type, stream.direction) for stream in _atom(MovementManager).streams
+    }
+    connection_streams = {
+        (stream.name, stream.type, stream.direction) for stream in _atom(GO2Connection).streams
+    }
     assert ("cmd_vel", Twist, "out") in movement_streams
     assert ("cmd_vel", Twist, "in") in connection_streams
 

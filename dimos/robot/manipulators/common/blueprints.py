@@ -36,15 +36,25 @@ from dimos.robot.manipulators.common.topics import (
 
 def trajectory_task(
     hardware: HardwareComponent,
-    *,
+    *additional_hardware: HardwareComponent,
     name: str | None = None,
     priority: int = 10,
+    start_position_tolerance: float = 0.05,
 ) -> TaskConfig:
+    hardware_components = (hardware, *additional_hardware)
     return TaskConfig(
-        name=name or trajectory_task_name(hardware.hardware_id),
+        name=name
+        or (
+            trajectory_task_name(hardware.hardware_id)
+            if not additional_hardware
+            else DEFAULT_TRAJECTORY_TASK_NAME
+        ),
         type="trajectory",
-        joint_names=hardware.joints,
+        joint_names=[
+            joint_name for component in hardware_components for joint_name in component.joints
+        ],
         priority=priority,
+        params={"start_position_tolerance": start_position_tolerance},
     )
 
 
@@ -72,13 +82,17 @@ def eef_twist_task(
     ee_joint_id: int,
     name: str = EEF_TWIST_TASK_NAME,
     priority: int = 10,
+    params: dict[str, Any] | None = None,
 ) -> TaskConfig:
+    task_params: dict[str, Any] = {"model_path": model_path, "ee_joint_id": ee_joint_id}
+    if params:
+        task_params.update(params)
     return TaskConfig(
         name=name,
         type="eef_twist",
         joint_names=hardware.joints,
         priority=priority,
-        params={"model_path": model_path, "ee_joint_id": ee_joint_id},
+        params=task_params,
     )
 
 
@@ -115,11 +129,18 @@ def coordinator(
     tick_rate: float = 100.0,
     publish_joint_state: bool = True,
     joint_state_frame_id: str = COORDINATOR_FRAME_ID,
+    cls: type[ControlCoordinator] = ControlCoordinator,
+    instance_name: str | None = None,
+    publish_robot_joint_states: bool = False,
 ) -> Blueprint:
-    return ControlCoordinator.blueprint(
+    """*cls* is the subclass declaring the `{hardware_id}_joints` outputs; pass
+    instance_name="ControlCoordinator" with it so RPC clients still find it."""
+    return cls.blueprint(
         tick_rate=tick_rate,
         publish_joint_state=publish_joint_state,
+        publish_robot_joint_states=publish_robot_joint_states,
         joint_state_frame_id=joint_state_frame_id,
+        instance_name=instance_name,
         hardware=list(hardware),
         tasks=list(tasks),
     )

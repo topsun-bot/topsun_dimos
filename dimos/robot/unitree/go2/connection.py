@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from enum import Enum
 from importlib import resources
 import sys
@@ -23,7 +24,6 @@ from pydantic import Field
 from reactivex import empty
 from reactivex.disposable import Disposable
 from reactivex.observable import Observable
-import rerun.blueprint as rrb
 
 from dimos.agents.annotation import skill
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
@@ -42,6 +42,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.navigation.diagnostics.sink import TraceSink, isolate_trace_failure
 from dimos.robot.unitree.connection import UnitreeWebRTCConnection
 from dimos.robot.unitree.type.lowstate import LowStateMsg
@@ -68,6 +69,7 @@ class ConnectionConfig(ModuleConfig):
     mode: Go2Mode = Go2Mode.DEFAULT
     lidar: bool = True
     camera: bool = True
+    velocity_api: bool = False
     # "mcf" for stair traversal, "normal" for basic, None to leave it as is
     motion_mode: str | None = None
     # Per-device AES-128 key (Go2 fw >=1.1.15); defaults from GlobalConfig.
@@ -87,12 +89,16 @@ class Go2ConnectionProtocol(Protocol):
     def video_stream(self) -> Observable[Image]: ...
     def lowstate_stream(self) -> Observable[LowStateMsg]: ...
     def move(self, twist: Twist, duration: float = 0.0) -> bool: ...
+    def stop_movement(self) -> None: ...
     def standup(self) -> bool: ...
     def liedown(self) -> bool: ...
     def balance_stand(self) -> bool: ...
-    def set_obstacle_avoidance(self, enabled: bool = True) -> None: ...
+    def sport_command(self, api_id: int) -> bool: ...
+    def set_obstacle_avoidance(self, enabled: bool = True) -> bool: ...
     def set_rage_mode(self, enable: bool) -> bool: ...
     def free_avoid(self, enabled: bool = True) -> bool: ...
+    def set_light(self, level: int) -> bool: ...
+    def switch_joystick(self, enable: bool = True) -> bool: ...
     def publish_request(self, topic: str, data: dict) -> dict: ...  # type: ignore[type-arg]
 
 
@@ -104,6 +110,13 @@ _FRONT_CAMERA_720_YAML = resources.files("dimos.robot.unitree.go2").joinpath(
 def _camera_info_static() -> CameraInfo:
     with resources.as_file(_FRONT_CAMERA_720_YAML) as yaml_path:
         return CameraInfo.from_yaml(str(yaml_path))
+
+
+def _prefixed(prefix: str | None, name: str) -> str:
+    """Apply a TF namespace prefix (ModuleConfig.frame_id_prefix) to a frame name."""
+    if not prefix or not name:
+        return name
+    return f"{prefix}/{name}"
 
 
 # Static camera mount chain: base_link -> camera_link -> camera_optical.
@@ -126,6 +139,7 @@ def make_connection(
     cfg: GlobalConfig,
     aes_128_key: str | None = None,
     trace_sink: TraceSink | None = None,
+    velocity_api: bool = False,
 ) -> Go2ConnectionProtocol:
     # 第一级先按 replay / simulator / 真机选择后端. 真机 WebRTC 再按
     # unitree_webrtc_method 分成 Remote 和 LocalSTA, 上层 GO2Connection
@@ -154,6 +168,7 @@ def make_connection(
                 return UnitreeWebRTCConnection(
                     ip=None,
                     aes_128_key=aes_128_key,
+                    velocity_api=velocity_api,
                     connection_method="remote",
                     username=cfg.unitree_username,
                     password=cfg.unitree_password,
@@ -163,6 +178,7 @@ def make_connection(
             return UnitreeWebRTCConnection(
                 ip=None,
                 aes_128_key=aes_128_key,
+                velocity_api=velocity_api,
                 connection_method="remote",
                 username=cfg.unitree_username,
                 password=cfg.unitree_password,
@@ -174,10 +190,11 @@ def make_connection(
         # 没有显式选择 Remote 就保持历史 LocalSTA 行为, 防止旧部署被改道.
         assert ip is not None, "IP address must be provided for LocalSTA WebRTC"
         if not has_trace_config and trace_sink is None:
-            return UnitreeWebRTCConnection(ip, aes_128_key=aes_128_key)
+            return UnitreeWebRTCConnection(ip, aes_128_key=aes_128_key, velocity_api=velocity_api)
         return UnitreeWebRTCConnection(
             ip,
             aes_128_key=aes_128_key,
+            velocity_api=velocity_api,
             trace_sink=trace_sink,
             trace_roi_interval_sec=trace_roi_interval_sec,
         )
@@ -231,8 +248,15 @@ class ReplayConnection(UnitreeWebRTCConnection, CompositeResource):
     def balance_stand(self) -> bool:
         return True
 
-    def set_obstacle_avoidance(self, enabled: bool = True) -> None:
+    def sport_command(self, api_id: int) -> bool:
+        return True
+
+    def stop_movement(self) -> None:
+        # No webrtc deadman timer to cancel; the cmd_vel timeout covers replay.
         pass
+
+    def set_obstacle_avoidance(self, enabled: bool = True) -> bool:
+        return True
 
     def set_motion_mode(self, name: str) -> None:
         pass
@@ -241,6 +265,12 @@ class ReplayConnection(UnitreeWebRTCConnection, CompositeResource):
         return True
 
     def free_avoid(self, enabled: bool = True) -> bool:
+        return True
+
+    def set_light(self, level: int) -> bool:
+        return True
+
+    def switch_joystick(self, enable: bool = True) -> bool:
         return True
 
     def _stream_name(self, *names: str) -> str:
@@ -297,6 +327,7 @@ class GO2Connection(Module, Camera, Pointcloud):
     lidar: Out[PointCloud2]
     color_image: Out[Image]
     camera_info: Out[CameraInfo]
+    tf: Out[TFMessage]
 
     connection: Go2ConnectionProtocol
     camera_info_static: CameraInfo = _camera_info_static()
@@ -310,6 +341,8 @@ class GO2Connection(Module, Camera, Pointcloud):
 
     @classmethod
     def rerun_views(cls):  # type: ignore[no-untyped-def]
+        import rerun.blueprint as rrb
+
         """Return Rerun view blueprints for GO2 camera visualization."""
         return [
             rrb.Spatial2DView(
@@ -331,6 +364,7 @@ class GO2Connection(Module, Camera, Pointcloud):
                 self.config.g,
                 aes_128_key=self.config.aes_128_key,
                 trace_sink=self._navigation_trace,
+                velocity_api=self.config.velocity_api,
             )
         except Exception:
             self._navigation_trace.close()
@@ -338,6 +372,13 @@ class GO2Connection(Module, Camera, Pointcloud):
 
         if hasattr(self.connection, "camera_info_static"):
             self.camera_info_static = self.connection.camera_info_static
+
+        if self.config.frame_id_prefix and self.camera_info_static.frame_id:
+            # Copy so the class-level default is not mutated.
+            self.camera_info_static = copy.copy(self.camera_info_static)
+            self.camera_info_static.frame_id = _prefixed(
+                self.config.frame_id_prefix, self.camera_info_static.frame_id
+            )
 
     @rpc
     def start(self) -> None:
@@ -348,6 +389,7 @@ class GO2Connection(Module, Camera, Pointcloud):
         self.connection.start()
 
         def onimage(image: Image) -> None:
+            image.frame_id = _prefixed(self.config.frame_id_prefix, image.frame_id)
             self.color_image.publish(image)
             self._latest_video_frame = image
 
@@ -466,33 +508,35 @@ class GO2Connection(Module, Camera, Pointcloud):
         self._navigation_trace.close()
 
     @classmethod
-    def _odom_to_tf(cls, odom: PoseStamped) -> list[Transform]:
+    def _odom_to_tf(cls, odom: PoseStamped, prefix: str = "") -> list[Transform]:
+        # The odom parent frame (odom.frame_id) stays unprefixed so namespaced
+        # robots still hang off one shared tree root.
         camera_link = Transform(
             translation=Vector3(0.3, 0.0, 0.0),
             rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-            frame_id="base_link",
-            child_frame_id="camera_link",
+            frame_id=_prefixed(prefix, "base_link"),
+            child_frame_id=_prefixed(prefix, "camera_link"),
             ts=odom.ts,
         )
 
         camera_optical = Transform(
             translation=Vector3(0.0, 0.0, 0.0),
             rotation=Quaternion(-0.5, 0.5, -0.5, 0.5),
-            frame_id="camera_link",
-            child_frame_id="camera_optical",
+            frame_id=_prefixed(prefix, "camera_link"),
+            child_frame_id=_prefixed(prefix, "camera_optical"),
             ts=odom.ts,
         )
 
         return [
-            Transform.from_pose("base_link", odom),
+            Transform.from_pose(_prefixed(prefix, "base_link"), odom),
             camera_link,
             camera_optical,
         ]
 
     def _publish_tf(self, msg: PoseStamped) -> None:
         msg.frame_id = self.config.odom_frame_id
-        transforms = self._odom_to_tf(msg)
-        self.tf.publish(*transforms)
+        transforms = self._odom_to_tf(msg, prefix=self.config.frame_id_prefix or "")
+        self.tf.publish(TFMessage(*transforms))
         if self.odom.transport:
             self.odom.publish(msg)
         self._trace_published_odom(msg)
@@ -554,6 +598,31 @@ class GO2Connection(Module, Camera, Pointcloud):
             acknowledged_value=result,
         )
         return result
+
+    @rpc
+    def sport_command(self, api_id: int) -> bool:
+        """Send a parameterless SPORT_MOD command by api_id (Hello, Damp, ...)."""
+        return self.connection.sport_command(api_id)
+
+    @rpc
+    def set_light(self, level: int) -> bool:
+        """Head-LED brightness level 0-10 (0 = off)."""
+        return self.connection.set_light(level)
+
+    @rpc
+    def set_obstacle_avoidance(self, enabled: bool = True) -> bool:
+        """Toggle the onboard obstacle avoidance."""
+        return self.connection.set_obstacle_avoidance(enabled)
+
+    @rpc
+    def switch_joystick(self, enable: bool = True) -> bool:
+        """Firmware joystick listening on/off (WASD stick emulation needs it on)."""
+        return self.connection.switch_joystick(enable)
+
+    @rpc
+    def stop_movement(self) -> None:
+        """Zero the base immediately (webrtc deadman stop)."""
+        self.connection.stop_movement()
 
     def _on_lowstate(self, msg: LowStateMsg) -> None:
         """Cache the latest low-level state push (battery, IMU, motors, etc.)."""
@@ -740,6 +809,12 @@ class GO2Connection(Module, Camera, Pointcloud):
         Use this skill to answer battery / power / charge questions. Returns
         None if no low-level state has been received yet.
         """
+        return self.battery_soc()
+
+    @rpc
+    def battery_soc(self) -> int | None:
+        """Battery SOC 0-100 (or None until lowstate arrives). Plain RPC — no
+        skill-log spam, for the hosted telemetry poll."""
         try:
             return int(self._latest_lowstate["data"]["bms_state"]["soc"])  # type: ignore[index]
         except (KeyError, TypeError, ValueError):
