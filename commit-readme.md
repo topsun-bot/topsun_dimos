@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 合并 spatial_memory_search_V1 → web UI | `d69d9e09` |
 | spatial memory search V1 默认参数 | `28796439d` |
 | 原地旋转最小摇杆 \|rx\|=0.2 | `ba00a2136` |
 | Web 空间记忆控制台（房间/地标/门） | `02ab7490` |
@@ -43,6 +44,46 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### d69d9e09 — merge: bring spatial_memory_search_V1 into web spatial memory UI branch
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-08-03 15:55:46 +0800 |
+| **分支** | `feat/web-spatial-memory-ui` |
+| **作者** | `dijirong` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/agents/skills/navigation.py` | 并入 V1 寻物默认参数（60°/5 扫、确认容差 10°） |
+| `dimos/robot/unitree/unitree_skill_container.py` | 并入旋转摇杆默认 MIN=0.2 / MAX=0.25 |
+| `jiangtao/run.md` / `jiangtao/scripts/demo_go2_rotate_calibration*.py` / plan docs | 并入 4G 旋转标定与相关计划文档 |
+| `pyproject.toml` | 并入 navigation.py largefiles ignore |
+| `commit-readme.md` | 合并两侧提交记录 |
+
+**改进点**
+
+1. 在保留 Web 空间记忆控制台的同时，合入 `spatial_memory_search_V1` 真机调参结果。
+2. Web UI 分支可直接用 V1 默认寻物/旋转参数，无需再单独 checkout tag。
+
+**用法**
+
+```bash
+git checkout feat/web-spatial-memory-ui
+dimos run unitree-go2-agentic-deepseek --robot-ip <ip>
+# Web 控制台: http://localhost:5555
+```
+
+**回滚**
+
+```bash
+git reset --hard 2fd259d1
+# 仅丢弃本次 merge，保留 web UI 原提交
+```
+
+---
 
 ### 28796439d — feat(nav): tune Go2 spatial memory search defaults for V1
 
