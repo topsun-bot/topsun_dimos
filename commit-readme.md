@@ -21,6 +21,8 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| spatial memory search V1 默认参数 | `28796439d` |
+| 原地旋转最小摇杆 \|rx\|=0.2 | `ba00a2136` |
 | Web 空间记忆控制台（房间/地标/门） | `02ab7490` |
 | 启动默认清空 landmarks / CLIP（new_memory） | `597dc068f` |
 | 导航诊断 trace / `dimos nav analyze` | `0ed24b321` |
@@ -41,6 +43,89 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 28796439d — feat(nav): tune Go2 spatial memory search defaults for V1
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-31 16:18:27 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/agents/skills/navigation.py` | 默认 `DIMOS_ROTATION_STEP_DEG=60`、`DIMOS_ROOM_SCAN_ROTATIONS=5`、确认容差 10° |
+| `dimos/robot/unitree/unitree_skill_container.py` | 默认 `DIMOS_ROTATE_MAX_RAD_S=0.25`（MIN 仍为 0.2） |
+| `pyproject.toml` | `navigation.py` 加入 largefiles ignore（>75KB 历史大文件） |
+
+**改进点**
+
+1. 真机验证通过的寻物/标记参数写入代码默认，无需每次 export env。
+2. 标记全景 60°×5、搜索步长自动 40°、视觉确认容差 10°、原地转最大摇杆 0.25。
+
+**用法**
+
+```bash
+# 直接跑 agentic blueprint，默认即 V1 参数
+dimos run unitree-go2-agentic-deepseek --robot-ip <ip>
+# 或 relocalization-memory 版
+dimos run unitree-go2-relocalization-memory-agentic-deepseek --robot-ip <ip>
+# 打 tag  checkout
+git checkout spatial_memory_search_V1
+```
+
+**回滚**
+
+```bash
+git checkout c11458b9f -- dimos/agents/skills/navigation.py dimos/robot/unitree/unitree_skill_container.py pyproject.toml
+# 或
+git reset --hard c11458b9f
+```
+
+---
+
+### ba00a2136 — fix(go2): lower rotate min stick to 0.2 after 4G calibration
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-07-28 18:56:12 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/robot/unitree/unitree_skill_container.py` | `DIMOS_ROTATE_MIN_RAD_S` 默认 `0.4`→`0.2`；注释标明为摇杆 \|rx\| 非 rad/s |
+| `jiangtao/run.md` | 补充 `DIMOS_ROTATE_MIN_RAD_S=0.2`、`OPENAI_BASE_URL`；确认容差改为 10° |
+| `jiangtao/scripts/demo_go2_rotate_calibration.py` | 4G 旋转角速度/最小角标定脚本 |
+| `jiangtao/scripts/demo_go2_rotate_calibration_safe.py` | 低幅 yaw 摇杆安全表征脚本 |
+
+**改进点**
+
+1. 4G 真机复验：`|rx|<0.15` 基本不转，`0.20` 起才可靠；把默认最小摇杆从过猛的 0.4 降到 0.2，减轻小角度过冲。
+2. 文档与标定脚本落地，便于后续复测死区与 °/s 换算。
+
+**用法**
+
+```bash
+export DIMOS_ROTATE_MIN_RAD_S=0.2
+# 可选复测
+python jiangtao/scripts/demo_go2_rotate_calibration.py --hold 2.0
+```
+
+**回滚**
+
+```bash
+git checkout 32e3adf7c -- dimos/robot/unitree/unitree_skill_container.py jiangtao/run.md
+git rm -f jiangtao/scripts/demo_go2_rotate_calibration.py jiangtao/scripts/demo_go2_rotate_calibration_safe.py
+# 或
+git reset --hard 32e3adf7c
+```
+
+---
 
 ### 02ab7490 — feat(web): add spatial memory console for rooms, landmarks, and doors
 
@@ -79,6 +164,8 @@ git checkout 32e3adf7 -- dimos/agents/web_human_input.py dimos/web/dimos_interfa
 # 或
 git reset --hard 32e3adf7
 ```
+
+---
 
 ---
 

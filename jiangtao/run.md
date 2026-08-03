@@ -11,15 +11,17 @@
 # 狗三 key / API key 放在 jiangtao/run-self.md（已 gitignore）或本机 .env
 export UNITREE_AES_128_KEY='你的AES128密钥'
 export OPENAI_API_KEY="你的OpenAI密钥"
+export OPENAI_BASE_URL="https://api.deepseek.com"
 export DIMOS_ROTATION_STEP_DEG=60
 export DIMOS_ROOM_SCAN_ROTATIONS=5
 export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=10.0
+# 原地旋转最小摇杆 |rx| (非 rad/s); 4G 实测 <0.15 不转, 0.20 起可靠
+export DIMOS_ROTATE_MIN_RAD_S=0.2
 
 # 云端 VLM fallback (本地不可用时自动切换)
 export DIMOS_VLM_CLOUD_API_KEY="你的云端VLM密钥"
 export DIMOS_VLM_CLOUD_BASE_URL="https://ws-sy431890c06kqcoz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 export DIMOS_VLM_CLOUD_MODEL_NAME="qwen3-vl-plus"
-export DIMOS_VLM_FALLBACK_COOLDOWN=60
 
 
 # 账号、密码和序列号只从环境变量读取，不要写入命令或日志
@@ -104,16 +106,12 @@ dimos --robot-ip 192.168.12.1 run unitree-go2
 
 ---
 
-
-
 ## Step 1: 录制（真机遛一圈）
 
 ```bash
 dimos --robot-ip 192.168.12.1 run unitree-go2-memory
 # 生成 recording_go2.db
 ```
-
-
 
 ## Step 2: 离线 PGO 导出 premap
 
@@ -124,8 +122,6 @@ dimos map global recording_go2 --export
 # 生成 ./recording_go2.pc2.lcm
 # CUDA 异常时加 --device CPU:0
 ```
-
-
 
 ## Step 3: 重定位导航
 
@@ -145,8 +141,6 @@ dimos --robot-ip 192.168.12.1 run unitree-go2-relocalization \
 
 ---
 
-
-
 ## 数据解析脚本
 
 ```bash
@@ -159,8 +153,6 @@ python jiangtao/scripts/parse_recording_db.py --skip-imgs --skip-odom
 # 更改体素大小
 python jiangtao/scripts/parse_recording_db.py --skip-imgs --skip-odom --voxel 0.03
 ```
-
-
 
 ## 可视化脚本
 
@@ -180,8 +172,6 @@ python jiangtao/scripts/visualize_global_map.py --z-min 0.2 --z-max 0.8 --save o
 # 俯视图
 python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 90 --azimuth -90
 ```
-
-
 
 ## 开机 odom 一致性诊断
 
@@ -231,8 +221,6 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 
 ---
 
-
-
 ## Step 4: 空间找物（单次会话, 无 premap）
 
 环境变量：
@@ -274,8 +262,6 @@ dimos --robot-ip 10.206.176.64 run unitree-go2-agentic-deepseek --disable securi
 dimos tell '标记一下当前是办公室'
 dimos tell '去找饮水机'
 ```
-
-
 
 ## Step 5: 重定位空间找物（基于 premap）
 
@@ -336,8 +322,6 @@ dimos tell '去找饮水机'
     └── <record_id>.jpg        ← 每个地标的 JPG 快照
 ```
 
-
-
 ## Step 6: 可选沿途 VLM 寻物（默认关闭）
 
 环境变量必须在启动 blueprint 之前设置：
@@ -354,8 +338,6 @@ dimos --robot-ip 10.206.176.64 run unitree-go2-relocalization-memory-agentic-dee
 ```bash
 dimos tell '去找饮水机'
 ```
-
-
 
 ### 沿途寻物调参（可选）
 
@@ -399,7 +381,7 @@ export DIMOS_SEARCH_CONFIRM_FRAME_TIMEOUT_S=2.0
 export DIMOS_SEARCH_CONFIRM_MAX_CHECKS=2
 
 # 最终确认时，目标 bbox 中心允许偏离相机中心的最大角度
-export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=5.0
+export DIMOS_SEARCH_CONFIRM_CENTER_TOLERANCE_DEG=10.0
 
 # 导航线速度 (m/s, 范围 0.2~2.5, 真机默认 0.7); 沿途寻物时建议降速,
 # 减小运动模糊和 image/odom 同步误差, 提高 VLM 检测与拍照位姿的准确性
@@ -416,4 +398,3 @@ export DIMOS_NAV_SPEED=0.5
 ```bash
 export DIMOS_ENROUTE_OBJECT_SEARCH_ENABLED=true
 ```
-

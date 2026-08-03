@@ -659,4 +659,5 @@ ignore = [
     "uv.lock",
     "*/package-lock.json",
     "dimos/web/dimos_interface/themes.json",
+    "dimos/agents/skills/navigation.py",
 ]

@@ -240,7 +240,7 @@ class UnitreeSkillContainer(Module):
         target_rad = math.radians(degrees)
         tolerance_rad = math.radians(float(os.getenv("DIMOS_ROTATE_TOLERANCE_DEG", "5")))
         timeout_s = float(os.getenv("DIMOS_ROTATE_TIMEOUT_S", "60"))
-        max_omega = float(os.getenv("DIMOS_ROTATE_MAX_RAD_S", "0.8"))
+        max_omega = float(os.getenv("DIMOS_ROTATE_MAX_RAD_S", "0.25"))
         k_omega = float(os.getenv("DIMOS_ROTATE_KP", "1.2"))
         control_hz = 20.0
         settle_s = 0.35
@@ -282,8 +282,9 @@ class UnitreeSkillContainer(Module):
                 if global_config.simulation and abs(omega) < 0.8:
                     omega = 0.8 if remaining >= 0 else -0.8
 
-                # 真机模式下设最小角速度, 避免 omega 太小电机不响应导致卡在死区
-                min_omega = float(os.getenv("DIMOS_ROTATE_MIN_RAD_S", "0.4"))
+                # 真机: angular.z 实为摇杆 |rx| 比例, 非 SI rad/s.
+                # 4G 实测 |rx|<0.15 基本不转, 0.20 起才可靠; 默认 0.2.
+                min_omega = float(os.getenv("DIMOS_ROTATE_MIN_RAD_S", "0.2"))
                 if not global_config.simulation and abs(omega) < min_omega:
                     omega = min_omega if remaining >= 0 else -min_omega
 
