@@ -136,6 +136,7 @@ docs/
 ├── usage/configuration.md   # GlobalConfig + Configurable pattern
 ├── development/testing.md   # Fast/slow tests, pytest usage
 ├── development/dimos_run.md # CLI usage, adding blueprints
+├── development/hardware_verification_loop.md # Real-hardware verification funnel, sim gate, statistical merge criteria
 └── agents/                  # Agent system documentation
 ```
 
