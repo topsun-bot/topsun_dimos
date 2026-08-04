@@ -1468,7 +1468,7 @@ def test_arrival_action_point_recovers_after_gesture(monkeypatch: pytest.MonkeyP
     assert nav._unitree_skill_container.commands == ["Hello", "RecoveryStand"]
 
 
-def test_object_landmark_accepts_safe_standoff_without_churn(
+def test_object_landmark_continues_past_acceptance_margin_to_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     nav = _nav_container()
@@ -1478,11 +1478,21 @@ def test_object_landmark_accepts_safe_standoff_without_churn(
         position=(0.0, 0.0, 0.0),
     )
     nav._navigation = _FakeNavigation()
-    nav._latest_odom = _pose(0.8, 0.0)
+    nav._latest_odom = _pose(0.6, 0.0)
     nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
     nav._relocalize_interval_s = 30.0
     nav._coordinate_frame_stale_reason = lambda target: None
     monkeypatch.setattr(nav, "_visual_acquire_object", lambda _name, _yaw=None: None)
+    wait_calls = 0
+
+    def finish_after_second_wait(*args: Any, **_kwargs: Any) -> tuple[PoseStamped, bool]:
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls == 2:
+            nav._latest_odom = _pose(0.5, 0.0)
+        return (args[0], False)
+
+    monkeypatch.setattr(nav, "_wait_goal_with_relocalize", finish_after_second_wait)
 
     result = nav._navigate_to_landmark(
         target,
@@ -1492,7 +1502,20 @@ def test_object_landmark_accepts_safe_standoff_without_churn(
     )
 
     assert "Arrived near" in result
-    assert nav._navigation.goals == []
+    assert wait_calls == 2
+    assert len(nav._navigation.goals) == 1
+    assert 0.5 < nav._navigation.goals[0].position.x < 0.6
+
+
+def test_inch_goal_uses_base_arrival_distance_not_acceptance_margin() -> None:
+    nav = _nav_container()
+    target = _pose(0.0, 0.0)
+
+    nav._latest_odom = _pose(0.5, 0.0)
+    assert nav._inch_goal_toward(target, arrival_distance=0.5) is None
+
+    nav._latest_odom = _pose(0.51, 0.0)
+    assert nav._inch_goal_toward(target, arrival_distance=0.5) is not None
 
 
 def test_object_landmark_does_not_run_arrival_action_without_visual_confirmation(
@@ -1506,7 +1529,7 @@ def test_object_landmark_does_not_run_arrival_action_without_visual_confirmation
     )
     nav._navigation = _FakeNavigation()
     nav._unitree_skill_container = _FakeUnitree()
-    nav._latest_odom = _pose(0.8, 0.0)
+    nav._latest_odom = _pose(0.6, 0.0)
     nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
     nav._relocalize_interval_s = 30.0
     nav._coordinate_frame_stale_reason = lambda _target: None
@@ -1543,7 +1566,7 @@ def test_object_landmark_runs_arrival_action_once_after_visual_confirmation(
     )
     nav._navigation = _FakeNavigation()
     nav._unitree_skill_container = _FakeUnitree()
-    nav._latest_odom = _pose(0.8, 0.0)
+    nav._latest_odom = _pose(0.6, 0.0)
     nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
     nav._relocalize_interval_s = 30.0
     nav._coordinate_frame_stale_reason = lambda _target: None

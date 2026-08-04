@@ -150,6 +150,10 @@ _VLM_OBJECT_LIST_PROMPT = (
 # Go2 默认相机 HFOV 约 69 度, 可通过 DIMOS_CAMERA_HFOV_DEG 环境变量覆盖.
 _CAMERA_HFOV_DEG = float(__import__("os").getenv("DIMOS_CAMERA_HFOV_DEG", "69"))
 
+# 最终到达验收的额外定位容差。机器人仍以 arrival_distance 为靠近目标；
+# 只有退出导航循环后的结果判断允许该误差，避免把验收余量误当成控制目标。
+_ARRIVAL_DISTANCE_TOLERANCE_M = 0.10
+
 
 def _search_float_env(name: str, default: float, *, minimum: float = 0.0) -> float:
     """读取寻物浮点环境变量, 非法值回退到默认值并应用最小值限制."""
@@ -2753,8 +2757,8 @@ class NavigationSkillContainer(Module):
         """生成一个朝目标方向小幅前进的中间目标, 用于近距离精准靠拢.
 
         当机器人离目标较近 (< 1.5m) 时, 直接导航到最终目标容易因定位误差
-        而反复重规划. 本方法计算一个不超过当前距离的小步长目标, 让机器人
-        像蠕虫一样逐步逼近, 每步都重新评估, 提高最终停靠精度.
+        而反复重规划. 本方法只生成下一小步的中间目标; 每步完成后由外层循环
+        重新读取里程计并继续靠近, 直到进入到达范围.
 
         Returns:
             下一步的中间目标 PoseStamped, 或 None 表示已到达 (无需再前进).
@@ -2767,8 +2771,9 @@ class NavigationSkillContainer(Module):
         gy = float(standoff_pose.position.y)
         dx, dy = gx - rx, gy - ry
         dist = math.hypot(dx, dy)
-        # 2cm 容差: 已经在到达距离内, 不需要再前进
-        if dist <= arrival_distance + 0.02:
+        # 已达到基础到达距离, 不再生成中间目标。额外定位容差只用于外层
+        # 的最终结果验收, 不能在这里提前放宽机器人的靠近目标。
+        if dist <= arrival_distance:
             return None
         # 重合点保护: 避免除零
         if dist < 1e-6:
@@ -4418,8 +4423,8 @@ class NavigationSkillContainer(Module):
         def _try_navigate() -> str | None:
             """单次导航尝试: 拓扑路径遍历 + 最终接近.
 
-            成功返回 None, 严重漂移时返回错误字符串.
-            会被外层调用最多两次 (首次 + 漂移恢复后重试).
+            成功返回 None, 超时或严重漂移时返回错误字符串.
+            会被外层调用最多两次 (首次 + 失败后重新规划重试).
             """
             nonlocal interval
             # 用当前 world 的所有 landmark 构建拓扑图, 用于规划最短路径
@@ -4521,31 +4526,33 @@ class NavigationSkillContainer(Module):
             _last_replan_time = 0.0
             _stuck_replan_streak = 0
             _stuck_position: tuple[float, float] | None = None
-            # 物体 landmark 至少保持 0.85m 距离, 避免撞到物体本身
-            effective_arrival_distance = (
-                max(arrival_distance, 0.85) if is_object_landmark else arrival_distance
-            )
+            # standoff_pose 是最终参考位姿。物体 landmark 使用拍摄时机器人的历史
+            # 位姿, 不是物体的三维坐标; 房间/其他 landmark 使用前面计算的停靠位姿。
+            # arrival_distance 是机器人实际尝试达到的距离; 额外 10cm 只作为退出
+            # 导航循环后的验收余量。对于物体 landmark, 二者都不是与物体的安全距离。
+            acceptance_distance = arrival_distance + _ARRIVAL_DISTANCE_TOLERANCE_M
             while time.time() < approach_deadline:
                 dist = self._planar_distance_to_pose(standoff_pose)
                 if abs(dist - _last_logged_dist) > 0.15:
                     logger.info(
-                        "Approach '%s': distance=%.2fm (target≤%.2f) → %s",
+                        "Approach '%s': distance=%.2fm (target≤%.2f, accepted≤%.2f) → %s",
                         target.name,
                         dist,
-                        effective_arrival_distance,
+                        arrival_distance,
+                        acceptance_distance,
                         "coarse" if dist > 1.5 else "decelerating",
                     )
                     _last_logged_dist = dist
-                if dist <= effective_arrival_distance:
+                if dist <= arrival_distance:
                     break
                 if dist > 1.5:
                     # 远距离: 直接导航到 standoff_pose
                     active_goal = standoff_pose
                 else:
-                    # 近距离: 逐步微调目标位置 (inching), 避免过冲
-                    inch = self._inch_goal_toward(standoff_pose, effective_arrival_distance)
+                    # 近距离: 每次只生成一个小步中间目标, 到达后重新测距并继续靠近。
+                    inch = self._inch_goal_toward(standoff_pose, arrival_distance)
                     if inch is None:
-                        # 已在 arrival_distance + 2cm 内, 足够近, 停止微调
+                        # 已达到基础到达距离, 停止微调。
                         break
                     active_goal = inch
 
@@ -4588,16 +4595,21 @@ class NavigationSkillContainer(Module):
                         "(>1m vs room reference). Retry navigate_with_text or re-tag rooms."
                     )
                 dist = self._planar_distance_to_pose(standoff_pose)
-                if is_object_landmark and self._navigation.is_goal_reached() and dist <= 1.0:
+                if (
+                    is_object_landmark
+                    and self._navigation.is_goal_reached()
+                    and dist <= arrival_distance
+                ):
                     logger.info(
-                        "Accepting object '%s' arrival at %.2fm: planner reached safe standoff",
+                        "Object '%s' reached target distance at %.2fm after planner completion",
                         target.name,
                         dist,
                     )
                     break
 
                 # 卡住检测: 机器人靠近目标但反复重规划 (遇障碍/偏航) 且无进展时,
-                # 连续 5 次卡在同一位置则接受当前位置 - 够近了
+                # 连续 5 次卡在同一位置则停止继续规划; 循环后的统一距离判断仍会
+                # 决定本次导航成功或失败。
                 if self._navigation.get_state() == NavigationState.IDLE and dist <= 2.0:
                     cur_pos_2d = (
                         (
@@ -4625,7 +4637,8 @@ class NavigationSkillContainer(Module):
 
                     if _stuck_replan_streak >= 5:
                         logger.info(
-                            "Stuck near '%s' after %d replans at %.2fm — accepting position",
+                            "Stuck near '%s' after %d replans at %.2fm; stopping retries for "
+                            "final tolerance check",
                             target.name,
                             _stuck_replan_streak,
                             dist,
@@ -4633,7 +4646,7 @@ class NavigationSkillContainer(Module):
                         break
 
             self._navigation.cancel_goal()
-            if dist > effective_arrival_distance:
+            if dist > acceptance_distance:
                 stale_reason = self._coordinate_frame_stale_reason(target)
                 if stale_reason:
                     return f"Navigation timed out for '{target.name}': {stale_reason}"
@@ -4693,9 +4706,10 @@ class NavigationSkillContainer(Module):
             base = f"Arrived near '{tname}' standoff"
             return f"{base} (arrival_action not run)."
 
-        # 严重漂移恢复: 从当前 odom 位置重新规划拓扑路径再试一次
+        # 首次导航失败后, 从当前 odom 位置重新规划拓扑路径再试一次。
         logger.warning(
-            "Severe drift on first attempt; re-planning topology from current odom for retry"
+            "First navigation attempt failed: %s; re-planning topology from current odom for retry",
+            err,
         )
         self._navigation.cancel_goal()
         time.sleep(0.5)
