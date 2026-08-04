@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+from dataclasses import dataclass
 import datetime
 import difflib
 import math
@@ -24,7 +26,7 @@ from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
-from dimos.core.global_config import global_config
+from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.module import Module
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -197,6 +199,79 @@ _UNITREE_COMMANDS = {
 }
 
 
+@dataclass(frozen=True)
+class _RotationSettleSample:
+    """One distinct host-side TF update observed while commanding zero velocity."""
+
+    tf_ts: float
+    accumulated: float
+
+
+@dataclass(frozen=True)
+class _RotationStopResult:
+    """Result of repeatedly commanding zero and observing host-side TF stability."""
+
+    settled: bool
+    accumulated: float
+    last_yaw: float
+    last_tf_ts: float
+    new_tf_samples: int
+    zero_send_count: int
+    settle_duration_s: float
+    yaw_span_deg: float
+    max_yaw_rate_deg_s: float
+    reason: str
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean environment variable without changing config models."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("Invalid %s=%r; using default %s", name, raw, default)
+    return default
+
+
+def _rotation_settle_enabled(g: GlobalConfig | None = None) -> bool:
+    """Enable stop confirmation by default only for Remote real-hardware control."""
+    cfg = g or global_config
+    if cfg.replay or cfg.simulation:
+        default = False
+    else:
+        method = str(cfg.unitree_webrtc_method or "local").strip().lower()
+        default = method in {"remote", "4g", "sta-t"}
+    return _env_bool("DIMOS_ROTATE_SETTLE_ENABLED", default)
+
+
+def _rotation_window_metrics(
+    samples: deque[_RotationSettleSample],
+) -> tuple[float, float, float]:
+    """Return window duration, yaw span and maximum pairwise yaw rate."""
+    if len(samples) < 2:
+        return 0.0, 0.0, math.inf
+
+    duration_s = samples[-1].tf_ts - samples[0].tf_ts
+    accumulated_values = [sample.accumulated for sample in samples]
+    yaw_span = max(accumulated_values) - min(accumulated_values)
+    max_yaw_rate = 0.0
+    previous = samples[0]
+    for current in list(samples)[1:]:
+        sample_dt = current.tf_ts - previous.tf_ts
+        if sample_dt <= 0.0:
+            return duration_s, yaw_span, math.inf
+        max_yaw_rate = max(
+            max_yaw_rate,
+            abs(current.accumulated - previous.accumulated) / sample_dt,
+        )
+        previous = current
+    return duration_s, yaw_span, max_yaw_rate
+
+
 class UnitreeSkillContainer(Module):
     """Container for Unitree Go2 robot skills using the new framework."""
 
@@ -206,8 +281,195 @@ class UnitreeSkillContainer(Module):
     tf: In[TFMessage]
 
     @rpc
+    def start(self) -> None:
+        super().start()
+        self._rotation_stop_unconfirmed = False
+        # Initialize TF early so it can start receiving transforms.
+        _ = self.tfbuffer
+
+    @rpc
     def stop(self) -> None:
         super().stop()
+
+    def _best_effort_rotation_stop(self, stop_twist: Twist, attempts: int = 3) -> None:
+        """Send a short zero-command burst on exceptional rotation exits."""
+        for attempt in range(max(1, attempts)):
+            try:
+                self._connection.move(stop_twist, duration=0.0)
+            except Exception:
+                logger.debug("rotate_in_place: best-effort zero send failed", exc_info=True)
+            if attempt + 1 < attempts:
+                time.sleep(0.05)
+
+    def _stop_rotation_and_wait_for_settle(
+        self,
+        *,
+        stop_twist: Twist,
+        accumulated: float,
+        last_yaw: float,
+        last_tf_ts: float,
+        phase: str,
+    ) -> _RotationStopResult:
+        """Keep sending zero until distinct host TF updates show a stable yaw window."""
+        zero_hz = max(1.0, float(os.getenv("DIMOS_ROTATE_ZERO_RESEND_HZ", "10")))
+        min_samples = max(2, int(os.getenv("DIMOS_ROTATE_SETTLE_MIN_SAMPLES", "5")))
+        min_duration_s = max(
+            0.05,
+            float(os.getenv("DIMOS_ROTATE_SETTLE_MIN_DURATION_S", "0.35")),
+        )
+        max_yaw_rate = math.radians(
+            max(
+                0.0,
+                float(os.getenv("DIMOS_ROTATE_SETTLE_MAX_YAW_RATE_DEG_S", "3.0")),
+            )
+        )
+        max_yaw_span = math.radians(
+            max(
+                0.0,
+                float(os.getenv("DIMOS_ROTATE_SETTLE_MAX_YAW_SPAN_DEG", "1.5")),
+            )
+        )
+        timeout_s = max(0.1, float(os.getenv("DIMOS_ROTATE_SETTLE_TIMEOUT_S", "4.0")))
+        zero_interval_s = 1.0 / zero_hz
+        control_interval_s = 1.0 / 20.0
+
+        started_at = time.monotonic()
+        deadline = started_at + timeout_s
+        next_zero_at = started_at
+        initial_accumulated = accumulated
+        accepted_samples = 0
+        zero_send_count = 0
+        successful_zero_sends = 0
+        samples: deque[_RotationSettleSample] = deque()
+        latest_duration_s = 0.0
+        latest_yaw_span = 0.0
+        latest_max_yaw_rate = math.inf
+
+        logger.info(
+            "rotate_in_place: stop_begin phase=%s accumulated_before_stop=%.1f° "
+            "tf_ts_before_stop=%.6f zero_resend_hz=%.1f",
+            phase,
+            math.degrees(initial_accumulated),
+            last_tf_ts,
+            zero_hz,
+        )
+
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_zero_at:
+                zero_send_count += 1
+                try:
+                    if self._connection.move(stop_twist, duration=0.0):
+                        successful_zero_sends += 1
+                except Exception:
+                    logger.debug("rotate_in_place: zero resend failed", exc_info=True)
+                next_zero_at = now + zero_interval_s
+
+            tf = self.tfbuffer.get("world", "base_link")
+            if tf is not None and math.isfinite(float(tf.ts)) and float(tf.ts) > last_tf_ts:
+                current_yaw = tf.to_pose().orientation.to_euler().z
+                if math.isfinite(current_yaw):
+                    accumulated += angle_diff(current_yaw, last_yaw)
+                    last_yaw = current_yaw
+                    last_tf_ts = float(tf.ts)
+                    accepted_samples += 1
+                    samples.append(
+                        _RotationSettleSample(
+                            tf_ts=last_tf_ts,
+                            accumulated=accumulated,
+                        )
+                    )
+
+                    # Keep the shortest recent window that still spans the required
+                    # duration and sample count. Early braking motion can then age out.
+                    while (
+                        len(samples) > min_samples
+                        and samples[-1].tf_ts - samples[1].tf_ts >= min_duration_s
+                    ):
+                        samples.popleft()
+
+                    (
+                        latest_duration_s,
+                        latest_yaw_span,
+                        latest_max_yaw_rate,
+                    ) = _rotation_window_metrics(samples)
+                    if (
+                        successful_zero_sends > 0
+                        and len(samples) >= min_samples
+                        and latest_duration_s >= min_duration_s
+                        and latest_yaw_span <= max_yaw_span
+                        and latest_max_yaw_rate <= max_yaw_rate
+                    ):
+                        # Leave the most recent command at zero even when the
+                        # scheduled resend happened almost one interval ago.
+                        zero_send_count += 1
+                        try:
+                            if self._connection.move(stop_twist, duration=0.0):
+                                successful_zero_sends += 1
+                        except Exception:
+                            logger.debug(
+                                "rotate_in_place: final zero send failed",
+                                exc_info=True,
+                            )
+                        elapsed_s = time.monotonic() - started_at
+                        logger.info(
+                            "rotate_in_place: settled_by_tf phase=%s new_tf_samples=%d "
+                            "settle_duration=%.3fs yaw_span=%.2f° "
+                            "max_yaw_rate=%.2f°/s tail_after_zero=%.1f°",
+                            phase,
+                            accepted_samples,
+                            elapsed_s,
+                            math.degrees(latest_yaw_span),
+                            math.degrees(latest_max_yaw_rate),
+                            math.degrees(accumulated - initial_accumulated),
+                        )
+                        return _RotationStopResult(
+                            settled=True,
+                            accumulated=accumulated,
+                            last_yaw=last_yaw,
+                            last_tf_ts=last_tf_ts,
+                            new_tf_samples=accepted_samples,
+                            zero_send_count=zero_send_count,
+                            settle_duration_s=elapsed_s,
+                            yaw_span_deg=math.degrees(latest_yaw_span),
+                            max_yaw_rate_deg_s=math.degrees(latest_max_yaw_rate),
+                            reason="settled_by_tf",
+                        )
+
+            time.sleep(control_interval_s)
+
+        if successful_zero_sends == 0:
+            reason = "zero_send_failed"
+        elif accepted_samples < min_samples:
+            reason = "no_new_tf"
+        else:
+            reason = "yaw_still_moving"
+        elapsed_s = time.monotonic() - started_at
+        logger.warning(
+            "rotate_in_place: stop_unconfirmed phase=%s reason=%s "
+            "new_tf_samples=%d zero_send_count=%d settle_duration=%.3fs "
+            "yaw_span=%.2f° max_yaw_rate=%.2f°/s tail_after_zero=%.1f°",
+            phase,
+            reason,
+            accepted_samples,
+            zero_send_count,
+            elapsed_s,
+            math.degrees(latest_yaw_span),
+            math.degrees(latest_max_yaw_rate),
+            math.degrees(accumulated - initial_accumulated),
+        )
+        return _RotationStopResult(
+            settled=False,
+            accumulated=accumulated,
+            last_yaw=last_yaw,
+            last_tf_ts=last_tf_ts,
+            new_tf_samples=accepted_samples,
+            zero_send_count=zero_send_count,
+            settle_duration_s=elapsed_s,
+            yaw_span_deg=math.degrees(latest_yaw_span),
+            max_yaw_rate_deg_s=math.degrees(latest_max_yaw_rate),
+            reason=reason,
+        )
 
     @rpc
     def rotate_in_place_degrees(self, degrees: float) -> bool:
@@ -229,12 +491,28 @@ class UnitreeSkillContainer(Module):
         except Exception:
             logger.debug("rotate_in_place: cancel_goal failed", exc_info=True)
 
-        tf = self.tf.get("world", "base_link")
+        stop_twist = Twist(
+            linear=Vector3(0.0, 0.0, 0.0),
+            angular=Vector3(0.0, 0.0, 0.0),
+        )
+        settle_enabled = _rotation_settle_enabled(self.config.g)
+        try:
+            tf = self.tfbuffer.get("world", "base_link")
+        except Exception:
+            logger.exception("rotate_in_place: initial TF lookup failed")
+            if settle_enabled:
+                self._rotation_stop_unconfirmed = True
+            self._best_effort_rotation_stop(stop_twist)
+            return False
         if tf is None:
             logger.warning("rotate_in_place: missing world→base_link TF")
+            if settle_enabled:
+                self._rotation_stop_unconfirmed = True
+            self._best_effort_rotation_stop(stop_twist)
             return False
 
         start_yaw = tf.to_pose().orientation.to_euler().z
+        start_tf_ts = float(tf.ts)
         target_rad = math.radians(degrees)
         tolerance_rad = math.radians(float(os.getenv("DIMOS_ROTATE_TOLERANCE_DEG", "5")))
         timeout_s = float(os.getenv("DIMOS_ROTATE_TIMEOUT_S", "60"))
@@ -242,25 +520,54 @@ class UnitreeSkillContainer(Module):
         k_omega = float(os.getenv("DIMOS_ROTATE_KP", "1.2"))
         control_hz = 20.0
         settle_s = 0.35
-        stop_twist = Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, 0.0))
+
+        if settle_enabled and getattr(self, "_rotation_stop_unconfirmed", False):
+            logger.warning(
+                "rotate_in_place: previous stop was unconfirmed; running zero-only preflight"
+            )
+            try:
+                preflight = self._stop_rotation_and_wait_for_settle(
+                    stop_twist=stop_twist,
+                    accumulated=0.0,
+                    last_yaw=start_yaw,
+                    last_tf_ts=start_tf_ts,
+                    phase="preflight",
+                )
+            except Exception:
+                logger.exception("rotate_in_place: zero-only preflight failed")
+                self._rotation_stop_unconfirmed = True
+                self._best_effort_rotation_stop(stop_twist)
+                return False
+            if not preflight.settled:
+                self._rotation_stop_unconfirmed = True
+                return False
+            self._rotation_stop_unconfirmed = False
+            start_yaw = preflight.last_yaw
+            start_tf_ts = preflight.last_tf_ts
 
         logger.info(
-            "rotate_in_place: start yaw=%.1f° target_delta=%.1f°",
+            "rotate_in_place: start yaw=%.1f° target_delta=%.1f° "
+            "max_command=%.3f settle_enabled=%s",
             math.degrees(start_yaw),
             degrees,
+            max_omega,
+            settle_enabled,
         )
 
         # Cumulative tracking — avoids the 360° bug where absolute yaw wraps.
         accumulated = 0.0
         last_yaw = start_yaw
+        last_tf_ts = start_tf_ts
 
         # 调试: 每秒打印一次状态, 便于排查旋转不转的问题
         _last_debug_log = time.monotonic()
 
         deadline = time.monotonic() + timeout_s
+        control_ok = False
+        control_failure_reason = ""
         try:
             while time.monotonic() < deadline:
-                tf = self.tf.get("world", "base_link")
+                tf = self.tfbuffer.get("world", "base_link")
                 if tf is None:
                     time.sleep(1.0 / control_hz)
                     continue
@@ -269,27 +576,36 @@ class UnitreeSkillContainer(Module):
                 delta = angle_diff(current_yaw, last_yaw)
                 accumulated += delta
                 last_yaw = current_yaw
+                last_tf_ts = max(last_tf_ts, float(tf.ts))
 
                 # Signed remaining — positive = counterclockwise still needed
                 remaining = target_rad - accumulated
                 if abs(remaining) <= tolerance_rad:
+                    control_ok = True
                     break
 
                 # Use remaining rather than absolute error for omega computation
                 omega = max(-max_omega, min(max_omega, k_omega * remaining))
-                if global_config.simulation and abs(omega) < 0.8:
+                g = self.config.g
+                if g.simulation and abs(omega) < 0.8:
                     omega = 0.8 if remaining >= 0 else -0.8
 
                 # 真机: angular.z 实为摇杆 |rx| 比例, 非 SI rad/s.
                 # 4G 实测 |rx|<0.15 基本不转, 0.20 起才可靠; 默认 0.2.
                 min_omega = float(os.getenv("DIMOS_ROTATE_MIN_RAD_S", "0.2"))
-                if not global_config.simulation and abs(omega) < min_omega:
+                if not g.simulation and abs(omega) < min_omega:
                     omega = min_omega if remaining >= 0 else -min_omega
 
-                self._connection.move(
-                    Twist(linear=Vector3(0.0, 0.0, 0.0), angular=Vector3(0.0, 0.0, omega)),
+                command_sent = self._connection.move(
+                    Twist(
+                        linear=Vector3(0.0, 0.0, 0.0),
+                        angular=Vector3(0.0, 0.0, omega),
+                    ),
                     duration=0.0,
                 )
+                if not command_sent:
+                    control_failure_reason = "nonzero_send_failed"
+                    break
                 time.sleep(1.0 / control_hz)
 
                 # 调试: 每秒打印一次 yaw/accumulated/omega
@@ -304,27 +620,46 @@ class UnitreeSkillContainer(Module):
                     )
                     _last_debug_log = _now
             else:
+                control_failure_reason = "control_timeout"
                 logger.warning("rotate_in_place: timed out (commanded %.1f°)", degrees)
-                return False
+            if not control_ok and not control_failure_reason:
+                control_failure_reason = "control_interrupted"
 
-            self._connection.move(stop_twist, duration=0.0)
-            time.sleep(settle_s)
+            if settle_enabled:
+                stop_result = self._stop_rotation_and_wait_for_settle(
+                    stop_twist=stop_twist,
+                    accumulated=accumulated,
+                    last_yaw=last_yaw,
+                    last_tf_ts=last_tf_ts,
+                    phase="rotation_end",
+                )
+                accumulated = stop_result.accumulated
+                if not stop_result.settled:
+                    self._rotation_stop_unconfirmed = True
+                    return False
+                self._rotation_stop_unconfirmed = False
+            else:
+                self._connection.move(stop_twist, duration=0.0)
+                time.sleep(settle_s)
 
             achieved_deg = math.degrees(accumulated)
-            ok = abs(accumulated - target_rad) < tolerance_rad * 2.0
+            final_error_deg = math.degrees(target_rad - accumulated)
+            ok = control_ok and abs(accumulated - target_rad) <= tolerance_rad * 2.0
             logger.info(
-                "rotate_in_place: commanded=%.1f° achieved=%.1f° ok=%s",
+                "rotate_in_place: commanded=%.1f° achieved=%.1f° "
+                "final_error=%.1f° control_failure=%s ok=%s",
                 degrees,
                 achieved_deg,
+                final_error_deg,
+                control_failure_reason or "none",
                 ok,
             )
             return ok
         except Exception:
             logger.exception("rotate_in_place failed")
-            try:
-                self._connection.move(stop_twist, duration=0.0)
-            except Exception:
-                pass
+            if settle_enabled:
+                self._rotation_stop_unconfirmed = True
+            self._best_effort_rotation_stop(stop_twist)
             return False
 
     @rpc

@@ -490,6 +490,7 @@ class NavigationSkillContainer(Module):
         self._latest_image_received_monotonic = 0.0
         self._odom_history: deque[PoseStamped] = deque(maxlen=512)
         self._active_object_search: _ObjectSearchContext | None = None
+        self._rotation_safety_error: str | None = None
 
         # 在初始化时创建 VLM 实例, 而非延迟到首次使用, 以便尽早发现配置错误
         self._vl_model = _create_vl_model()
@@ -727,6 +728,28 @@ class NavigationSkillContainer(Module):
             self._latest_image_sequence = 0
         if "_latest_image_received_monotonic" not in self.__dict__:
             self._latest_image_received_monotonic = 0.0
+        if "_rotation_safety_error" not in self.__dict__:
+            self._rotation_safety_error = None
+
+    def _rotation_failure_result(
+        self,
+        target_name: str,
+        *,
+        context: str,
+    ) -> _VisualLockResult:
+        """Record a motion-safety failure that must stop the current search chain."""
+        self._ensure_search_runtime()
+        message = (
+            f"Search for '{target_name}' aborted: {context} rotation did not settle "
+            "or exceeded the final angle tolerance."
+        )
+        self._rotation_safety_error = message
+        logger.error("[rotation_safety] %s", message)
+        return _VisualLockResult(
+            status=_VisualLockStatus.ERROR,
+            message=message,
+            reason="rotation_failed",
+        )
 
     @staticmethod
     def _copy_pose(pose: PoseStamped) -> PoseStamped:
@@ -1371,14 +1394,16 @@ class NavigationSkillContainer(Module):
                     trace_id,
                     offset_deg,
                 )
-                return _VisualLockResult(
-                    status=_VisualLockStatus.ERROR,
-                    message=f"Could not confirm '{target_name}': corrective rotation failed.",
+                failure = self._rotation_failure_result(
+                    target_name,
+                    context="visual-confirmation servo",
+                )
+                return replace(
+                    failure,
                     image=image,
                     bbox=bbox,
                     offset_deg=offset_deg,
                     checks=check_index + 1,
-                    reason="servo_failed",
                 )
 
         logger.warning(
@@ -2048,6 +2073,8 @@ class NavigationSkillContainer(Module):
                 )
                 continue
             msg: str | None = steps[step_name]()
+            if self._rotation_safety_error is not None:
+                return self._rotation_safety_error
             if msg:
                 return msg
         return None
@@ -2082,6 +2109,7 @@ class NavigationSkillContainer(Module):
         logger.info("=" * 50)
 
         self._sweep_skip_rooms = set()
+        self._rotation_safety_error = None
         search_context: _ObjectSearchContext | None = None
         if _enroute_object_search_enabled():
             resolved = self._resolve_landmark_from_query(query)
@@ -2943,7 +2971,10 @@ class NavigationSkillContainer(Module):
         logger.info("[detect+servo] ✓ found '%s' at bbox=%s, servoing ...", target_name, bbox)
         if not self._servo_to_bbox(bbox, source_image):
             logger.warning("[detect+servo] servo rotation failed for '%s'", target_name)
-            return None
+            return self._rotation_failure_result(
+                target_name,
+                context="initial visual-servo",
+            )
 
         logger.info(
             "[detect+servo] servo completed for '%s'; waiting for fresh-frame confirmation",
@@ -3089,7 +3120,10 @@ class NavigationSkillContainer(Module):
         logger.info("[room_scan] ✓ '%s' in list at bbox=%s, servoing ...", want, obj.get("bbox"))
         if not self._servo_to_bbox(bbox, source_image):
             logger.warning("[room_scan] servo rotation failed for '%s'", want)
-            return None
+            return self._rotation_failure_result(
+                target_name,
+                context="room-scan visual-servo",
+            )
         logger.info(
             "[room_scan] servo completed for '%s'; waiting for fresh-frame confirmation",
             want,
@@ -3155,7 +3189,11 @@ class NavigationSkillContainer(Module):
                         target_name,
                         math.degrees(stored_yaw),
                     )
-                    self._rotate_in_place_degrees(diff_deg)
+                    if not self._rotate_in_place_degrees(diff_deg):
+                        return self._rotation_failure_result(
+                            target_name,
+                            context="stored-yaw",
+                        )
                     time.sleep(0.5)
 
         # 先检测当前视角: 如果 stored_yaw 已经把目标带入视野就不用扫描了
@@ -3163,6 +3201,8 @@ class NavigationSkillContainer(Module):
             result = self._detect_and_servo(target_name)
             if result is not None and result.confirmed:
                 logger.info("[room_scan] ✓ '%s' found in initial view", target_name)
+                return result
+            if result is not None and result.reason == "rotation_failed":
                 return result
             if result is not None:
                 logger.info(
@@ -3186,7 +3226,11 @@ class NavigationSkillContainer(Module):
         # 逐步旋转扫描: 每转一步停 0.5s 等画面稳定再识别, 避免运动模糊
         # 导致 VLM 识别失败
         for step in range(n_steps):
-            self._rotate_in_place_degrees(step_deg)
+            if not self._rotate_in_place_degrees(step_deg):
+                return self._rotation_failure_result(
+                    target_name,
+                    context=f"scan step {step + 1}/{n_steps}",
+                )
             time.sleep(0.5)
             try:
                 result = self._detect_and_servo_by_list_recognition(target_name)
@@ -3197,6 +3241,8 @@ class NavigationSkillContainer(Module):
                         step + 1,
                         n_steps,
                     )
+                    return result
+                if result is not None and result.reason == "rotation_failed":
                     return result
                 if result is not None:
                     logger.info(
@@ -3235,6 +3281,9 @@ class NavigationSkillContainer(Module):
         # 扫描整个房间寻找目标物体; stored_yaw 可让扫描从最可能的方向开始
         result = self._scan_room_for_object(target_name, stored_yaw=stored_yaw)
         if result is not None and result.confirmed:
+            return result
+        if result is not None and result.reason == "rotation_failed":
+            logger.error("[visual_acquire] %s", result.message)
             return result
         logger.warning("[visual_acquire] ✗ '%s' not found visually", target_name)
         return None
@@ -3993,6 +4042,8 @@ class NavigationSkillContainer(Module):
                         visual_lock = self._visual_acquire_object(query, stored_yaw)
                         if visual_lock is not None and visual_lock.confirmed:
                             return visual_lock.message
+                        if visual_lock is not None and visual_lock.reason == "rotation_failed":
+                            return visual_lock.message
                     # 无存储朝向时, 在当前位置做有限时长的物体搜索
                     tracking_lock = self._navigate_to_object(query, timeout=15.0)
                     if tracking_lock is not None and tracking_lock.confirmed:
@@ -4050,6 +4101,8 @@ class NavigationSkillContainer(Module):
         visual_lock = self._visual_acquire_object(query, candidate_yaw)
         if visual_lock is not None and visual_lock.confirmed:
             return f"{prefix} ({visual_lock.message})"
+        if visual_lock is not None and visual_lock.reason == "rotation_failed":
+            return visual_lock.message
         logger.info(
             "[vlm_memory] historical candidate for '%s' reached, but live visual "
             "confirmation failed",
@@ -4244,6 +4297,7 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._rotation_safety_error = None
         target = self._landmark_memory.resolve_by_query(name)
         if target is None:
             return (
@@ -4271,6 +4325,8 @@ class NavigationSkillContainer(Module):
             arrival_distance=arrival_distance,
             run_arrival_action=True,
         )
+        if self._rotation_safety_error is not None:
+            return self._rotation_safety_error
 
         # 自动 fallback: 若是物体 landmark 且到达后视觉获取失败,
         # 则逐个房间扫描搜索该物体, 而非直接放弃
@@ -4297,6 +4353,8 @@ class NavigationSkillContainer(Module):
                 )
 
             sweep_result = self._room_anchor_sweep_for_object(name)
+            if self._rotation_safety_error is not None:
+                return self._rotation_safety_error
             if sweep_result is not None and sweep_result.confirmed:
                 return (
                     f"{self._run_arrival_action(effective_action, name)} ({sweep_result.message})"
@@ -4619,6 +4677,8 @@ class NavigationSkillContainer(Module):
                 visual_lock = self._visual_acquire_object(tname, stored_yaw)
                 if visual_lock is not None and visual_lock.confirmed:
                     logger.info("[L3] Visual acquire: %s", visual_lock.message)
+                elif visual_lock is not None and visual_lock.reason == "rotation_failed":
+                    return visual_lock.message
                 else:
                     logger.warning("[L3] Visual acquire: '%s' not found in view", tname)
             if run_arrival_action and visual_lock is not None and visual_lock.confirmed:
@@ -4673,6 +4733,8 @@ class NavigationSkillContainer(Module):
                 visual_lock = self._visual_acquire_object(tname, stored_yaw)
                 if visual_lock is not None and visual_lock.confirmed:
                     logger.info("[L3] Visual acquire (retry): %s", visual_lock.message)
+                elif visual_lock is not None and visual_lock.reason == "rotation_failed":
+                    return visual_lock.message
                 else:
                     logger.warning("[L3] Visual acquire (retry): '%s' not found in view", tname)
             if run_arrival_action and visual_lock is not None and visual_lock.confirmed:

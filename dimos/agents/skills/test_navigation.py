@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -313,6 +314,88 @@ def test_scan_room_for_object_uses_search_rotation_steps(monkeypatch: pytest.Mon
 
     assert nav._scan_room_for_object("电脑") is None
     assert fake.rotations == [80.0, 80.0, 80.0, 80.0, 80.0]
+
+
+def test_scan_room_aborts_before_detection_when_stored_yaw_rotation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    mocker,
+) -> None:
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    nav = _nav_container()
+    fake = _FakeUnitree()
+    nav._unitree_skill_container = fake
+    nav._latest_odom = PoseStamped(
+        position=make_vector3(0.0, 0.0, 0.0),
+        orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+    )
+    rotate = mocker.patch.object(fake, "rotate_in_place_degrees", return_value=False)
+    detect = mocker.patch.object(nav, "_detect_and_servo")
+
+    result = nav._scan_room_for_object("电脑", stored_yaw=math.radians(30.0))
+
+    assert result is not None
+    assert result.status == _VisualLockStatus.ERROR
+    assert result.reason == "rotation_failed"
+    rotate.assert_called_once()
+    assert rotate.call_args.args[0] == pytest.approx(30.0)
+    detect.assert_not_called()
+
+
+def test_scan_room_aborts_on_failed_scan_step(
+    monkeypatch: pytest.MonkeyPatch,
+    mocker,
+) -> None:
+    monkeypatch.setenv("DIMOS_ROTATION_STEP_DEG", "100")
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    nav = _nav_container()
+    fake = _FakeUnitree()
+    nav._unitree_skill_container = fake
+    nav._latest_odom = PoseStamped(
+        position=make_vector3(0.0, 0.0, 0.0),
+        orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
+    )
+    mocker.patch.object(nav, "_detect_and_servo", return_value=None)
+    recognize = mocker.patch.object(
+        nav,
+        "_detect_and_servo_by_list_recognition",
+        return_value=None,
+    )
+    rotate = mocker.patch.object(
+        fake,
+        "rotate_in_place_degrees",
+        side_effect=[True, False],
+    )
+
+    result = nav._scan_room_for_object("电脑")
+
+    assert result is not None
+    assert result.status == _VisualLockStatus.ERROR
+    assert result.reason == "rotation_failed"
+    assert rotate.call_count == 2
+    recognize.assert_called_once_with("电脑")
+
+
+def test_rotation_safety_failure_stops_navigation_fallback_chain(mocker) -> None:
+    nav = _nav_container()
+    mocker.patch.object(nav, "_nav_fallback_strategy", return_value="object_room")
+
+    def fail_landmark_step(_query: str, _context: Any) -> None:
+        nav._rotation_failure_result("电脑", context="scan step 1/5")
+
+    mocker.patch.object(
+        nav,
+        "_nav_fallback_step_landmark",
+        side_effect=fail_landmark_step,
+    )
+    room_sweep = mocker.patch.object(nav, "_nav_fallback_step_room_sweep")
+
+    result = nav._run_navigate_fallback_chain("电脑")
+
+    assert result == (
+        "Search for '电脑' aborted: scan step 1/5 rotation did not settle "
+        "or exceeded the final angle tolerance."
+    )
+    room_sweep.assert_not_called()
 
 
 def test_nav_fallback_default_is_object_room(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1199,6 +1282,7 @@ def test_room_sweep_does_not_greet_unconfirmed_candidate(
 
 
 def test_room_anchor_sweep_scans_rooms_until_object_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIMOS_ROTATION_STEP_DEG", "90")
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     nav = _nav_container()
     rooms = [
