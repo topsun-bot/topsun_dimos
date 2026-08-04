@@ -45,6 +45,41 @@ git reset --hard <sha>
 
 ## 提交记录
 
+### f7edeb1f — docs(plan): expand Go2 odom fidelity rotation state machine and bounded recovery
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-08-04 17:03:47 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiang.tao` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `jiangtao/plan/2026-07-30-Go2原始Odom时间保真与零速度静止闭环实施计划.md` | 补充 PRECHECK/enforce、有界恢复、60s 旋转硬上限与状态机细节 |
+
+**改进点**
+
+1. 明确原地转向状态机新增启动前检查与 enforce 下 5s 等待 baseline。
+2. 反馈异常恢复改为最多 5s、单次最多 2 次，避免无限等待。
+3. 单次旋转总时长硬上限 60s，与 3s 静止确认的关系写清。
+
+**用法**
+
+```bash
+# 实施前参考计划文档中的状态机与 DIMOS_ODOM_* 标定项
+cat jiangtao/plan/2026-07-30-Go2原始Odom时间保真与零速度静止闭环实施计划.md
+```
+
+**回滚**
+
+```bash
+git checkout 5fe99055 -- jiangtao/plan/2026-07-30-Go2原始Odom时间保真与零速度静止闭环实施计划.md
+```
+
+---
+
 ### a3edc2eef — fix(go2): abort search on rotate settle failure and sync worker GlobalConfig
 
 | 字段 | 内容 |
