@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 旋转 settle 失败中止搜索 / worker GlobalConfig 全量同步 | `a3edc2eef` |
 | 合并 upstream/main（99 commits，0709~0729）前的基线 | `dde106238` |
 | spatial memory search V1 默认参数 | `28796439d` |
 | 原地旋转最小摇杆 \|rx\|=0.2 | `ba00a2136` |
@@ -43,6 +44,57 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### a3edc2eef — fix(go2): abort search on rotate settle failure and sync worker GlobalConfig
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-08-04 10:05:39 +0800 |
+| **分支** | `jtlinux` |
+| **作者** | `jiangtao-huazhijian` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/robot/unitree/unitree_skill_container.py` | `rotate_in_place` 零速后等待 yaw settle；失败返回 False；新增 settle 相关环境变量 |
+| `dimos/agents/skills/navigation.py` | 旋转失败时中止寻物/扫房链路，记录 `_rotation_safety_error` |
+| `dimos/agents/skills/test_navigation.py` | 补旋转失败中止搜索的单测 |
+| `dimos/agents/skills/test_unitree_skill_container.py` | 补 settle/零速确认相关单测 |
+| `dimos/core/coordination/python_worker.py` | worker 同步完整 `GlobalConfig`，不再只拷贝 `transport` |
+| `jiangtao/doc/*`、`jiangtao/plan/*`、`jiangtao/scripts/*`、`jiangtao/test_report/*` | 上游同步分析、旋转验证脚本与真机报告 |
+
+**改进点**
+
+1. Remote 原地旋转超转后，零速下发不等于机身已静止；settle 闭环避免下一拍带着残余角速度继续转。
+2. 视觉伺服/扫房若旋转失败，不再当作“没找到目标”继续搜，直接中止整条搜索链。
+3. forkserver worker 以前只同步 transport，simulation/replay 等标志会丢；改为全量 `model_dump()` 同步。
+
+**用法**
+
+```bash
+export DIMOS_ROTATE_MIN_RAD_S=0.2
+export DIMOS_ROTATE_MAX_RAD_S=0.25
+export DIMOS_ROTATE_SETTLE_ENABLED=true
+dimos run unitree-go2-agentic --robot-ip <ip>
+# 可选验证脚本
+python jiangtao/scripts/validate_go2_rotation_stop.py
+```
+
+**回滚**
+
+```bash
+git checkout a3edc2eef^ -- \
+  dimos/robot/unitree/unitree_skill_container.py \
+  dimos/agents/skills/navigation.py \
+  dimos/agents/skills/test_navigation.py \
+  dimos/agents/skills/test_unitree_skill_container.py \
+  dimos/core/coordination/python_worker.py
+# 或
+git reset --hard 9c47dc40c
+```
+
+---
 
 ### bc31f3dae — merge: sync upstream/main into jtlinux
 
