@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STATE_DIR="${SCRIPT_DIR}/state"
 CONFIG_FILE="${SCRIPT_DIR}/config.env"
 MULTI_AGENT_SCRIPT="${SCRIPT_DIR}/run_multi_agent_loop.sh"
+SIM_GATE_SCRIPT="${SCRIPT_DIR}/run_sim_gate.sh"
+HW_VERIFY_SCRIPT="${SCRIPT_DIR}/run_hw_verify.sh"
 PR_PIPELINE_SCRIPT="${SCRIPT_DIR}/run_pr_pipeline.sh"
 
 mkdir -p "${STATE_DIR}"
@@ -16,7 +18,14 @@ Usage: $(basename "$0") [--auto-commit] [--commit-message "msg"] [--dry-run-pr]
 
 Single-command automation from current local branch to PR pipeline targeting main:
 1) run multi-agent plan/dev/test loop
-2) run PR pipeline
+2) run simulation regression gate (if SIM_GATE_ENABLED=1 in config.env)
+3) run hardware verification gate (if HW_VERIFY_ENABLED=1 in config.env)
+4) run PR pipeline
+
+Gates 2/3 implement the verification funnel described in
+docs/development/hardware_verification_loop.md and are opt-in (disabled by
+default) so existing PR-only usage is unaffected until a project wires up
+SIM_REGRESSION_CMD / HW_VERIFY_CMD in ai_longrun_harness/config.env.
 
 Options:
   --auto-commit           Auto-commit local dirty changes before pipeline.
@@ -63,6 +72,8 @@ done
 PR_TARGET_BRANCH="${PR_TARGET_BRANCH:-main}"
 AUTO_COMMIT_MESSAGE="${AUTO_COMMIT_MESSAGE:-chore: prepare auto pipeline run}"
 [[ -n "${COMMIT_MESSAGE}" ]] && AUTO_COMMIT_MESSAGE="${COMMIT_MESSAGE}"
+SIM_GATE_ENABLED="${SIM_GATE_ENABLED:-0}"
+HW_VERIFY_ENABLED="${HW_VERIFY_ENABLED:-0}"
 
 cd "${REPO_ROOT}"
 
@@ -87,6 +98,16 @@ if [[ ! -x "${PR_PIPELINE_SCRIPT}" ]]; then
   exit 1
 fi
 
+if [[ "${SIM_GATE_ENABLED}" == "1" && ! -x "${SIM_GATE_SCRIPT}" ]]; then
+  echo "[run_to_main] SIM_GATE_ENABLED=1 but missing executable: ${SIM_GATE_SCRIPT}" >&2
+  exit 1
+fi
+
+if [[ "${HW_VERIFY_ENABLED}" == "1" && ! -x "${HW_VERIFY_SCRIPT}" ]]; then
+  echo "[run_to_main] HW_VERIFY_ENABLED=1 but missing executable: ${HW_VERIFY_SCRIPT}" >&2
+  exit 1
+fi
+
 if [[ -n "$(git status --porcelain)" ]]; then
   if [[ "${AUTO_COMMIT}" -eq 1 ]]; then
     git add -A
@@ -103,6 +124,20 @@ START_TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 echo "[run_to_main] Running multi-agent loop..."
 "${MULTI_AGENT_SCRIPT}"
 
+if [[ "${SIM_GATE_ENABLED}" == "1" ]]; then
+  echo "[run_to_main] Running simulation regression gate..."
+  "${SIM_GATE_SCRIPT}"
+else
+  echo "[run_to_main] Simulation regression gate disabled (SIM_GATE_ENABLED!=1); skipping."
+fi
+
+if [[ "${HW_VERIFY_ENABLED}" == "1" ]]; then
+  echo "[run_to_main] Running hardware verification gate..."
+  "${HW_VERIFY_SCRIPT}"
+else
+  echo "[run_to_main] Hardware verification gate disabled (HW_VERIFY_ENABLED!=1); skipping."
+fi
+
 echo "[run_to_main] Running PR pipeline..."
 if [[ "${DRY_RUN_PR}" -eq 1 ]]; then
   "${PR_PIPELINE_SCRIPT}" --dry-run
@@ -118,6 +153,8 @@ branch=${BRANCH}
 base=${PR_TARGET_BRANCH}
 auto_commit=${AUTO_COMMIT}
 dry_run_pr=${DRY_RUN_PR}
+sim_gate_enabled=${SIM_GATE_ENABLED}
+hw_verify_enabled=${HW_VERIFY_ENABLED}
 started_at=${START_TS}
 finished_at=${END_TS}
 STATE
