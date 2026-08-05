@@ -23,7 +23,6 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.core.transport import pSHMTransport
 from dimos.msgs.sensor_msgs.Image import Image
-from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.visualization.vis_module import vis_module
@@ -150,9 +149,10 @@ def _go2_rerun_blueprint() -> Any:
 
 rerun_config = {
     "blueprint": _go2_rerun_blueprint,
-    # macOS publishes color_image over pSHMTransport so we add a SHM subscriber
-    # alongside the default LCM one.
-    "pubsubs": [LCM(), _ColorImageSHMSubscriber()] if platform.system() != "Linux" else [LCM()],
+    # macOS publishes color_image over pSHMTransport. Keep this as an extra
+    # subscriber so the bridge still follows the active LCM/Zenoh transport for
+    # lidar, maps, and all other robot data.
+    "extra_pubsubs": [_ColorImageSHMSubscriber()] if platform.system() != "Linux" else [],
     "visual_override": {
         "world/camera_info": _convert_camera_info,
         "world/global_map": _convert_global_map,

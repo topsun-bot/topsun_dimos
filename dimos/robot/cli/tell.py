@@ -23,7 +23,8 @@ import threading
 import time
 from typing import Any
 
-from dimos.core.transport import pLCMTransport
+from dimos.core.transport import pZenohTransport
+from dimos.core.transport_factory import make_transport
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -95,9 +96,12 @@ def tell_robot(
     response_queue: queue.Queue[tuple[str, object]] = queue.Queue()
     done = threading.Event()
 
-    human = pLCMTransport[str]("/human_input")
-    agent: Any = pLCMTransport("/agent")
-    idle = pLCMTransport[bool]("/agent_idle")
+    # These streams carry pickled Python objects.  Let the transport factory
+    # select pZenoh or pLCM so ``dimos tell`` uses the same configured backend
+    # as the running blueprint.
+    human: Any = make_transport("/human_input")
+    agent: Any = make_transport("/agent")
+    idle: Any = make_transport("/agent_idle")
 
     def _on_agent(msg: object) -> None:
         response_queue.put(("agent", msg))
@@ -111,11 +115,17 @@ def tell_robot(
         agent.start()
         idle.start()
     except Exception as exc:
-        write(f"Error: cannot connect to LCM — is DimOS running? ({exc})")
+        write(f"Error: cannot connect to transport — is DimOS running? ({exc})")
         return -1
 
     unsub_agent = agent.subscribe(_on_agent)
     unsub_idle = idle.subscribe(_on_idle)
+
+    # A standalone Zenoh peer needs a brief scouting window before its first
+    # publication.  Publishing immediately after opening the session can lose
+    # the one-shot human command before the agent peer is discovered.
+    if isinstance(human, pZenohTransport):
+        time.sleep(1.0)
 
     if not quiet:
         write(f"Sending: {message[:200]}")

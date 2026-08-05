@@ -29,6 +29,7 @@ import shutil
 
 from dimos.core.global_config import GlobalConfig
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
+from dimos.protocol.pubsub.impl.zenohpubsub import Zenoh
 from dimos.visualization.rerun.bridge import Config, _resolve_pubsubs
 
 
@@ -141,3 +142,17 @@ class TestBridgePubsubResolution:
         pubsubs = _resolve_pubsubs(config)
 
         assert pubsubs == [custom]
+
+    def test_extra_pubsubs_supplement_the_active_transport(self):
+        shared_memory_image = ExplicitPubSubOverride()
+        config = Config(
+            pubsubs=[LCM()],
+            extra_pubsubs=[shared_memory_image],
+            g=GlobalConfig(transport="zenoh"),
+        )
+
+        pubsubs = _resolve_pubsubs(config)
+
+        assert len(pubsubs) == 2
+        assert isinstance(pubsubs[0], Zenoh)
+        assert pubsubs[1] is shared_memory_image

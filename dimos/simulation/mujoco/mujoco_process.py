@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import base64
+from contextlib import nullcontext
 import json
 import pickle
 import signal
@@ -108,7 +109,16 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
 
     shm.signal_ready()
 
-    with viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False) as m_viewer:
+    # ``--viewer none`` must also suppress the MuJoCo native window.  On macOS
+    # that window is launched from a forkserver worker for composed blueprints;
+    # when Cocoa closes it, ``is_running()`` ends the whole simulation after the
+    # first frame.  A null context keeps the same sensor/control loop headless.
+    viewer_context = (
+        nullcontext(None)
+        if config.viewer == "none"
+        else viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False)
+    )
+    with viewer_context as m_viewer:
         camera_size = (VIDEO_WIDTH, VIDEO_HEIGHT)
 
         # Create renderers
@@ -130,12 +140,13 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
         video_interval = 1.0 / VIDEO_FPS
         lidar_interval = 1.0 / LIDAR_FPS
 
-        m_viewer.cam.lookat = config.mujoco_camera_position_float[0:3]
-        m_viewer.cam.distance = config.mujoco_camera_position_float[3]
-        m_viewer.cam.azimuth = config.mujoco_camera_position_float[4]
-        m_viewer.cam.elevation = config.mujoco_camera_position_float[5]
+        if m_viewer is not None:
+            m_viewer.cam.lookat = config.mujoco_camera_position_float[0:3]
+            m_viewer.cam.distance = config.mujoco_camera_position_float[3]
+            m_viewer.cam.azimuth = config.mujoco_camera_position_float[4]
+            m_viewer.cam.elevation = config.mujoco_camera_position_float[5]
 
-        while m_viewer.is_running() and not shm.should_stop():
+        while (m_viewer is None or m_viewer.is_running()) and not shm.should_stop():
             step_start = time.time()
 
             # Step simulation
@@ -144,7 +155,8 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
 
             person_position_controller.tick(data)
 
-            m_viewer.sync()
+            if m_viewer is not None:
+                m_viewer.sync()
 
             # Always update odometry
             pos = data.qpos[0:3].copy()

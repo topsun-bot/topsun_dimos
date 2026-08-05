@@ -31,6 +31,10 @@ export UNITREE_PASSWORD='你的密码'
 export UNITREE_SERIAL='B42D........'
 export UNITREE_REGION=cn
 ------------------- 配置环境 ---------------------------------
+# 单独跑空间记忆
+dimos --navigation-trace-level full run unitree-go2-agentic-deepseek --disable security-module
+
+
 # 第一步，建图，只跑一遍
 dimos --robot-ip 192.168.12.1 run unitree-go2-memory
 # 第二部，第一步stop后，解析图

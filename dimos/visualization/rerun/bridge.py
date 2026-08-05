@@ -193,8 +193,19 @@ def _resolve_pubsubs(config: Any) -> list[SubscribeAllCapable[Any, Any]]:
     if "pubsubs" in fields_set and pubsubs is not None:
         is_legacy_default = len(pubsubs) == 1 and isinstance(pubsubs[0], LCM)
         if not is_legacy_default:
-            return pubsubs
-    return _default_pubsubs(getattr(config, "g", config))
+            base_pubsubs = pubsubs
+        else:
+            base_pubsubs = _default_pubsubs(getattr(config, "g", config))
+    else:
+        base_pubsubs = _default_pubsubs(getattr(config, "g", config))
+
+    # Platform-specific side channels, such as macOS camera shared memory,
+    # supplement the active transport rather than replacing it.
+    extra_pubsubs = cast(
+        "list[SubscribeAllCapable[Any, Any]]",
+        getattr(config, "extra_pubsubs", []),
+    )
+    return [*base_pubsubs, *extra_pubsubs]
 
 
 class Config(ModuleConfig):
@@ -207,6 +218,7 @@ class Config(ModuleConfig):
     """
 
     pubsubs: list[SubscribeAllCapable[Any, Any]] = field(default_factory=lambda: [LCM()])
+    extra_pubsubs: list[SubscribeAllCapable[Any, Any]] = field(default_factory=list)
 
     visual_override: dict[Glob | str, Callable[[Any], Archetype] | None] = field(
         default_factory=dict

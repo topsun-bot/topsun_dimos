@@ -673,8 +673,8 @@ def tell_cmd(
 ) -> None:
     """Send a natural language command and wait for the agent's response.
 
-    This publishes your message on the /human_input LCM topic, then subscribes
-    to /agent and /agent_idle to stream the response back synchronously.
+    This publishes your message on the configured /human_input transport, then
+    subscribes to /agent and /agent_idle to stream the response synchronously.
 
     Works with any running blueprint that includes an agent module
     (e.g. unitree-go2-agentic, unitree-go2-spatial-agentic).

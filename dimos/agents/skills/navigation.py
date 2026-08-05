@@ -24,6 +24,7 @@ import uuid
 
 import cv2
 import numpy as np
+from PIL import Image as PilImage, ImageDraw, ImageFont
 from reactivex.disposable import Disposable
 
 # skill 装饰器: 将方法暴露给 LLM agent 作为可调用工具
@@ -174,6 +175,31 @@ def _timestamped_snapshot_stem(record_id: str, now: float | None = None) -> str:
     timestamp = time.time() if now is None else now
     prefix = time.strftime("%Y%m%d-%H%M%S", time.localtime(timestamp))
     return f"{prefix}_{record_id}"
+
+
+def _safe_artifact_name(value: str) -> str:
+    """Keep a readable room name in evidence filenames without creating paths."""
+    return (
+        "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value) or "room"
+    )
+
+
+def _annotation_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a CJK-capable font on macOS/Ubuntu for VLM labels when available."""
+    candidates = (
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    )
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size=size)
+            except OSError:
+                continue
+    return ImageFont.load_default()
 
 
 @dataclass(frozen=True)
@@ -1157,6 +1183,84 @@ class NavigationSkillContainer(Module):
         )
         return self._landmark_memory.record(record)
 
+    def _save_panorama_vlm_snapshot(
+        self,
+        image_data: Any,
+        snapshot_stem: str,
+        detections: list[dict[str, Any]],
+    ) -> str:
+        """Write one panorama JPEG, optionally overlaying its VLM boxes and labels.
+
+        The unannotated JPEG is written immediately after capture. When the
+        asynchronous VLM response arrives, the same filename is overwritten
+        with the annotated image. This preserves every panorama image even
+        when a VLM call fails or finishes after the robot has stopped moving.
+        """
+        try:
+            image = Image.from_numpy(np.asarray(image_data))
+            canvas = np.asarray(image_data).copy()
+            if detections:
+                annotated = PilImage.fromarray(canvas)
+                draw = ImageDraw.Draw(annotated)
+                font = _annotation_font(max(18, canvas.shape[1] // 48))
+                for item in detections:
+                    raw_bbox = item.get("bbox")
+                    if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) != 4:
+                        continue
+                    try:
+                        raw_x1, raw_y1, raw_x2, raw_y2 = raw_bbox
+                        bbox = (
+                            float(raw_x1),
+                            float(raw_y1),
+                            float(raw_x2),
+                            float(raw_y2),
+                        )
+                        x1, y1, x2, y2 = _scale_bbox_to_image(bbox, image)
+                    except (TypeError, ValueError):
+                        continue
+                    x1, y1 = max(0, int(x1)), max(0, int(y1))
+                    x2 = min(canvas.shape[1] - 1, int(x2))
+                    y2 = min(canvas.shape[0] - 1, int(y2))
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    draw.rectangle((x1, y1, x2, y2), outline=(255, 64, 64), width=3)
+                    label = str(item.get("name", "物体"))
+                    label_box = draw.textbbox((x1, y1), label, font=font)
+                    label_height = label_box[3] - label_box[1]
+                    label_top = max(0, y1 - label_height - 8)
+                    draw.rectangle(
+                        (x1, label_top, min(canvas.shape[1] - 1, label_box[2] + 8), y1),
+                        fill=(255, 64, 64),
+                    )
+                    draw.text((x1 + 4, label_top + 2), label, font=font, fill=(255, 255, 255))
+                canvas = np.asarray(annotated)
+
+            # Go2 frames are RGB; OpenCV encodes BGR JPEGs.
+            if canvas.ndim == 3 and canvas.shape[2] == 3:
+                canvas = cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR)
+            encoded, jpg = cv2.imencode(".jpg", canvas)
+            if not encoded:
+                logger.warning(
+                    "[tag_location] failed to encode panorama snapshot %s", snapshot_stem
+                )
+                return ""
+            path = self._landmark_memory.save_snapshot(snapshot_stem, jpg.tobytes())
+            if not path:
+                logger.warning("[tag_location] failed to write panorama snapshot %s", snapshot_stem)
+                return ""
+            logger.info(
+                "[tag_location] wrote panorama VLM snapshot path=%s detections=%d",
+                path,
+                len(detections),
+            )
+            return path
+        except Exception:
+            # Evidence export must not prevent room tagging or object-memory writes.
+            logger.exception(
+                "[tag_location] failed to save panorama VLM snapshot %s", snapshot_stem
+            )
+            return ""
+
     def _save_confirmed_object_snapshot(
         self,
         target_name: str,
@@ -1620,6 +1724,8 @@ class NavigationSkillContainer(Module):
         captured_frames: list[
             tuple[Any, tuple[float, float, float], tuple[float, float, float]]
         ] = []
+        panorama_timestamp = time.time()
+        panorama_room_name = _safe_artifact_name(location_name)
 
         has_cam = self._latest_image is not None and hasattr(self._latest_image, "data")
         cam_shape = getattr(self._latest_image.data, "shape", None) if has_cam else None  # type: ignore[union-attr]
@@ -1653,6 +1759,11 @@ class NavigationSkillContainer(Module):
                 # 复制图像数据, 避免异步线程读取时被后续帧覆盖
                 img_copy = latest_image.data.copy()
                 pos_tuple = (float(pos.x), float(pos.y), float(pos.z))
+                frame_idx = len(captured_frames)
+                snapshot_stem = (
+                    f"{_timestamped_snapshot_stem(panorama_room_name, panorama_timestamp)}"
+                    f"_panorama_{frame_idx + 1:02d}"
+                )
                 captured_frames.append(
                     (
                         img_copy.copy(),
@@ -1669,11 +1780,13 @@ class NavigationSkillContainer(Module):
                 except Exception:
                     logger.exception("Failed to store room reference image for '%s'", name)
 
+                # 每张全景帧立即导出。VLM 成功后会用带 bbox/类别标注的版本覆盖同一路径。
+                self._save_panorama_vlm_snapshot(img_copy, snapshot_stem, [])
+
                 # 逐帧异步 VLM: 立即启动而非等所有帧拍完, 减少 VLM 检测延迟
-                frame_idx = len(captured_frames) - 1
                 threading.Thread(
                     target=self._detect_single_frame_async,
-                    args=(img_copy, pos_tuple, rot_tuple, name),
+                    args=(img_copy, pos_tuple, rot_tuple, name, snapshot_stem),
                     daemon=True,
                     name=f"vlm-frame-{name}-{frame_idx}",
                 ).start()
@@ -3555,6 +3668,7 @@ class NavigationSkillContainer(Module):
         position: tuple[float, float, float],
         rotation: tuple[float, float, float],
         room_name: str,
+        snapshot_stem: str = "",
     ) -> None:
         """对单张拍照帧运行 VLM 检测, 并将识别到的物体存入地标记忆.
 
@@ -3567,6 +3681,7 @@ class NavigationSkillContainer(Module):
             position: 拍照时机器人位置 (x, y, z).
             rotation: 拍照时机器人姿态 (roll, pitch, yaw), yaw 来自 odom.
             room_name: 当前所在房间名, 用于元数据标注.
+            snapshot_stem: 当前全景帧的导出文件名主体; VLM 成功后覆盖为标注图.
         """
         from dimos.msgs.sensor_msgs.Image import Image as DimosImage
 
@@ -3608,6 +3723,20 @@ class NavigationSkillContainer(Module):
             logger.warning("[VLM single-frame] no objects parsed for room=%r", room_name)
             return
 
+        # 使用规范化后的名称覆盖原始 VLM 文本，确保 JPG 标签和 JSON 中可检索的名称一致。
+        annotated_items: list[dict[str, Any]] = []
+        for item in parsed:
+            name = _normalize_vlm_object_name(str(item.get("name", "")).strip())
+            if name:
+                annotated_item = dict(item)
+                annotated_item["name"] = name
+                annotated_items.append(annotated_item)
+        panorama_snapshot_path = (
+            self._save_panorama_vlm_snapshot(image_data, snapshot_stem, annotated_items)
+            if snapshot_stem
+            else ""
+        )
+
         stored = 0
         for item in parsed:
             # 规范化物体名称(去英文/统一称呼), 便于后续按名称检索
@@ -3627,6 +3756,8 @@ class NavigationSkillContainer(Module):
                 "yaw_offset_deg": round(math.degrees(float(item.get("yaw_offset", 0.0))), 1),
                 "capture_yaw_deg": round(math.degrees(capture_yaw), 1),
             }
+            if panorama_snapshot_path:
+                meta["image_snapshot_path"] = panorama_snapshot_path
             meta.update(
                 self._map_metadata_for_pose(
                     position,
@@ -3640,6 +3771,7 @@ class NavigationSkillContainer(Module):
                 position=position,
                 rotation=obj_rotation,
                 state="",
+                image_snapshot_path=panorama_snapshot_path,
                 metadata=meta,
                 session_id=self._memory_session_id,
             )

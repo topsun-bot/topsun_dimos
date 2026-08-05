@@ -20,6 +20,8 @@ into blueprints and injected into skill containers via Spec protocols.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from dimos.constants import STATE_DIR
@@ -36,9 +38,25 @@ _LANDMARK_DB_PATH = _LANDMARK_MEMORY_DIR / "landmarks.json"
 _SNAPSHOTS_DIR = _LANDMARK_MEMORY_DIR / "snapshots"
 
 
+def _default_memory_paths() -> tuple[Path, Path]:
+    """Resolve landmark artifacts for this run, with a legacy fallback.
+
+    ``dimos run`` sets ``DIMOS_RUN_LOG_DIR`` before it forks module workers.
+    Keep the human-readable landmark JSON and its JPEG evidence beside that
+    run's navigation logs, so a replay package is self-contained.  Direct
+    module users and older launch paths retain the state-directory behavior.
+    """
+    run_log_dir = os.getenv("DIMOS_RUN_LOG_DIR")
+    if run_log_dir:
+        memory_dir = Path(run_log_dir) / "spatial_memory"
+        return memory_dir / "landmarks.json", memory_dir / "snapshots"
+    return _LANDMARK_DB_PATH, _SNAPSHOTS_DIR
+
+
 class SpatialLandmarkMemoryConfig(ModuleConfig):
-    db_path: str = str(_LANDMARK_DB_PATH)
-    snapshots_dir: str = str(_SNAPSHOTS_DIR)
+    # 留空时按当前 DIMOS_RUN_LOG_DIR 解析。显式配置仍优先，方便测试和旧调用方。
+    db_path: str = ""
+    snapshots_dir: str = ""
     # 与 GlobalConfig.new_memory 对齐: True 时启动清空 landmarks.json 与 snapshots.
     new_memory: bool = False
 
@@ -53,9 +71,14 @@ class SpatialLandmarkMemoryModule(Module):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        default_db_path, default_snapshots_dir = _default_memory_paths()
+        self._db_path = Path(self.config.db_path) if self.config.db_path else default_db_path
+        self._snapshots_dir = (
+            Path(self.config.snapshots_dir) if self.config.snapshots_dir else default_snapshots_dir
+        )
         self._memory = SpatialLandmarkMemory(
-            db_path=self.config.db_path,
-            snapshots_dir=self.config.snapshots_dir,
+            db_path=self._db_path,
+            snapshots_dir=self._snapshots_dir,
         )
 
     @rpc
@@ -67,12 +90,12 @@ class SpatialLandmarkMemoryModule(Module):
             logger.info(
                 "Cleared landmark memory on start (new_memory=True, removed %d record(s) from %s)",
                 n,
-                self.config.db_path,
+                self._db_path,
             )
             return
         loaded = self._memory.load()
         if loaded:
-            logger.info("Loaded %d landmark(s) from %s", self._memory.count(), self.config.db_path)
+            logger.info("Loaded %d landmark(s) from %s", self._memory.count(), self._db_path)
         else:
             logger.info("Starting with empty landmark memory")
 

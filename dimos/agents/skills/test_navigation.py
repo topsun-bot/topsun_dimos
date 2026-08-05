@@ -575,7 +575,7 @@ def test_room_initial_snapshot_uses_timestamped_filename(
     )
     monkeypatch.setattr(
         "dimos.agents.skills.navigation._timestamped_snapshot_stem",
-        lambda record_id: f"20260716-111032_{record_id}",
+        lambda record_id, *_args: f"20260716-111032_{record_id}",
     )
     monkeypatch.setattr(
         "dimos.agents.skills.navigation.threading.Thread",
@@ -587,8 +587,27 @@ def test_room_initial_snapshot_uses_timestamped_filename(
     assert result.startswith("Tagged '办公室'")
     assert len(recorded) == 1
     expected_stem = f"20260716-111032_{recorded[0].record_id}"
-    assert saved_snapshots == [expected_stem]
+    assert saved_snapshots == ["20260716-111032_办公室_panorama_01", expected_stem]
     assert recorded[0].image_snapshot_path == f"/snapshots/{expected_stem}.jpg"
+
+
+def test_panorama_snapshot_is_annotated_and_overwrites_capture() -> None:
+    nav = _nav_container()
+    saved: list[tuple[str, bytes]] = []
+    nav._landmark_memory = SimpleNamespace(
+        save_snapshot=lambda stem, data: saved.append((stem, data)) or f"/snapshots/{stem}.jpg"
+    )
+    frame = np.full((80, 120, 3), 20, dtype=np.uint8)
+
+    path = nav._save_panorama_vlm_snapshot(
+        frame,
+        "office_panorama_01",
+        [{"name": "灭火器", "bbox": [100, 100, 500, 900]}],
+    )
+
+    assert path == "/snapshots/office_panorama_01.jpg"
+    assert saved[0][0] == "office_panorama_01"
+    assert saved[0][1].startswith(b"\xff\xd8")
 
 
 def test_enroute_confirmation_uses_fresh_bbox_and_rechecks_after_servo(

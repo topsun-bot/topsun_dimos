@@ -141,3 +141,16 @@ def test_module_start_keeps_memory_when_new_memory_false(tmp_path: Path) -> None
         assert module.find_by_name("会议室") is not None
     finally:
         module.stop()
+
+
+def test_module_defaults_to_current_run_log_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dimos.perception.detection.door.door_spatial_memory_module import _default_memory_paths
+
+    run_log_dir = tmp_path / "logs" / "test-run"
+    monkeypatch.setenv("DIMOS_RUN_LOG_DIR", str(run_log_dir))
+    db_path, snapshots_dir = _default_memory_paths()
+
+    assert db_path == run_log_dir / "spatial_memory" / "landmarks.json"
+    assert snapshots_dir == run_log_dir / "spatial_memory" / "snapshots"
