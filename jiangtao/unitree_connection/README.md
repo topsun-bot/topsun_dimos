@@ -35,6 +35,26 @@ DataChannel，视频走 RTP track。
 4. **控制 API**：`move(twist)`、`standup()`、`balance_stand()`、`liedown()`、
    `set_obstacle_avoidance(...)` 等
 
+### `move(Twist)` 单位：默认是摇杆比例，不是 m/s
+
+`GO2Connection` / `UnitreeWebRTCConnection` 默认 **`velocity_api=False`**。此时：
+
+```text
+Twist.linear.x  →  WIRELESS_CONTROLLER.ly   # 前后
+Twist.linear.y  →  WIRELESS_CONTROLLER.lx = -y
+Twist.angular.z →  WIRELESS_CONTROLLER.rx = -yaw
+```
+
+数值是摇杆偏转 **约 −1~+1**（0.10 ≈ 10% 杆，0.20 ≈ 20% 杆），**不是** 米/秒或弧度/秒。
+只有 `velocity_api=True` 时才走 Sport `Move` 的 `x/y/yaw`。
+
+**4G Remote 硬下限（低于此值设备直接不动，禁止再降）**：见 `jiangtao/run.md` 章节「4G Remote 摇杆死区」。
+
+| 轴 | 硬下限 | 说明 |
+|---|---|---|
+| 前进 `\|ly\|` | **0.10** | 2026-08-05 odom 标定 |
+| 转向 `\|rx\|` | **0.20** | 对应 `DIMOS_ROTATE_MIN_RAD_S=0.2` |
+
 ## 二、API 三层抽象
 
 | 层 | 方法 | 数据类型 | 适合 |

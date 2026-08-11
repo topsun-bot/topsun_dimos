@@ -50,24 +50,37 @@ class MovementManagerConfig(ModuleConfig):
 
 
 class MovementManager(Module):
-    """Combine tele_cmd_vel (keyboard controls) and nav_cmd_vel in a sane way, output cmd_vel"""
+    """Combine teleop/nav/recharge velocity sources and output the single robot cmd_vel."""
 
     config: MovementManagerConfig
 
     clicked_point: In[PointStamped]
     nav_cmd_vel: In[Twist]
     tele_cmd_vel: In[Twist]
+    recharge_cmd_vel: In[Twist]
+    # Legacy combined ownership input used by the first recharge module.
+    recharge_active: In[Bool]
+    # Integrated recharge keeps navigation active for staging, then separately
+    # claims final visual-servo velocity ownership.
+    recharge_task_active: In[Bool]
+    recharge_servo_active: In[Bool]
+    recharge_staging_goal: In[PointStamped]
 
     goal: Out[PointStamped]
     way_point: Out[PointStamped]
     cmd_vel: Out[Twist]
     stop_movement: Out[Bool]
+    recharge_cancel: Out[Bool]
+    recharge_task_granted: Out[Bool]
+    recharge_servo_granted: Out[Bool]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._lock = threading.Lock()
         self._teleop_active = False
         self._last_teleop_time = 0.0
+        self._recharge_task_active = False
+        self._recharge_servo_active = False
         self._trace = TraceSink("mux", config=self.config.g)
 
     @rpc
@@ -76,6 +89,19 @@ class MovementManager(Module):
         self.register_disposable(Disposable(self.clicked_point.subscribe(self._on_click)))
         self.register_disposable(Disposable(self.nav_cmd_vel.subscribe(self._on_nav)))
         self.register_disposable(Disposable(self.tele_cmd_vel.subscribe(self._on_teleop)))
+        self.register_disposable(Disposable(self.recharge_cmd_vel.subscribe(self._on_recharge_cmd)))
+        self.register_disposable(
+            Disposable(self.recharge_active.subscribe(self._on_recharge_active))
+        )
+        self.register_disposable(
+            Disposable(self.recharge_task_active.subscribe(self._on_recharge_task_active))
+        )
+        self.register_disposable(
+            Disposable(self.recharge_servo_active.subscribe(self._on_recharge_servo_active))
+        )
+        self.register_disposable(
+            Disposable(self.recharge_staging_goal.subscribe(self._on_recharge_staging_goal))
+        )
 
     @rpc
     def stop(self) -> None:
@@ -96,6 +122,18 @@ class MovementManager(Module):
             logger.warning("Ignored out-of-range click", x=msg.x, y=msg.y, z=msg.z)
             return
 
+        with self._lock:
+            recharge_was_active = self._recharge_task_active
+            if recharge_was_active:
+                self._recharge_task_active = False
+                self._recharge_servo_active = False
+        if recharge_was_active:
+            # A human click is an explicit operator override, just like teleop.
+            self.recharge_cancel.publish(Bool(data=True))
+            self.cmd_vel.publish(Twist())
+            self.recharge_task_granted.publish(Bool(data=False))
+            self.recharge_servo_granted.publish(Bool(data=False))
+
         logger.debug("Goal", x=round(msg.x, 1), y=round(msg.y, 1), z=round(msg.z, 1))
         self.way_point.publish(msg)
         self.goal.publish(msg)
@@ -114,8 +152,14 @@ class MovementManager(Module):
 
     def _on_nav(self, msg: Twist) -> None:
         suppressed_elapsed: float | None = None
+        recharge_servo_active = False
         with self._lock:
-            if self._teleop_active:
+            recharge_servo_active = self._recharge_servo_active
+            if recharge_servo_active:
+                # Visual recharge owns final docking motion. Planner velocity must not
+                # mix with the small camera-servoing commands.
+                suppressed_elapsed = 0.0
+            elif self._teleop_active:
                 # check if cooldown has expired
                 elapsed = time.monotonic() - self._last_teleop_time
                 if elapsed < self.config.tele_cooldown_sec:
@@ -129,17 +173,29 @@ class MovementManager(Module):
             self._trace_mux(
                 "nav_command_suppressed",
                 msg,
-                source="navigation",
+                source="navigation_recharge" if recharge_servo_active else "navigation",
                 cooldown_elapsed_sec=suppressed_elapsed,
             )
             return
         self._trace_mux("mux_command_published", msg, source="navigation")
 
     def _on_teleop(self, msg: Twist) -> None:
+        recharge_was_active = False
         with self._lock:
+            recharge_was_active = self._recharge_task_active or self._recharge_servo_active
+            self._recharge_task_active = False
+            self._recharge_servo_active = False
             self._teleop_active = True
             self._last_teleop_time = time.monotonic()
 
+        if recharge_was_active:
+            # Manual input is the highest-priority operator override. Tell the recharge
+            # module to cancel and publish zero before forwarding the manual command.
+            self.recharge_cancel.publish(Bool(data=True))
+            self.cmd_vel.publish(Twist())
+            self.recharge_task_granted.publish(Bool(data=False))
+            self.recharge_servo_granted.publish(Bool(data=False))
+            self._trace_mux("recharge_cancelled_by_teleop", Twist(), source="teleop")
         self._cancel_goal()
 
         scale = self.config.tele_cmd_vel_scaling
@@ -162,6 +218,63 @@ class MovementManager(Module):
             source="teleop",
             input_twist=_twist_fields(msg),
         )
+
+    def _on_recharge_active(self, msg: Bool) -> None:
+        """Backward-compatible combined task+servo ownership input."""
+        self._on_recharge_task_active(msg)
+        self._on_recharge_servo_active(msg)
+
+    def _on_recharge_task_active(self, msg: Bool) -> None:
+        """Claim the navigation task while still allowing staging nav velocity."""
+        active = bool(msg.data)
+        with self._lock:
+            was_active = self._recharge_task_active
+            self._recharge_task_active = active
+            if not active:
+                self._recharge_servo_active = False
+        if active and not was_active:
+            self.cmd_vel.publish(Twist())
+            self._cancel_goal()
+        self.recharge_task_granted.publish(Bool(data=active))
+        if not active and was_active:
+            self.cmd_vel.publish(Twist())
+            self.recharge_servo_granted.publish(Bool(data=False))
+            self._trace_mux("recharge_task_released", Twist(), source="recharge")
+
+    def _on_recharge_servo_active(self, msg: Bool) -> None:
+        """Grant final visual-servo velocity ownership only inside an active task."""
+        requested = bool(msg.data)
+        with self._lock:
+            active = requested and self._recharge_task_active
+            was_active = self._recharge_servo_active
+            self._recharge_servo_active = active
+        if active and not was_active:
+            self.cmd_vel.publish(Twist())
+            self._cancel_goal()
+        if not active and was_active:
+            self.cmd_vel.publish(Twist())
+            self._trace_mux("recharge_servo_released", Twist(), source="recharge")
+        self.recharge_servo_granted.publish(Bool(data=active))
+
+    def _on_recharge_staging_goal(self, msg: PointStamped) -> None:
+        """Forward the recharge-owned staging goal while navigation still owns velocity."""
+        with self._lock:
+            accepted = self._recharge_task_active and not self._recharge_servo_active
+        if not accepted:
+            logger.warning("Ignored recharge staging goal without task ownership")
+            return
+        self.way_point.publish(msg)
+        self.goal.publish(msg)
+
+    def _on_recharge_cmd(self, msg: Twist) -> None:
+        """Forward recharge velocity only while recharge_active is true."""
+        with self._lock:
+            active = self._recharge_servo_active
+        if not active:
+            self._trace_mux("recharge_command_suppressed", msg, source="recharge")
+            return
+        self.cmd_vel.publish(msg)
+        self._trace_mux("mux_command_published", msg, source="recharge")
 
     def _trace_mux(
         self,

@@ -26,6 +26,7 @@ TraceProducer: TypeAlias = Literal[
     "connection",
     "costmapper",
     "relocalization",
+    "recharge",
 ]
 NavigationTerminal: TypeAlias = Literal[
     "arrived",

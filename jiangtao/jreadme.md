@@ -2,6 +2,272 @@
 
 > 环境：在 `topsun_dimos` 根目录执行 `deactivate 2>/dev/null; source .venv/bin/activate`，确认 `echo $VIRTUAL_ENV` 以 `topsun_dimos/.venv` 结尾。详见 `jiangtao/bugfix.md` §9/§13。
 
+## Go2 4G WebRTC 导航集成式自动回充
+
+### 0. 当前入口与安全默认值
+
+正式入口是 DimOS 蓝图 `unitree-go2-auto-recharge`，不是单独运行官方 NX 二进制，也不是把程序部署到 Go2 本体。完整通信链路为：
+
+```text
+本机 AutoRechargeModule
+  → MovementManager 控制权仲裁
+  → GO2Connection
+  → 4G Remote WebRTC DataChannel / Video Track
+  → Go2
+```
+
+当前蓝图默认 `allow_liedown=false`：可以识别二维码、接管导航、移动到 staging pose、视觉对准和前进到最终停靠位置，但不会趴下。第一次现场测试必须保持这个默认值。
+
+另外建议启动时显式设置 `auto_takeover=false`。此时程序只监控，不会因为启动时已经看到二维码而立即移动；由操作员在第二个终端调用 `start_recharge()` 后才开始回充。
+
+### 1. 每次启动前准备
+
+机器人周围必须有人看护，后方至少预留 0.8 m 回退空间，机器人与充电桩之间、机器人后方均不得有人、线缆或其他障碍物。首次测试先关闭充电桩电源或覆盖充电触点，只验证轨迹。
+
+凭据只放在本机 `.env` 或 `jiangtao/run-self.md`，不要提交到 Git，也不要直接写进本文件：
+
+```bash
+cd /Users/taojiang/huazhijian/topsun-bot/topsun_dimos
+deactivate 2>/dev/null || true
+source .venv/bin/activate
+
+# 如果凭据保存在 .env：
+set -a
+source .env
+set +a
+
+# 4G Remote 必需配置；具体值由 .env 提供。
+export UNITREE_WEBRTC_METHOD=remote
+export UNITREE_REGION=cn
+
+# 检查配置是否存在，不输出密码和 AES key。
+test -n "$UNITREE_USERNAME" && echo "UNITREE_USERNAME: OK"
+test -n "$UNITREE_PASSWORD" && echo "UNITREE_PASSWORD: OK"
+test -n "$UNITREE_SERIAL" && echo "UNITREE_SERIAL: $UNITREE_SERIAL"
+
+# 确认新蓝图已注册。
+dimos list | rg 'unitree-go2-auto-recharge'
+```
+
+如果虚拟环境依赖还没有安装：
+
+```bash
+uv sync --extra all
+```
+
+### 2. 第一阶段：只验证轨迹，不允许趴下
+
+终端 1 启动蓝图。该模式会在操作员放行后真实旋转、前进或回退，但最终不会趴下：
+
+```bash
+cd /Users/taojiang/huazhijian/topsun-bot/topsun_dimos
+source .venv/bin/activate
+set -a; source .env; set +a
+
+dimos \
+  --viewer none \
+  --navigation-trace-level full \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region cn \
+  run unitree-go2-auto-recharge \
+  -o autorechargemodule.auto_takeover=false \
+  -o autorechargemodule.allow_liedown=false
+```
+
+等终端 1 完成 WebRTC、视频、odom、costmap 和模块启动后，在终端 2 连接运行中的 DimOS：
+
+```bash
+cd /Users/taojiang/huazhijian/topsun-bot/topsun_dimos
+source .venv/bin/activate
+dimos shell
+```
+
+进入 IPython 后依次执行：
+
+```python
+modules()
+app.AutoRechargeModule.recharge_status()
+
+# 确认机器人前后无人、后方回退区域无障碍后，才执行这一行。
+app.AutoRechargeModule.start_recharge()
+
+# 随时查询当前状态、二维码距离和 staging 目标。
+app.AutoRechargeModule.recharge_status()
+```
+
+`start_recharge()` 之后的预期状态链路是：
+
+```text
+monitor
+→ validate_dock
+→ claim_task
+→ staging_nav（不在中线时先导航到二维码正前方）
+→ acquire_for_servo
+→ claim_servo
+→ stop_and_observe / visual_servo
+→ 必要时 recovery_stop → recovery_backoff → recovery_reacquire
+→ final_settle
+→ succeeded（allow_liedown=false 时到此结束并释放控制权）
+```
+
+到达 `succeeded` 后检查：
+
+- 机器人正对二维码，大致落在充电板中心线上；
+- 相机到二维码的 PnP 深度约为 `0.30～0.45 m`；
+- 没有横移指令；一次只执行 yaw 或前后移动中的一个；
+- 每个运动脉冲后都会发零速度并等待新图像；
+- 近场丢码或走过头时先停止，再直线后退到约 `0.70～0.85 m` 的重新捕获窗口；
+- 全程没有进入 `failed`，也没有出现 `recovery_corridor_blocked` 等安全失败。
+
+### 3. 紧急停止、取消和重新开始
+
+最优先的现场取消方式是在 `dimos shell` 中执行：
+
+```python
+app.AutoRechargeModule.cancel_recharge()
+app.AutoRechargeModule.recharge_status()
+```
+
+取消会立即发布零速度、取消 staging 导航目标并释放回充任务/视觉伺服控制权。键盘遥操作或新的地图点击目标也会抢占回充并触发取消。
+
+如果 shell 不可用，在另一个终端执行：
+
+```bash
+dimos stop
+```
+
+前台运行时也可以在终端 1 按 `Ctrl-C`。停止后必须现场确认机器狗已经静止；不要仅依据命令返回值判断。
+
+取消后重新尝试：
+
+```python
+app.AutoRechargeModule.start_recharge()
+```
+
+### 4. 第二阶段：允许趴下并验证充电
+
+只有第一阶段的正面、侧面、斜向、近场丢码和走过头恢复测试全部通过后，才允许使用这一模式。启动命令与第一阶段相同，只把最后一项改为 `true`：
+
+```bash
+cd /Users/taojiang/huazhijian/topsun-bot/topsun_dimos
+source .venv/bin/activate
+set -a; source .env; set +a
+
+dimos \
+  --viewer none \
+  --navigation-trace-level full \
+  --unitree-webrtc-method remote \
+  --unitree-username "$UNITREE_USERNAME" \
+  --unitree-password "$UNITREE_PASSWORD" \
+  --unitree-serial "$UNITREE_SERIAL" \
+  --unitree-region cn \
+  run unitree-go2-auto-recharge \
+  -o autorechargemodule.auto_takeover=false \
+  -o autorechargemodule.allow_liedown=true
+```
+
+然后仍由终端 2 手动放行：
+
+```bash
+dimos shell
+```
+
+```python
+app.AutoRechargeModule.recharge_status()
+app.AutoRechargeModule.start_recharge()
+```
+
+完整成功状态为：
+
+```text
+final_settle
+→ lie_down
+→ verify_charge
+→ charging_hold
+```
+
+`charging_hold` 才代表已经通过本机 WebRTC `lowstate.bms_state.current` 连续约 4 秒的充电判据。进入该状态后，回充模块会释放视觉速度控制权，但继续持有任务控制权并保持零速度，防止导航目标再次启动。
+
+需要离开充电桩时，先释放 `charging_hold`；该命令本身不会让机器狗站起或移动：
+
+```python
+app.AutoRechargeModule.leave_charger()
+```
+
+随后再使用经过确认的站立/离桩操作。不要在仍处于 `charging_hold` 时直接发送导航目标。
+
+### 5. 状态、日志和失败原因
+
+运行状态和实时日志：
+
+```bash
+dimos status
+dimos log -f
+```
+
+RPC 状态包含当前状态、最后一次二维码位姿、staging pose 和失败码：
+
+```python
+app.AutoRechargeModule.recharge_status()
+```
+
+启用 `--navigation-trace-level full` 后，本次运行目录中会生成：
+
+```text
+<run-dir>/main.jsonl
+<run-dir>/navigation/recharge-<pid>.jsonl
+<run-dir>/navigation/mux-<pid>.jsonl
+<run-dir>/navigation/planner-<pid>.jsonl
+```
+
+停止程序后，从 `dimos status` 或 `~/.local/state/dimos/logs/` 找到对应 `<run-dir>`，执行：
+
+```bash
+# 查看回充状态切换、每个速度脉冲和失败码。
+rg 'recharge_state_transition|recharge_cmd|recharge_failed|recharge_success' \
+  '<run-dir>/navigation'/recharge-*.jsonl
+
+# 生成导航诊断报告；必须在该 run 已停止后执行。
+dimos nav analyze '<run-dir>'
+```
+
+常见失败码与处理：
+
+| 失败码 | 含义 | 现场处理 |
+|---|---|---|
+| `input_image_stale` | 4G 视频帧超时 | 取消，检查 WebRTC 视频和网络后重启 |
+| `input_odom_stale` | odom 超时 | 取消，不允许继续盲走 |
+| `costmap_stale` | costmap 超时 | 检查建图链路；不得绕过可达性门禁 |
+| `dock_target_blocked` / `staging_target_blocked` | 目标落在障碍或未知区 | 清障或重新放置机器人，不要强行前进 |
+| `staging_corridor_blocked` | 去 staging pose 的走廊被阻挡 | 清理路线后重新开始 |
+| `marker_not_found_at_stage` | 到 staging 后仍未稳定看到二维码 | 调整初始位置、光照或二维码平整度 |
+| `recovery_corridor_blocked` | 机器人后方回退区域不安全 | 立即人工检查后方，清障后重启 |
+| `near_field_reacquire_failed` | 后退后仍无法重新捕获二维码 | 检查码是否出画、反光或被机器人遮挡 |
+| `visual_servo_timeout` | 视觉对接总时间超限 | 根据 trace 检查 yaw 符号、摇杆死区和图像延迟 |
+| `lie_down_failed` | 趴下 API 失败 | 取消并人工确认姿态，不继续验证充电 |
+| `charge_unverified` | 已趴下但 BMS 电流未进入充电带 | 自动站起重试或最终失败；检查落点和充电桩供电 |
+
+### 6. 仅做视觉/充电判据诊断的旧脚本
+
+下面脚本只用于校准和排障，不是最终导航集成入口。
+
+只观察二维码，不发送运动命令：
+
+```bash
+uv run python jiangtao/scripts/demo_go2_4g_aruco_recharge.py
+```
+
+采集已经趴在桩上时的 BMS 充电状态：
+
+```bash
+uv run python jiangtao/scripts/demo_go2_sample_charge_state.py --seconds 20
+```
+
+独立脚本只有显式增加 `--execute` 才会运动；日常回充测试应使用 `unitree-go2-auto-recharge` 蓝图。
+
 ## 4G Remote 摇杆死区（硬下限，禁止再降）
 
 > **适用范围**：`UNITREE_WEBRTC_METHOD=remote`（4G）且默认 `velocity_api=False`。

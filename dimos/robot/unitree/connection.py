@@ -371,6 +371,7 @@ class UnitreeWebRTCConnection(Resource):
 
         self.conn.datachannel.pub_sub.publish_without_callback(
             RTC_TOPIC["WIRELESS_CONTROLLER"],
+            # 回充 yaw_sign 标定基于此映射: 负 angular.z → 正 rx → 顺时针 (2026-08-05).
             data={"lx": -y, "ly": x, "rx": -yaw, "ry": 0},
         )
 

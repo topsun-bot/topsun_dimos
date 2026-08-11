@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import math
 import time
 
+from dimos_lcm.std_msgs import Bool  # type: ignore[import-untyped]
 import pytest
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
@@ -38,6 +39,9 @@ class Captured:
     stop_movement: list = field(default_factory=list)
     goal: list = field(default_factory=list)
     way_point: list = field(default_factory=list)
+    recharge_cancel: list = field(default_factory=list)
+    recharge_task_granted: list = field(default_factory=list)
+    recharge_servo_granted: list = field(default_factory=list)
 
 
 def _attach(module):
@@ -48,6 +52,9 @@ def _attach(module):
         module.stop_movement.subscribe(captured.stop_movement.append),
         module.goal.subscribe(captured.goal.append),
         module.way_point.subscribe(captured.way_point.append),
+        module.recharge_cancel.subscribe(captured.recharge_cancel.append),
+        module.recharge_task_granted.subscribe(captured.recharge_task_granted.append),
+        module.recharge_servo_granted.subscribe(captured.recharge_servo_granted.append),
     ]
     return captured, unsubs
 
@@ -139,3 +146,59 @@ def test_tele_cmd_vel_scaling(manager_and_captured):
     assert published.linear.y == pytest.approx(2.0)
     assert published.linear.z == pytest.approx(0.0)
     assert published.angular.z == pytest.approx(0.25)
+
+
+def test_recharge_exclusively_owns_velocity_over_navigation(manager_and_captured):
+    """An active recharge task suppresses navigation and passes only recharge velocity."""
+    manager, captured = manager_and_captured
+    manager._on_recharge_active(Bool(data=True))
+    cmd_count = len(captured.cmd_vel)
+
+    manager._on_nav(_twist(lx=0.9))
+    manager._on_recharge_cmd(_twist(lx=0.2))
+
+    assert len(captured.cmd_vel) == cmd_count + 1
+    assert captured.cmd_vel[-1].linear.x == pytest.approx(0.2)
+
+
+def test_teleop_cancels_recharge_before_publishing_manual_command(manager_and_captured):
+    """Manual input immediately revokes the recharge owner and emits an explicit cancel."""
+    manager, captured = manager_and_captured
+    manager._on_recharge_active(Bool(data=True))
+
+    manager._on_teleop(_twist(lx=0.3))
+
+    assert len(captured.recharge_cancel) == 1
+    assert captured.recharge_cancel[0].data is True
+    assert captured.cmd_vel[-1].linear.x == pytest.approx(0.3)
+
+
+def test_recharge_task_allows_navigation_to_staging_goal(manager_and_captured):
+    """Task ownership cancels the old goal but keeps nav velocity enabled for staging."""
+    manager, captured = manager_and_captured
+    manager._on_recharge_task_active(Bool(data=True))
+    staging = _click(x=1.1, y=0.0)
+
+    manager._on_recharge_staging_goal(staging)
+    command_count = len(captured.cmd_vel)
+    manager._on_nav(_twist(lx=0.4))
+
+    assert captured.goal[-1] == staging
+    assert len(captured.cmd_vel) == command_count + 1
+    assert captured.cmd_vel[-1].linear.x == pytest.approx(0.4)
+    assert captured.recharge_task_granted[-1].data is True
+
+
+def test_recharge_servo_suppresses_navigation_after_staging(manager_and_captured):
+    """Servo ownership blocks nav and forwards only recharge velocity."""
+    manager, captured = manager_and_captured
+    manager._on_recharge_task_active(Bool(data=True))
+    manager._on_recharge_servo_active(Bool(data=True))
+    command_count = len(captured.cmd_vel)
+
+    manager._on_nav(_twist(lx=0.9))
+    manager._on_recharge_cmd(_twist(lx=0.1))
+
+    assert len(captured.cmd_vel) == command_count + 1
+    assert captured.cmd_vel[-1].linear.x == pytest.approx(0.1)
+    assert captured.recharge_servo_granted[-1].data is True

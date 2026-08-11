@@ -335,6 +335,7 @@ class GO2Connection(Module, Camera, Pointcloud):
     _camera_info_stop: Event
     _latest_video_frame: Image | None = None
     _latest_lowstate: LowStateMsg | None = None
+    _latest_lowstate_received_at: float | None = None
     _navigation_trace: TraceSink
     _trace_last_lowstate_ns: int
     _go2_stop_started: bool
@@ -627,6 +628,7 @@ class GO2Connection(Module, Camera, Pointcloud):
     def _on_lowstate(self, msg: LowStateMsg) -> None:
         """Cache the latest low-level state push (battery, IMU, motors, etc.)."""
         self._latest_lowstate = msg
+        self._latest_lowstate_received_at = time.monotonic()
         self._trace_lowstate(msg)
 
     def _trace_published_odom(self, msg: PoseStamped) -> None:
@@ -817,6 +819,24 @@ class GO2Connection(Module, Camera, Pointcloud):
         skill-log spam, for the hosted telemetry poll."""
         try:
             return int(self._latest_lowstate["data"]["bms_state"]["soc"])  # type: ignore[index]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @rpc
+    def lowstate_age_s(self) -> float:
+        """距最新 lowstate 的秒数; 回充控制器 image/lowstate 双新鲜度门限用."""
+        if self._latest_lowstate_received_at is None:
+            return float("inf")
+        return max(0.0, time.monotonic() - self._latest_lowstate_received_at)
+
+    @rpc
+    def bms_current(self) -> float | None:
+        """rt/lf/lowstate 里 bms_state.current 原值 (mA).
+
+        回充充电判定见 recharge/charge_verify.py 双电流带标定.
+        """
+        try:
+            return float(self._latest_lowstate["data"]["bms_state"]["current"])  # type: ignore[index]
         except (KeyError, TypeError, ValueError):
             return None
 
