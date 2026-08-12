@@ -48,6 +48,7 @@ CLAUDE.MD
 /.mcp.json
 .opencode/
 .omo/
+.workbuddy/
 .slim/deepwork/
 .codegraph/
 
@@ -71,6 +72,7 @@ results/
 /apriltags.pdf
 
 /thread_monitor_report.csv
+/go2_4g_test_*.json
 
 # Memory2 autorecord
 recording*.db
@@ -91,6 +93,8 @@ yolo11n*.pt
 
 /jiangtao/tmp/
 /jiangtao/data/
+/jiangtao/cache/
+/jiangtao/aruco_recharge_20250624/aruco_recharge
 
 # 个人本地运行配置（含账号等，不入库）
 /jiangtao/run-self.md

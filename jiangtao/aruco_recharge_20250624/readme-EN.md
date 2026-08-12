@@ -1,0 +1,3 @@
+1. After decompression, the binary file `aruco_charge` is suitable for Go2 to call the Aruco recharge service near the charging station with the Aruco installed. By using the topic `aruco_cmd` and sending the content in the format of `aruco_start` in the format of `std_msgs/msg/string`, the Aruco recharge service can be called.
+
+2. For specific precautions and usage instructions, please refer to `Unitree Document Center - Go2 SDK Development Guide - Software Service Interface - Aruco Recharge Service Interface`.
