@@ -102,15 +102,29 @@ class MockViewerPublisher:
 @pytest.fixture()
 def server(wait_for_server: Any) -> RerunWebSocketServer:
     original_port = global_config.rerun_websocket_server_port
-    global_config.update(rerun_websocket_server_port=_TEST_PORT)
+    original_rerun_host = global_config.rerun_host
+    original_listen_host = global_config.listen_host
+    module: RerunWebSocketServer | None = None
     try:
+        # Keep the test self-contained when a deployment .env binds the
+        # production viewer service to a LAN address.
+        global_config.update(
+            rerun_websocket_server_port=_TEST_PORT,
+            rerun_host="127.0.0.1",
+            listen_host="127.0.0.1",
+        )
         module = RerunWebSocketServer()
         module.start()
         wait_for_server(_TEST_PORT)
         yield module  # type: ignore[misc]
-        module.stop()
     finally:
-        global_config.update(rerun_websocket_server_port=original_port)
+        if module is not None:
+            module.stop()
+        global_config.update(
+            rerun_websocket_server_port=original_port,
+            rerun_host=original_rerun_host,
+            listen_host=original_listen_host,
+        )
 
 
 @pytest.fixture()

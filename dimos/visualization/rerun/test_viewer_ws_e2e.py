@@ -36,15 +36,29 @@ _E2E_PORT = 13032
 @pytest.fixture()
 def server(wait_for_server: Any) -> RerunWebSocketServer:
     original_port = global_config.rerun_websocket_server_port
-    global_config.update(rerun_websocket_server_port=_E2E_PORT)
+    original_rerun_host = global_config.rerun_host
+    original_listen_host = global_config.listen_host
+    module: RerunWebSocketServer | None = None
     try:
+        # Tests use loopback clients, independent of a deployment .env that
+        # exposes the production server on a LAN interface.
+        global_config.update(
+            rerun_websocket_server_port=_E2E_PORT,
+            rerun_host="127.0.0.1",
+            listen_host="127.0.0.1",
+        )
         module = RerunWebSocketServer()
         module.start()
         wait_for_server(_E2E_PORT)
         yield module
-        module.stop()
     finally:
-        global_config.update(rerun_websocket_server_port=original_port)
+        if module is not None:
+            module.stop()
+        global_config.update(
+            rerun_websocket_server_port=original_port,
+            rerun_host=original_rerun_host,
+            listen_host=original_listen_host,
+        )
 
 
 def _send_messages(port: int, messages: list[dict[str, Any]], *, delay: float = 0.05) -> None:
