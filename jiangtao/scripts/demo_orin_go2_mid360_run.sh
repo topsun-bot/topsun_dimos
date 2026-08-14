@@ -14,8 +14,19 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+detect_orin_view_host() {
+    # SSH_CONNECTION 的第三列是本次 SSH 会话连接到的 Orin 地址，优先使用它，
+    # 避免 DHCP 变化后继续绑定脚本中的旧地址。非 SSH 启动时退回 wlan0。
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+        awk '{print $3}' <<<"$SSH_CONNECTION"
+        return
+    fi
+    ip -4 -o addr show wlan0 scope global 2>/dev/null \
+        | awk 'NR == 1 {split($4, address, "/"); print address[1]}'
+}
+
 GO2_IP="${GO2_WIRED_IP:-192.168.123.161}"
-ORIN_LAN_IP="${DIMOS_ORIN_VIEW_HOST:-192.168.110.127}"
+ORIN_LAN_IP="${DIMOS_ORIN_VIEW_HOST:-$(detect_orin_view_host)}"
 POINTLIO_HOST_IP="${DIMOS_POINTLIO_HOST_IP:-192.168.123.18}"
 POINTLIO_LIDAR_IP="${DIMOS_POINTLIO_LIDAR_IP:-192.168.123.20}"
 NERF_SPEED="${DIMOS_NERF_SPEED:-0.5}"
@@ -82,6 +93,11 @@ check_competing_navigation_containers() {
 
 if [[ ! -x .venv/bin/dimos ]]; then
     echo "Missing $REPO_ROOT/.venv/bin/dimos; initialize the Orin environment first." >&2
+    exit 1
+fi
+if [[ -z "$ORIN_LAN_IP" ]]; then
+    echo "Unable to determine the Orin viewer address." >&2
+    echo "Set DIMOS_ORIN_VIEW_HOST to the address reachable from the Mac." >&2
     exit 1
 fi
 
@@ -184,13 +200,16 @@ export DIMOS_MID360_GLOBAL_MAP_EMIT_EVERY="$GLOBAL_MAP_EMIT_EVERY"
 
 LIBGOMP=/lib/aarch64-linux-gnu/libgomp.so.1
 LIBGLDISPATCH=/lib/aarch64-linux-gnu/libGLdispatch.so.0
-for library in "$LIBGOMP" "$LIBGLDISPATCH"; do
+LIBC10="$(find "$REPO_ROOT/.venv/lib" -path '*/site-packages/torch/lib/libc10.so' -print -quit)"
+for library in "$LIBGOMP" "$LIBGLDISPATCH" "$LIBC10"; do
     if [[ ! -f "$library" ]]; then
         echo "Missing required preload library: $library" >&2
         exit 1
     fi
 done
-export LD_PRELOAD="$LIBGOMP:$LIBGLDISPATCH${LD_PRELOAD:+:$LD_PRELOAD}"
+# Jetson 的静态 TLS 槽位有限。子 worker 晚加载 OpenCV/Torch 时可能报
+# "cannot allocate memory in static TLS block"，因此在 forkserver 启动前预加载。
+export LD_PRELOAD="$LIBGOMP:$LIBGLDISPATCH:$LIBC10${LD_PRELOAD:+:$LD_PRELOAD}"
 
 echo "Go2 control:        $GO2_IP"
 echo "Point-LIO host:     $POINTLIO_HOST_IP"
