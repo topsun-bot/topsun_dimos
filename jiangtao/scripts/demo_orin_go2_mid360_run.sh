@@ -197,6 +197,9 @@ export DIMOS_MID360_PCAP_IFACE="$PCAP_IFACE"
 export DIMOS_MID360_VIEWER_MIN_HEIGHT_M="$VIEWER_MIN_HEIGHT"
 export DIMOS_MID360_VIEWER_MAX_HEIGHT_M="$VIEWER_MAX_HEIGHT"
 export DIMOS_MID360_GLOBAL_MAP_EMIT_EVERY="$GLOBAL_MAP_EMIT_EVERY"
+# Orin 的 HDA 控制器可能在 SDL 探测本机声卡时卡在内核 rpm_resume；
+# DimOS 的语音走机器人链路，不需要打开 Orin 本地声卡。
+export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
 
 LIBGOMP=/lib/aarch64-linux-gnu/libgomp.so.1
 LIBGLDISPATCH=/lib/aarch64-linux-gnu/libGLdispatch.so.0
