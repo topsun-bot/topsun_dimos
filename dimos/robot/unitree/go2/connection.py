@@ -68,7 +68,13 @@ class ConnectionConfig(ModuleConfig):
     ip: str | None = Field(default_factory=lambda m: m["g"].robot_ip)
     mode: Go2Mode = Go2Mode.DEFAULT
     lidar: bool = True
+    # The Mid360 navigation blueprint owns odometry and dynamic TF, so the
+    # built-in Go2 odometry subscription must be independently switchable.
+    odom: bool = True
     camera: bool = True
+    # Publish the rigid camera mount together with Go2 odometry. A dedicated
+    # static-TF module owns this chain in external-lidar blueprints.
+    publish_mount_tf: bool = True
     velocity_api: bool = False
     # "mcf" for stair traversal, "normal" for basic, None to leave it as is
     motion_mode: str | None = None
@@ -398,7 +404,8 @@ class GO2Connection(Module, Camera, Pointcloud):
         # 差异已经封装在 UnitreeWebRTCConnection 内, 蓝图和导航模块无需改动.
         if self.config.lidar:
             self.register_disposable(self.connection.lidar_stream().subscribe(self.lidar.publish))
-        self.register_disposable(self.connection.odom_stream().subscribe(self._publish_tf))
+        if self.config.odom:
+            self.register_disposable(self.connection.odom_stream().subscribe(self._publish_tf))
         self.register_disposable(self.connection.lowstate_stream().subscribe(self._on_lowstate))
         self.register_disposable(Disposable(self.cmd_vel.subscribe(self.move)))
 
@@ -509,7 +516,13 @@ class GO2Connection(Module, Camera, Pointcloud):
         self._navigation_trace.close()
 
     @classmethod
-    def _odom_to_tf(cls, odom: PoseStamped, prefix: str = "") -> list[Transform]:
+    def _odom_to_tf(
+        cls,
+        odom: PoseStamped,
+        prefix: str = "",
+        *,
+        include_mount_tf: bool = True,
+    ) -> list[Transform]:
         # The odom parent frame (odom.frame_id) stays unprefixed so namespaced
         # robots still hang off one shared tree root.
         camera_link = Transform(
@@ -528,15 +541,18 @@ class GO2Connection(Module, Camera, Pointcloud):
             ts=odom.ts,
         )
 
-        return [
-            Transform.from_pose(_prefixed(prefix, "base_link"), odom),
-            camera_link,
-            camera_optical,
-        ]
+        transforms = [Transform.from_pose(_prefixed(prefix, "base_link"), odom)]
+        if include_mount_tf:
+            transforms.extend((camera_link, camera_optical))
+        return transforms
 
     def _publish_tf(self, msg: PoseStamped) -> None:
         msg.frame_id = self.config.odom_frame_id
-        transforms = self._odom_to_tf(msg, prefix=self.config.frame_id_prefix or "")
+        transforms = self._odom_to_tf(
+            msg,
+            prefix=self.config.frame_id_prefix or "",
+            include_mount_tf=self.config.publish_mount_tf,
+        )
         self.tf.publish(TFMessage(*transforms))
         if self.odom.transport:
             self.odom.publish(msg)

@@ -59,6 +59,7 @@ from dimos.perception.experimental.object_tracking_spec import ObjectTrackingSpe
 from dimos.perception.experimental.spatial_memory_spec import SpatialMemorySpec
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 from dimos.types.door_memory_spec import SpatialLandmarkMemorySpec
+from dimos.types.navigation_source_spec import NavigationSourceStateSpec
 from dimos.types.relocalization_spec import RelocalizationStateSpec
 from dimos.types.robot_location import RobotLocation
 from dimos.types.spatial_record import RecordType, SpatialRecord
@@ -153,6 +154,9 @@ _CAMERA_HFOV_DEG = float(__import__("os").getenv("DIMOS_CAMERA_HFOV_DEG", "69"))
 # 最终到达验收的额外定位容差。机器人仍以 arrival_distance 为靠近目标；
 # 只有退出导航循环后的结果判断允许该误差，避免把验收余量误当成控制目标。
 _ARRIVAL_DISTANCE_TOLERANCE_M = 0.10
+# ReplanningAStarPlanner accepts goals within 0.20m. Intermediate approach goals
+# must be farther away than that or they complete without producing any motion.
+_APPROACH_MIN_EXECUTABLE_STEP_M = 0.25
 
 
 def _search_float_env(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -252,6 +256,16 @@ class _VisualLockResult:
     def confirmed(self) -> bool:
         """仅在新帧 VLM 命中且目标居中时返回 True."""
         return self.status == _VisualLockStatus.CONFIRMED
+
+
+@dataclass(frozen=True)
+class _RelocalizationContext:
+    """Validated map identity and transform used by spatial-memory records."""
+
+    map_key: str
+    map_file: str | None
+    map_profile: dict[str, Any] | None
+    world_to_map: Any
 
 
 @dataclass
@@ -368,6 +382,14 @@ def _create_vl_model() -> Any:
 
     model: Any = None
 
+    if provider == "simulation":
+        from dimos.core.global_config import global_config
+        from dimos.models.vl.simulation import SimulationVlModel
+
+        if global_config.simulation != "mujoco":
+            raise ValueError("DIMOS_VLM_PROVIDER=simulation is restricted to --simulation mujoco")
+        return SimulationVlModel()
+
     if provider == "dashscope":
         # 使用原生 DashScope MultiModalConversation API (非兼容模式)
         from dimos.models.vl.dashscope import DashScopeVlModel
@@ -456,6 +478,7 @@ class NavigationSkillContainer(Module):
     # 最新里程计位姿 (由 _on_odom 回调持续更新)
     _latest_odom: PoseStamped | None = None
     _skill_started: bool = False
+    _navigation_source_safety_error: str | None = None
     # CLIP 语义相似度阈值, 低于此值认为不匹配
     _similarity_threshold: float = 0.23
     # 视觉重定位与里程计之间的漂移阈值 (基于房间参考图像)
@@ -469,6 +492,7 @@ class NavigationSkillContainer(Module):
     _spatial_memory: SpatialMemorySpec
     _landmark_memory: SpatialLandmarkMemorySpec
     _relocalization: RelocalizationStateSpec | None = None
+    _navigation_source: NavigationSourceStateSpec | None = None
     _navigation: NavigationInterfaceSpec
     _object_tracking: ObjectTrackingSpec | None = None
     _unitree_skill_container: UnitreeSkillContainer | None = None
@@ -492,9 +516,11 @@ class NavigationSkillContainer(Module):
         self._sensor_lock = threading.Lock()
         self._latest_image_sequence = 0
         self._latest_image_received_monotonic = 0.0
+        self._latest_odom_sequence = 0
         self._odom_history: deque[PoseStamped] = deque(maxlen=512)
         self._active_object_search: _ObjectSearchContext | None = None
         self._rotation_safety_error: str | None = None
+        self._navigation_source_safety_error: str | None = None
 
         # 在初始化时创建 VLM 实例, 而非延迟到首次使用, 以便尽早发现配置错误
         self._vl_model = _create_vl_model()
@@ -535,12 +561,52 @@ class NavigationSkillContainer(Module):
         self._ensure_search_runtime()
         with self._sensor_lock:
             self._latest_odom = odom
+            self._latest_odom_sequence += 1
             self._odom_history.append(odom)
             cutoff = float(odom.ts) - _search_float_env(
                 "DIMOS_SEARCH_ODOM_BUFFER_S", 15.0, minimum=1.0
             )
             while self._odom_history and self._odom_history[0].ts < cutoff:
                 self._odom_history.popleft()
+
+    def _wait_for_odom_after(self, checkpoint_sequence: int, timeout_s: float) -> bool:
+        """Wait for an odom callback newer than a completed navigation segment."""
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while time.monotonic() < deadline:
+            with self._sensor_lock:
+                if self._latest_odom_sequence > checkpoint_sequence:
+                    return True
+            if self._check_navigation_source() is not None:
+                return False
+            time.sleep(0.05)
+        return False
+
+    def _navigation_source_error(self) -> str | None:
+        """Return an agent-facing error when an optional navigation source is unsafe."""
+        source = self._navigation_source
+        if source is None:
+            return None
+        try:
+            if source.is_navigation_source_healthy():
+                return None
+            status = source.get_navigation_source_status()
+        except Exception:
+            logger.exception("Failed to read external navigation-source health")
+            status = "STATUS_UNAVAILABLE"
+        return (
+            "Navigation is unavailable because the external navigation source is not healthy "
+            f"(status: {status}). No motion command was started. "
+            "If the status is STARTING, wait for it to become RUNNING; after an ERROR, "
+            "restart the robot blueprint after fixing the sensor or Point-LIO source."
+        )
+
+    def _check_navigation_source(self) -> str | None:
+        """Latch a current source error so active navigation loops can stop consistently."""
+        error = self._navigation_source_error()
+        if error is not None:
+            self._navigation_source_safety_error = error
+            logger.error(error)
+        return error
 
     @staticmethod
     def _pose_tuple_to_matrix(
@@ -573,8 +639,8 @@ class NavigationSkillContainer(Module):
         rotation = (float(euler.x), float(euler.y), float(euler.z))
         return position, rotation
 
-    def _relocalization_context(self) -> tuple[str, str | None, Any] | None:
-        """获取当前重定位上下文 (map_key, map_file, world_to_map 变换).
+    def _relocalization_context(self) -> _RelocalizationContext | None:
+        """获取当前重定位上下文、地图 profile 和 world_to_map 变换.
 
         如果重定位模块未注入或尚未完成重定位, 返回 None.
         所有依赖重定位的坐标变换都应先检查此方法的返回值.
@@ -589,7 +655,12 @@ class NavigationSkillContainer(Module):
             world_to_map = relocalization.get_world_to_map()
             if not map_key or world_to_map is None:
                 return None
-            return (map_key, relocalization.get_current_map_file(), world_to_map)
+            return _RelocalizationContext(
+                map_key=map_key,
+                map_file=relocalization.get_current_map_file(),
+                map_profile=getattr(relocalization, "get_current_map_profile", lambda: None)(),
+                world_to_map=world_to_map,
+            )
         except Exception:
             # 重定位模块可能在运行中状态异常, 静默降级而非中断流程
             logger.debug("Relocalization context unavailable", exc_info=True)
@@ -614,17 +685,27 @@ class NavigationSkillContainer(Module):
                 "observation_source": observation_source,
             }
 
-        map_key, map_file, world_to_map = ctx
-        T_world_map = world_to_map.to_matrix()
+        T_world_map = ctx.world_to_map.to_matrix()
         T_world_pose = self._pose_tuple_to_matrix(position, rotation)
         # world -> map: 用 world_to_map 的逆矩阵将世界坐标位姿转到 map 坐标系
         T_map_pose = np.linalg.inv(T_world_map) @ T_world_pose
         pose_map_position, pose_map_rotation = self._matrix_to_pose_tuple(T_map_pose)
         return {
             "relocalization_bound": True,
-            "map_key": map_key,
-            "map_file": map_file,
+            "map_key": ctx.map_key,
+            "map_file": ctx.map_file,
+            "map_profile": dict(ctx.map_profile) if ctx.map_profile is not None else None,
+            "map_id": ctx.map_profile.get("map_id") if ctx.map_profile else None,
+            "sensor_profile": (ctx.map_profile.get("sensor_profile") if ctx.map_profile else None),
+            "preprocess_config_hash": (
+                ctx.map_profile.get("preprocess_config_hash") if ctx.map_profile else None
+            ),
+            "voxel_size": ctx.map_profile.get("voxel_size") if ctx.map_profile else None,
+            "extrinsic_version": (
+                ctx.map_profile.get("extrinsic_version") if ctx.map_profile else None
+            ),
             "frame": "map",
+            "observe_yaw_map": float(pose_map_rotation[2]),
             "pose_map": {
                 "position": list(pose_map_position),
                 "rotation": list(pose_map_rotation),
@@ -648,18 +729,38 @@ class NavigationSkillContainer(Module):
         if ctx is None:
             return record
 
-        map_key, _map_file, world_to_map = ctx
         metadata = record.metadata or {}
         record_map_key = metadata.get("map_key")
         # 跨地图的记录不可用 - 不同 map 的坐标系不互通
-        if record_map_key and record_map_key != map_key:
+        if record_map_key and record_map_key != ctx.map_key:
             logger.info(
                 "Skipping record '%s': map_key=%r does not match current map_key=%r",
                 record.name,
                 record_map_key,
-                map_key,
+                ctx.map_key,
             )
             return None
+
+        if ctx.map_profile is not None:
+            profile_fields = (
+                "map_id",
+                "sensor_profile",
+                "preprocess_config_hash",
+                "voxel_size",
+                "extrinsic_version",
+            )
+            mismatches = [
+                field
+                for field in profile_fields
+                if metadata.get(field) != ctx.map_profile.get(field)
+            ]
+            if mismatches:
+                logger.warning(
+                    "Skipping record '%s': map profile missing or incompatible fields=%s",
+                    record.name,
+                    mismatches,
+                )
+                return None
 
         pose_map = metadata.get("pose_map")
         # 无 map 坐标的旧记录无法转换, 原样返回
@@ -686,7 +787,7 @@ class NavigationSkillContainer(Module):
                 float(raw_rotation[2]),
             )
             # map -> world: 用 world_to_map 矩阵将 map 坐标位姿转到当前世界坐标系
-            T_world_pose = world_to_map.to_matrix() @ self._pose_tuple_to_matrix(
+            T_world_pose = ctx.world_to_map.to_matrix() @ self._pose_tuple_to_matrix(
                 position_map,
                 rotation_map,
             )
@@ -732,6 +833,8 @@ class NavigationSkillContainer(Module):
             self._latest_image_sequence = 0
         if "_latest_image_received_monotonic" not in self.__dict__:
             self._latest_image_received_monotonic = 0.0
+        if "_latest_odom_sequence" not in self.__dict__:
+            self._latest_odom_sequence = 0
         if "_rotation_safety_error" not in self.__dict__:
             self._rotation_safety_error = None
 
@@ -1089,6 +1192,11 @@ class NavigationSkillContainer(Module):
                 rotation=(rotation_map[0], rotation_map[1], rotation_map[2]),
                 metadata={
                     "map_key": metadata.get("map_key"),
+                    "map_id": metadata.get("map_id"),
+                    "sensor_profile": metadata.get("sensor_profile"),
+                    "preprocess_config_hash": metadata.get("preprocess_config_hash"),
+                    "voxel_size": metadata.get("voxel_size"),
+                    "extrinsic_version": metadata.get("extrinsic_version"),
                     "pose_map": {
                         "position": list(raw_position),
                         "rotation": rotation_map,
@@ -1143,6 +1251,7 @@ class NavigationSkillContainer(Module):
             if len(raw_rotation) == 3:
                 raw_rotation[2] = hit.object_yaw_map
                 metadata["pose_map"]["rotation"] = raw_rotation
+                metadata["observe_yaw_map"] = hit.object_yaw_map
         metadata.update(
             {
                 "observation_source": "enroute_vlm",
@@ -1634,6 +1743,11 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._navigation_source_safety_error = None
+        source_error = self._check_navigation_source()
+        if source_error is not None:
+            return source_error
+
         if not self._latest_odom:
             return "No odometry data received yet, cannot tag location."
 
@@ -1798,6 +1912,9 @@ class NavigationSkillContainer(Module):
         开环定时旋转 -> TF 闭环旋转 -> Go2 路径规划旋转 -> G1 定时角速度.
         这种逐级降级的设计保证了在缺少某些硬件接口时仍能完成旋转.
         """
+        if self._check_navigation_source() is not None:
+            return False
+
         us = self._unitree_skill_container
         if us is None:
             return False
@@ -2107,6 +2224,11 @@ class NavigationSkillContainer(Module):
 
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
+
+        self._navigation_source_safety_error = None
+        source_error = self._check_navigation_source()
+        if source_error is not None:
+            return source_error
 
         logger.info("=" * 50)
         logger.info("NAVIGATE_WITH_TEXT START  query=%r", query)
@@ -2781,11 +2903,11 @@ class NavigationSkillContainer(Module):
         ux, uy = dx / dist, dy / dist
         # 速度随距离衰减: 远时快 (上限 0.6), 近时慢 (下限 0.15), 防止冲过头
         v = max(0.15, min(0.6, dist * 0.4))
-        # 步长 = 速度 * 0.35s, 但不超过"剩余距离 - 到达距离的 85%",
-        # 确保每步都留有余量, 不会一步跨过目标
+        # 步长 = 速度 * 0.35s, 并结合目标距离限制。
         step = min(v * 0.35, max(0.0, dist - arrival_distance * 0.85))
-        # 最小步长 8cm, 避免步长过小导致导航模块认为已到达而拒绝执行
-        step = max(0.08, step)
+        # A* 导航器的到达容差是 20cm；小于该值的中间目标会被直接判定到达，
+        # 不产生运动。微步至少 25cm，但绝不越过最终目标本身。
+        step = min(dist, max(_APPROACH_MIN_EXECUTABLE_STEP_M, step))
         return PoseStamped(
             position=make_vector3(rx + ux * step, ry + uy * step, standoff_pose.position.z),
             orientation=standoff_pose.orientation,
@@ -2815,6 +2937,9 @@ class NavigationSkillContainer(Module):
         """
         ag: PoseStamped = active_goal
         while time.time() < segment_deadline:
+            if self._check_navigation_source() is not None:
+                self._navigation.cancel_goal()
+                return (ag, False)
             self._poll_enroute_search(search_context)
             ag, severe = self._periodic_visual_drift_correction(
                 ag,
@@ -4302,6 +4427,11 @@ class NavigationSkillContainer(Module):
         if not self._skill_started:
             raise ValueError(f"{self} has not been started.")
 
+        self._navigation_source_safety_error = None
+        source_error = self._check_navigation_source()
+        if source_error is not None:
+            return source_error
+
         self._rotation_safety_error = None
         target = self._landmark_memory.resolve_by_query(name)
         if target is None:
@@ -4482,6 +4612,8 @@ class NavigationSkillContainer(Module):
                     enable_visual_drift=enable_visual_drift,
                     search_context=search_context,
                 )
+                if self._navigation_source_safety_error is not None:
+                    return self._navigation_source_safety_error
                 if severe:
                     return (
                         "Navigation aborted: severe visual/odom drift detected "
@@ -4569,10 +4701,38 @@ class NavigationSkillContainer(Module):
                     )
                     > 0.05
                 )
-                # 限频重新规划: 目标变化或导航空闲时才重新 set_goal, 最少间隔 3 秒
+                # 上一小步已经完成且生成了不同的新目标时必须立即下发，否则等待函数会
+                # 误读上一目标的完成状态并空转。导航仍在执行，或只是同一目标进入空闲
+                # 状态时，继续使用 3 秒限频，避免抖动导致重复规划。
                 nav_idle = self._navigation.get_state() == NavigationState.IDLE
                 since_last_replan = time.time() - _last_replan_time
-                if (goal_changed or nav_idle) and since_last_replan >= _min_replan_interval:
+                if nav_idle and not goal_changed and since_last_replan < _min_replan_interval:
+                    # 规划器已经结束上一小步，但技能层尚未看到移动后的 odom 时，
+                    # active_goal 会被旧位姿算成同一个点。必须等待新状态后重新测距，
+                    # 不能把上一目标的 reached 状态当成下一目标也已完成。
+                    odom_checkpoint = self._latest_odom_sequence
+                    odom_timeout = min(
+                        _search_float_env(
+                            "DIMOS_SEARCH_APPROACH_ODOM_TIMEOUT_S",
+                            1.0,
+                            minimum=0.1,
+                        ),
+                        max(0.0, approach_deadline - time.time()),
+                    )
+                    if not self._wait_for_odom_after(odom_checkpoint, odom_timeout):
+                        if self._navigation_source_safety_error is not None:
+                            return self._navigation_source_safety_error
+                        return (
+                            f"Navigation stopped while approaching '{target.name}': "
+                            f"no fresh odometry arrived within {odom_timeout:.1f}s after "
+                            "the previous segment completed."
+                        )
+                    continue
+                completed_step_has_new_goal = nav_idle and goal_changed
+                rate_limited_replan_due = (
+                    goal_changed or nav_idle
+                ) and since_last_replan >= _min_replan_interval
+                if completed_step_has_new_goal or rate_limited_replan_due:
                     self._navigation.set_goal(active_goal)
                     _last_active_goal_pos = cur_pos
                     _last_replan_time = time.time()
@@ -4589,6 +4749,8 @@ class NavigationSkillContainer(Module):
                     enable_visual_drift=enable_visual_drift,
                     search_context=search_context,
                 )
+                if self._navigation_source_safety_error is not None:
+                    return self._navigation_source_safety_error
                 if severe:
                     return (
                         "Navigation aborted: severe visual/odom drift detected "
@@ -4764,10 +4926,9 @@ class NavigationSkillContainer(Module):
             return f"{base} (arrival_action not run)."
 
         self._end_search_leg(search_context)
-        return (
-            "Navigation aborted: severe visual/odom drift persisted after re-plan. "
-            "Retry navigate_with_text or re-tag rooms."
-        )
+        # 保留第二次尝试的真实失败原因。这里过去固定返回“严重漂移”，会把
+        # odom 超时、路径超时等其他故障错误地归类为视觉/里程计漂移。
+        return err2
 
     @skill
     def clear_all_memory(self) -> str:

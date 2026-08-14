@@ -14,9 +14,11 @@
 
 import json
 
+from dimos_lcm.std_msgs import Bool
 import numpy as np
 import pytest
 
+from dimos.mapping.map_profile import build_map_profile, write_map_profile
 from dimos.mapping.relocalization.module import RelocalizationModule
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
 from dimos.spec.utils import spec_annotation_compliance
@@ -48,8 +50,15 @@ def relocalization_module_factory(mocker, tmp_path):
         # Persistence-focused tests opt in explicitly because jtlinux keeps it
         # disabled in production by default.
         kwargs.setdefault("save_first_transform_json", True)
+        # This fixture exercises the cached/fast-ICP state machine. Production
+        # keeps that optional path disabled unless a blueprint opts into it.
+        kwargs.setdefault("fast_icp_enabled", True)
+        kwargs.setdefault("fitness_threshold", 0.75)
+        kwargs.setdefault("fast_icp_min_fitness", 0.75)
+        kwargs.setdefault("subsequent_relocalization_mode", "fast_icp")
+        map_file = kwargs.pop("map_file", "recording_go2")
         module = RelocalizationModule(
-            map_file="recording_go2",
+            map_file=map_file,
             cached_transform_dir=str(tmp_path),
             **kwargs,
         )
@@ -105,6 +114,7 @@ def test_relocalization_state_rpc_requires_a_transform_published_this_run(
     assert module.config.fitness_threshold == pytest.approx(0.75)
     assert module.get_current_map_key() == "recording_go2"
     assert module.get_current_map_file() == "recording_go2"
+    assert module.get_current_map_profile() is None
     assert module.get_world_to_map() is None
     assert module.is_relocalized() is False
 
@@ -119,6 +129,73 @@ def test_relocalization_state_rpc_requires_a_transform_published_this_run(
 
     assert module.get_world_to_map() is transform
     assert module.is_relocalized() is True
+
+
+def test_mid360_profile_is_required_and_must_match(
+    relocalization_module_factory,
+    tmp_path,
+) -> None:
+    map_path = tmp_path / "office.pc2.lcm"
+    map_path.write_bytes(b"not decoded in this test")
+    module = relocalization_module_factory(
+        map_file=str(map_path),
+        require_map_profile=True,
+        expected_sensor_profile="mid360_pointlio_v1",
+        expected_extrinsic_version="mount_v1",
+    )
+
+    with pytest.raises(ValueError, match="required but missing"):
+        module._load_and_validate_map_profile(map_path)
+
+    profile = build_map_profile(
+        map_id="office",
+        sensor_profile="go2_voxel",
+        voxel_size=0.05,
+        extrinsic_version="mount_v1",
+        preprocessing={"voxel_size": 0.05},
+        source_dataset="office.db",
+    )
+    write_map_profile(map_path, profile)
+
+    with pytest.raises(ValueError, match="sensor_profile"):
+        module._load_and_validate_map_profile(map_path)
+
+    profile["sensor_profile"] = "mid360_pointlio_v1"
+    write_map_profile(map_path, profile)
+    loaded = module._load_and_validate_map_profile(map_path)
+
+    assert loaded is not None
+    assert loaded["map_id"] == "office"
+
+
+def test_navigation_source_fault_invalidates_relocalization_until_restart(
+    relocalization_module_factory,
+) -> None:
+    module = relocalization_module_factory(require_navigation_source_health=True)
+    merged_maps = []
+    unsubscribe = module.merged_map.subscribe(merged_maps.append)
+    transform = module._tf_from_T_map_world(_T_map_world(1.0))
+    try:
+        module._on_navigation_source_health(Bool(data=True))
+        module._record_relocalization_success(_T_map_world(1.0), transform, 0.9, 50_000, "global")
+        module._publish_tf(transform)
+        assert module.is_relocalized() is True
+
+        module._on_navigation_source_health(Bool(data=False))
+
+        assert module.is_relocalized() is False
+        assert module.get_world_to_map() is None
+        assert module._last_T_map_world is None
+        assert len(merged_maps) == 1
+        assert len(merged_maps[0]) == 0
+        assert merged_maps[0].frame_id == "world"
+
+        module._on_navigation_source_health(Bool(data=True))
+        module._record_relocalization_success(_T_map_world(2.0), transform, 0.9, 50_000, "global")
+        module._publish_tf(transform)
+        assert module.is_relocalized() is False
+    finally:
+        unsubscribe()
 
 
 def test_new_module_loads_json_and_uses_10k_start_threshold(

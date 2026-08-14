@@ -56,6 +56,8 @@ struct Config {
     delay: f64,
     /// IP the fake lidar sends from.
     lidar_ip: String,
+    /// Livox model advertised in discovery; must match the consuming SDK config.
+    device_model: String,
     /// Host IP the data is delivered to (where the SDK listens).
     host_ip: String,
     /// Network namespace the fake lidar runs in. Accepted for wire-config
@@ -277,7 +279,15 @@ impl VirtualMid360 {
         let delay = cfg.delay;
 
         // discovery responder (:56000) — proactively announces + answers 0x0000
-        spawn_discovery(lidar_ip, host_ip, stop.clone());
+        let dev_type = match cfg.device_model.as_str() {
+            "mid360" => DEV_TYPE_MID360,
+            "mid360s" => DEV_TYPE_MID360S,
+            other => {
+                tracing::error!("unsupported device_model '{other}'");
+                std::process::exit(2);
+            }
+        };
+        spawn_discovery(lidar_ip, host_ip, dev_type, stop.clone());
         // control responder (:56100) — per-cmd ACKs; arms streaming on 0x0100
         spawn_control(lidar_ip, armed.clone(), stop.clone());
         // data streamer — point/IMU/status paced at `rate`, timestamps shifted to now
@@ -304,7 +314,12 @@ fn reuse_bind(addr: SocketAddrV4) -> std::io::Result<UdpSocket> {
     Ok(socket.into())
 }
 
-fn spawn_discovery(lidar_ip: Ipv4Addr, host_ip: Ipv4Addr, stop: Arc<AtomicBool>) {
+fn spawn_discovery(
+    lidar_ip: Ipv4Addr,
+    host_ip: Ipv4Addr,
+    dev_type: u8,
+    stop: Arc<AtomicBool>,
+) {
     std::thread::spawn(move || {
         // Bind the lidar's detection port (not INADDR_ANY): SO_REUSEADDR + a
         // specific source IP lets this coexist with the consumer SDK's own
@@ -327,7 +342,7 @@ fn spawn_discovery(lidar_ip: Ipv4Addr, host_ip: Ipv4Addr, stop: Arc<AtomicBool>)
         // required for cmd 0x0000) and registers the device. Harmless on Linux,
         // where the broadcast path also works.
         let host_detect = SocketAddrV4::new(host_ip, DISCOVERY_PORT);
-        let announce = build_ack(0x0000, 0, &discovery_ack_payload(lidar_ip));
+        let announce = build_ack(0x0000, 0, &discovery_ack_payload(lidar_ip, dev_type));
         let mut buffer = [0u8; 2048];
         while !stop.load(Ordering::Relaxed) {
             let _ = socket.send_to(&announce, host_detect);
@@ -340,7 +355,7 @@ fn spawn_discovery(lidar_ip: Ipv4Addr, host_ip: Ipv4Addr, stop: Arc<AtomicBool>)
                     && buffer[10] == 0
                 {
                     let seq = u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
-                    let ack = build_ack(0x0000, seq, &discovery_ack_payload(lidar_ip));
+                    let ack = build_ack(0x0000, seq, &discovery_ack_payload(lidar_ip, dev_type));
                     let _ = socket.send_to(&ack, host_detect);
                 }
             }
@@ -392,7 +407,7 @@ fn spawn_control(lidar_ip: Ipv4Addr, armed: Arc<AtomicBool>, stop: Arc<AtomicBoo
 fn spawn_stream(
     lidar_ip: Ipv4Addr,
     host_ip: Ipv4Addr,
-    mcast_data: Ipv4Addr,
+    _mcast_data: Ipv4Addr,
     packets: Arc<Vec<Pkt>>,
     rate: f64,
     delay: f64,
@@ -439,18 +454,11 @@ fn spawn_stream(
             .unwrap_or(0);
         let ts_shift = now_ns.wrapping_sub(first_orig);
 
-        // Linux multicasts point/IMU to mcast_data (the SDK joins the group). On
-        // macOS the IPs are lo0 aliases and a multicast send source-bound to an
-        // alias fails with "No route to host", so we unicast point/IMU to host_ip
-        // instead — the SDK identifies the device by the packet's source IP, so
-        // the source-bind to lidar_ip (which works for unicast on lo0) is what
-        // matters. The consumer's SDK config drops multicast_ip on macOS so its
-        // data socket binds host_ip and receives these unicasts.
-        let data_dest = if cfg!(target_os = "macos") {
-            host_ip
-        } else {
-            mcast_data
-        };
+        // The shared SDK config intentionally omits multicast_ip, which enables
+        // unicast point/IMU delivery to host_ip on every platform. Keep the fake
+        // lidar on that same wire contract; otherwise discovery and control work
+        // while Linux silently sends the data plane to an unjoined multicast group.
+        let data_dest = host_ip;
 
         let t_wall0 = Instant::now();
         let mut t_cap0: Option<f64> = None;
@@ -483,14 +491,16 @@ fn spawn_stream(
 // ---- payload synthesizers (layouts from Livox-SDK2 sdk_core/comm/define.h) ----
 // Mid-360 device type (livox_lidar_def.h: kLivoxLidarTypeMid360 = 9).
 const DEV_TYPE_MID360: u8 = 9;
+// Mid-360S device type (Livox SDK2 livox_lidar_def.h: kLivoxLidarTypeMid360S = 35).
+const DEV_TYPE_MID360S: u8 = 35;
 
 /// Detection/search (0x0000) ACK body == `DetectionData`:
 ///   ret_code:u8, dev_type:u8, sn[16], lidar_ip[4], cmd_port:u16 LE.
 /// The SDK's VerifyNetSegment requires lidar_ip on the host's /24 (192.168.1.x).
-fn discovery_ack_payload(lidar_ip: Ipv4Addr) -> Vec<u8> {
+fn discovery_ack_payload(lidar_ip: Ipv4Addr, dev_type: u8) -> Vec<u8> {
     let mut payload = Vec::with_capacity(24);
     payload.push(0); // ret_code = success
-    payload.push(DEV_TYPE_MID360);
+    payload.push(dev_type);
     // sn[16] MUST be null-terminated within 16 bytes — the SDK treats it as a
     // C-string (strcpy), so a full-16 SN with no NUL overruns its buffer.
     let mut sn = [0u8; 16];

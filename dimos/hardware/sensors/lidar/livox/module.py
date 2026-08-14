@@ -28,7 +28,7 @@ Usage::
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
@@ -52,6 +52,8 @@ from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.spec import perception
 
+LivoxDeviceModel = Literal["mid360", "mid360s"]
+
 
 class Mid360Config(NativeModuleConfig):
     cwd: str | None = "cpp"
@@ -61,6 +63,7 @@ class Mid360Config(NativeModuleConfig):
     lidar_ip: str = Field(
         default_factory=lambda: os.environ.get("DIMOS_MID360_LIDAR_IP", "192.168.1.155")
     )
+    device_model: LivoxDeviceModel = "mid360"
     frequency: float = 10.0
     enable_imu: bool = True
     frame_id: str = "lidar_link"

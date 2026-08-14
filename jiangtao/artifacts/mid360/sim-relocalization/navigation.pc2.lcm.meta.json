@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "map_id": "sim-mid360-office-v1",
+  "sensor_profile": "mid360_pointlio_v1",
+  "preprocess_config_hash": "81a68d23acfdc6914b63feb8ef934d67305612194bf9caf4bb817f63cd8385f0",
+  "voxel_size": 0.05,
+  "extrinsic_version": "go2_orin_navigation_20260813_v1",
+  "source_dataset": "navigation.db",
+  "created_at": "2026-08-13T14:05:16.257911+00:00",
+  "preprocessing": {
+    "profile_schema_version": 1,
+    "pointlio": {
+      "device_model": "mid360s",
+      "frequency": 10.0,
+      "msr_freq": 50.0,
+      "pointcloud_freq": 10.0,
+      "odom_freq": 10.0,
+      "con_frame": false,
+      "con_frame_num": 1,
+      "cut_frame": false,
+      "cut_frame_time_interval": 0.1,
+      "time_lag_imu_to_lidar": 0.0,
+      "lidar_type": "avia",
+      "scan_line": 4,
+      "scan_rate": 10,
+      "timestamp_unit": "nanosecond",
+      "blind": 0.5,
+      "point_filter_num": 3,
+      "use_imu_as_input": false,
+      "prop_at_freq_of_imu": true,
+      "check_satu": true,
+      "init_map_size": 10,
+      "space_down_sample": true,
+      "satu_acc": 3.0,
+      "satu_gyro": 35.0,
+      "acc_norm": 1.0,
+      "plane_thr": 0.1,
+      "filter_size_surf": 0.2,
+      "filter_size_map": 0.5,
+      "ivox_grid_resolution": 2.0,
+      "ivox_nearby_type": "nearby6",
+      "cube_side_length": 1000.0,
+      "det_range": 100.0,
+      "fov_degree": 360.0,
+      "imu_en": true,
+      "start_in_aggressive_motion": false,
+      "extrinsic_est_en": false,
+      "imu_time_inte": 0.005,
+      "lidar_meas_cov": 0.01,
+      "acc_cov_input": 0.1,
+      "vel_cov": 20.0,
+      "gyr_cov_input": 0.01,
+      "gyr_cov_output": 1000.0,
+      "acc_cov_output": 500.0,
+      "b_gyr_cov": 0.0001,
+      "b_acc_cov": 0.0001,
+      "imu_meas_acc_cov": 0.01,
+      "imu_meas_omg_cov": 0.01,
+      "match_s": 81.0,
+      "gravity_align": true,
+      "gravity": [
+        0.0,
+        0.0,
+        -9.81
+      ],
+      "gravity_init": [
+        0.0,
+        0.0,
+        -9.81
+      ],
+      "extrinsic_t": [
+        -0.011,
+        -0.02329,
+        0.04412
+      ],
+      "extrinsic_r": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "publish_odometry_without_downsample": false,
+      "odom_only": false
+    },
+    "navigation_adapter": {
+      "odom_history_sec": 3.0,
+      "max_odom_bracket_sec": 0.1,
+      "cloud_wait_timeout_sec": 0.15,
+      "min_range_m": 0.5,
+      "max_range_m": 30.0,
+      "voxel_size_m": 0.05,
+      "self_min_xyz": [
+        -0.45,
+        -0.28,
+        -0.35
+      ],
+      "self_max_xyz": [
+        0.45,
+        0.28,
+        0.35
+      ],
+      "timestamp_regression_tolerance_sec": 1e-06,
+      "max_lidar_timestamp_step_sec": 2.0,
+      "max_odom_timestamp_step_sec": 0.5,
+      "max_odom_position_step_m": 0.75,
+      "max_odom_rotation_step_rad": 0.7853981633974483
+    },
+    "live_mapping": {
+      "algorithm": "voxel_grid_mapper",
+      "voxel_size": 0.05,
+      "carve_columns": true,
+      "emit_every": 10
+    },
+    "costmap_projection": {
+      "algorithm": "height_cost",
+      "resolution": 0.1,
+      "can_pass_under": 0.6,
+      "can_climb": 0.15,
+      "ignore_noise": 0.05,
+      "smoothing": 1.0,
+      "frame_id": null
+    },
+    "map_export": {
+      "lidar_stream": "lidar",
+      "frame": "world",
+      "voxel_size": 0.05,
+      "pgo_tolerance": 0.3,
+      "tf_tolerance": null,
+      "column_carving": false,
+      "denoise": false,
+      "bottom_cutoff": null
+    }
+  }
+}

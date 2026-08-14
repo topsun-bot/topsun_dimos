@@ -79,6 +79,13 @@ def test_connection_config_aes_key_defaults_from_global_config() -> None:
     assert ConnectionConfig(g=g).aes_128_key == "dd" * 16
 
 
+def test_external_navigation_source_switches_are_opt_in() -> None:
+    """Existing blueprints keep Go2 odometry and camera mount TF by default."""
+    config = ConnectionConfig(g=GlobalConfig(robot_ip="127.0.0.1"))
+    assert config.odom is True
+    assert config.publish_mount_tf is True
+
+
 def test_replay_connection_defers_store_disposal_until_subscriptions_stop() -> None:
     """Replay store closes only after the owner has cancelled subscriptions."""
     connection = ReplayConnection(dataset="unused")
@@ -144,3 +151,10 @@ def test_odom_to_tf_prefixed() -> None:
         "robot0/camera_link",
         "robot0/camera_optical",
     )
+
+
+def test_odom_to_tf_can_leave_mount_tree_to_an_external_publisher() -> None:
+    odom = PoseStamped(ts=1.0, frame_id="world")
+    transforms = GO2Connection._odom_to_tf(odom, include_mount_tf=False)
+    assert len(transforms) == 1
+    assert (transforms[0].frame_id, transforms[0].child_frame_id) == ("world", "base_link")

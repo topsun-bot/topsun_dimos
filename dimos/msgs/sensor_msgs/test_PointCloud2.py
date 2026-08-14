@@ -111,6 +111,33 @@ def test_lcm_no_intensity_round_trip() -> None:
     np.testing.assert_allclose(decoded_pts.astype(np.float32), points, atol=1e-6)
 
 
+def test_to_rerun_applies_lower_and_upper_height_cutoffs() -> None:
+    cloud = PointCloud2.from_numpy(
+        np.array(
+            [
+                [0.0, 0.0, -0.10],
+                [1.0, 0.0, -0.05],
+                [2.0, 0.0, 1.50],
+                [3.0, 0.0, 1.51],
+            ],
+            dtype=np.float32,
+        )
+    )
+
+    points = cloud.to_rerun(
+        mode="points",
+        colors=[255, 255, 255],
+        bottom_cutoff=-0.05,
+        top_cutoff=1.50,
+    )
+
+    assert points.positions is not None
+    assert points.positions.as_arrow_array().to_pylist() == [
+        [1.0, 0.0, -0.05000000074505806],
+        [2.0, 0.0, 1.5],
+    ]
+
+
 def test_bounding_box_intersects() -> None:
     """Test bounding_box_intersects method with various scenarios."""
     # Test 1: Overlapping boxes

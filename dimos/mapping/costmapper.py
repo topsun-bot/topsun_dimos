@@ -14,12 +14,15 @@
 
 from dataclasses import asdict
 import math
+import threading
 import time
 from typing import Any
 
+from dimos_lcm.std_msgs import Bool  # type: ignore[import-untyped]
 import numpy as np
 from pydantic import Field
 from reactivex import combine_latest, operators as ops
+from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -42,12 +45,14 @@ class Config(ModuleConfig):
     config: OccupancyConfig = Field(default_factory=HeightCostConfig)
     # for robots that cant see directly below themself
     initial_safe_radius_meters: float = 0.0
+    require_navigation_source_health: bool = False
 
 
 class CostMapper(Module):
     config: Config
     global_map: In[PointCloud2]
     merged_map: In[PointCloud2]
+    navigation_source_healthy: In[Bool]
     global_costmap: Out[OccupancyGrid]
 
     def __init__(self, **kwargs: Any) -> None:
@@ -55,10 +60,22 @@ class CostMapper(Module):
         self._navigation_trace = TraceSink("costmapper", config=self.config.g)
         self._trace_costmap_seq = 0
         self._trace_first_blob_saved = False
+        self._navigation_source_lock = threading.Lock()
+        self._navigation_source_healthy = not self.config.require_navigation_source_health
+        self._navigation_source_fault_latched = False
 
     @rpc
     def start(self) -> None:
         super().start()
+
+        if self.config.require_navigation_source_health:
+            if self.navigation_source_healthy.transport is None:
+                raise RuntimeError("CostMapper requires navigation_source_healthy")
+            self.register_disposable(
+                Disposable(
+                    self.navigation_source_healthy.subscribe(self._on_navigation_source_health)
+                )
+            )
 
         def _select_map(
             pair: tuple[PointCloud2, PointCloud2 | None],
@@ -100,6 +117,7 @@ class CostMapper(Module):
                 self.merged_map.observable().pipe(ops.start_with(None)),  # type: ignore[no-untyped-call,arg-type]
             )
             .pipe(ops.map(_select_map))
+            .pipe(ops.filter(lambda _selected: self._map_updates_allowed()))
             .pipe(ops.map(_calculate_and_time))
             .subscribe(
                 lambda result: _publish_costmap(
@@ -111,6 +129,39 @@ class CostMapper(Module):
                     result[5],
                 )
             )
+        )
+
+    def _map_updates_allowed(self) -> bool:
+        with self._navigation_source_lock:
+            return self._navigation_source_healthy and not self._navigation_source_fault_latched
+
+    def _on_navigation_source_health(self, msg: Bool) -> None:
+        if msg.data:
+            with self._navigation_source_lock:
+                if not self._navigation_source_fault_latched:
+                    self._navigation_source_healthy = True
+            return
+
+        with self._navigation_source_lock:
+            if self._navigation_source_fault_latched:
+                return
+            self._navigation_source_healthy = False
+            self._navigation_source_fault_latched = True
+
+        # Replace any cached navigable costmap with one unknown cell. The
+        # planner is separately fault-latched, but this prevents stale map reuse
+        # by visualization or another downstream consumer.
+        self.global_costmap.publish(
+            OccupancyGrid(
+                width=1,
+                height=1,
+                resolution=self.config.config.resolution,
+                frame_id=self.config.config.frame_id or "world",
+            )
+        )
+        logger.error(
+            "Navigation source fault latched; replaced cached costmap with a 1x1 unknown "
+            "grid. Restart is required."
         )
 
     @rpc

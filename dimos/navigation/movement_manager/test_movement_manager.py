@@ -202,3 +202,52 @@ def test_recharge_servo_suppresses_navigation_after_staging(manager_and_captured
     assert len(captured.cmd_vel) == command_count + 1
     assert captured.cmd_vel[-1].linear.x == pytest.approx(0.1)
     assert captured.recharge_servo_granted[-1].data is True
+
+
+def test_navigation_health_gate_blocks_all_motion_until_source_is_ready() -> None:
+    manager = MovementManager(require_navigation_source_health=True)
+    captured, unsubs = _attach(manager)
+    try:
+        manager._on_nav(_twist(lx=0.8))
+        assert captured.cmd_vel == []
+
+        manager._on_teleop(_twist(lx=0.2))
+        manager._on_recharge_task_active(Bool(data=True))
+        assert captured.cmd_vel == []
+        assert captured.recharge_task_granted[-1].data is False
+
+        manager._on_navigation_source_health(Bool(data=True))
+        manager._on_teleop(_twist(lx=0.2))
+        assert captured.cmd_vel[-1].linear.x == pytest.approx(0.2)
+
+        manager._teleop_active = False
+        manager._on_nav(_twist(lx=0.4))
+        assert captured.cmd_vel[-1].linear.x == pytest.approx(0.4)
+    finally:
+        for unsub in unsubs:
+            unsub()
+        manager._close_module()
+
+
+def test_navigation_source_fault_stops_and_requires_restart() -> None:
+    manager = MovementManager(require_navigation_source_health=True)
+    captured, unsubs = _attach(manager)
+    try:
+        manager._on_navigation_source_health(Bool(data=True))
+        manager._on_nav(_twist(lx=0.4))
+
+        manager._on_navigation_source_health(Bool(data=False))
+        assert captured.cmd_vel[-1].is_zero()
+        assert captured.stop_movement[-1].data is True
+
+        command_count = len(captured.cmd_vel)
+        manager._on_navigation_source_health(Bool(data=True))
+        manager._on_nav(_twist(lx=0.4))
+        manager._on_teleop(_twist(lx=0.2))
+        manager._on_recharge_task_active(Bool(data=True))
+        assert len(captured.cmd_vel) == command_count
+        assert captured.recharge_task_granted[-1].data is False
+    finally:
+        for unsub in unsubs:
+            unsub()
+        manager._close_module()

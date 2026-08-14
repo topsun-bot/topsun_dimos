@@ -17,11 +17,13 @@ PositionTracker, ReplanLimiter, and GlobalPlanner."""
 
 from unittest.mock import MagicMock, patch
 
+from dimos_lcm.std_msgs import Bool
 import pytest
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.navigation.replanning_a_star.position_tracker import PositionTracker
 from dimos.navigation.replanning_a_star.replan_limiter import ReplanLimiter
 
@@ -130,6 +132,32 @@ class TestReplanLimiter:
         assert limiter.get_attempt() == 1
         limiter.will_retry()
         assert limiter.get_attempt() == 2
+
+
+def test_required_navigation_source_health_gates_and_latches_planner_goals() -> None:
+    module = ReplanningAStarPlanner(require_navigation_source_health=True)
+    try:
+        module._planner = MagicMock()
+        goal = _make_pose(1.0, 0.0)
+
+        assert module.set_goal(goal) is False
+        module._planner.handle_goal_request.assert_not_called()
+
+        module._on_navigation_source_health(Bool(data=True))
+        assert module.set_goal(goal) is True
+        module._planner.handle_goal_request.assert_called_once_with(
+            goal, entry_source="rpc_set_goal"
+        )
+
+        module._on_navigation_source_health(Bool(data=False))
+        module._planner.cancel_goal.assert_called_once_with(
+            failure_reason="navigation_source_fault"
+        )
+
+        module._on_navigation_source_health(Bool(data=True))
+        assert module.set_goal(goal) is False
+    finally:
+        module._close_module()
 
 
 # ---------------------------------------------------------------------------

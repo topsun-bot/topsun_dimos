@@ -8,6 +8,10 @@
     livox-sdk.inputs.nixpkgs.follows = "nixpkgs";
     livox-sdk.inputs.flake-utils.follows = "flake-utils";
     livox-sdk.inputs.lcm-extended.follows = "lcm-extended";
+    livox-common = {
+      url = "path:../../common";
+      flake = false;
+    };
     dimos-lcm = {
       url = "github:dimensionalOS/dimos-lcm/main";
       flake = false;
@@ -25,7 +29,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, livox-sdk, dimos-lcm, fast-lio, lcm-extended, ... }:
+  outputs = { self, nixpkgs, flake-utils, livox-sdk, livox-common, dimos-lcm, fast-lio, lcm-extended, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         # Overlay fixes for darwin-broken nixpkgs recipes in our transitive
@@ -65,8 +69,6 @@
         };
         livox-sdk2 = livox-sdk.packages.${system}.livox-sdk2;
         lcm = lcm-extended.packages.${system}.lcm;
-
-        livox-common = ../../common;
 
         # Patch the Point-LIO fork in place: resize (not reserve) the per-point
         # vectors in run_once, whose reserve+operator[] is out-of-bounds UB that

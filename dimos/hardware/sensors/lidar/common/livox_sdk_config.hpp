@@ -52,7 +52,18 @@ struct SdkPorts {
 //        (Darwin's equivalent of /proc/self/fd).
 inline std::pair<int, std::string> write_sdk_config(const std::string& host_ip,
                                                      const std::string& lidar_ip,
-                                                     const SdkPorts& ports) {
+                                                     const SdkPorts& ports,
+                                                     const std::string& device_model) {
+    const char* sdk_model_key = nullptr;
+    if (device_model == "mid360") {
+        sdk_model_key = "MID360";
+    } else if (device_model == "mid360s") {
+        sdk_model_key = "Mid360s";
+    } else {
+        fprintf(stderr, "Error: unsupported Livox device_model '%s'\n", device_model.c_str());
+        return {-1, ""};
+    }
+
 #ifdef __linux__
     int fd = memfd_create("livox_sdk_config", 0);
     if (fd < 0) {
@@ -87,20 +98,12 @@ inline std::pair<int, std::string> write_sdk_config(const std::string& host_ip,
         return {-1, ""};
     }
 
-    // On macOS the synthetic lidar/host IPs are lo0 aliases, and a multicast send
-    // source-bound to an alias fails ("No route to host"), so the virtual_mid360
-    // replayer unicasts point/IMU to host_ip. An empty multicast_ip makes the SDK
-    // bind its data socket to host_ip (not the multicast group) so it receives
-    // those unicasts. Real hardware on Linux keeps the Livox default multicast.
-#if defined(__APPLE__) && defined(__MACH__)
-    const char* multicast_ip = "";
-#else
-    const char* multicast_ip = "224.1.1.5";
-#endif
-
+    // Use SDK2's per-device schema and explicitly select the configured lidar
+    // IP. Omitting multicast_ip keeps point and IMU delivery unicast to host_ip,
+    // matching both real hardware and the macOS virtual replayer.
     fprintf(fp,
         "{\n"
-        "  \"MID360\": {\n"
+        "  \"%s\": {\n"
         "    \"lidar_net_info\": {\n"
         "      \"cmd_data_port\": %d,\n"
         "      \"push_msg_port\": %d,\n"
@@ -111,7 +114,7 @@ inline std::pair<int, std::string> write_sdk_config(const std::string& host_ip,
         "    \"host_net_info\": [\n"
         "      {\n"
         "        \"host_ip\": \"%s\",\n"
-        "        \"multicast_ip\": \"%s\",\n"
+        "        \"lidar_ip\": [\"%s\"],\n"
         "        \"cmd_data_port\": %d,\n"
         "        \"push_msg_port\": %d,\n"
         "        \"point_data_port\": %d,\n"
@@ -121,9 +124,10 @@ inline std::pair<int, std::string> write_sdk_config(const std::string& host_ip,
         "    ]\n"
         "  }\n"
         "}\n",
+        sdk_model_key,
         ports.cmd_data, ports.push_msg, ports.point_data,
         ports.imu_data, ports.log_data,
-        host_ip.c_str(), multicast_ip,
+        host_ip.c_str(), lidar_ip.c_str(),
         ports.host_cmd_data, ports.host_push_msg, ports.host_point_data,
         ports.host_imu_data, ports.host_log_data);
     fflush(fp);  // flush but don't fclose — that would close fd
@@ -147,12 +151,13 @@ inline std::pair<int, std::string> write_sdk_config(const std::string& host_ip,
 inline bool init_livox_sdk(const std::string& host_ip,
                            const std::string& lidar_ip,
                            const SdkPorts& ports,
+                           const std::string& device_model = "mid360",
                            bool debug = false) {
     if (!debug) {
         DisableLivoxSdkConsoleLogger();
     }
 
-    auto [fd, path] = write_sdk_config(host_ip, lidar_ip, ports);
+    auto [fd, path] = write_sdk_config(host_ip, lidar_ip, ports, device_model);
     if (fd < 0) {
         fprintf(stderr, "Error: failed to write SDK config\n");
         return false;

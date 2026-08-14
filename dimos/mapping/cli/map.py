@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+import json
 import math
 from pathlib import Path
 import subprocess
 from typing import TYPE_CHECKING, Any
 
 import typer
+
+from dimos.mapping.map_profile import build_map_profile, write_map_profile
 
 if TYPE_CHECKING:
     from dimos.mapping.loop_closure.pgo import PoseGraph
@@ -330,6 +333,26 @@ def main(
         "--export",
         help="Export PGO map to ./<dataset>.pc2.lcm in cwd (implies --pgo)",
     ),
+    map_id: str | None = typer.Option(
+        None,
+        "--map-id",
+        help="Stable map identity written to the exported map profile",
+    ),
+    sensor_profile: str | None = typer.Option(
+        None,
+        "--sensor-profile",
+        help="Sensor pipeline identity, e.g. mid360_pointlio_v1",
+    ),
+    extrinsic_version: str | None = typer.Option(
+        None,
+        "--extrinsic-version",
+        help="Version of the rigid sensor mount used while recording",
+    ),
+    preprocessing_manifest: Path | None = typer.Option(
+        None,
+        "--preprocessing-manifest",
+        help="JSON manifest of the sensor, LIO, adapter, and map preprocessing pipeline",
+    ),
     full_pgo: bool = typer.Option(
         False,
         "--full-pgo",
@@ -433,6 +456,26 @@ def main(
 
     db_path = resolve_dataset(dataset)
     store = open_store(db_path)
+    profiled_export = any(
+        value is not None
+        for value in (sensor_profile, extrinsic_version, map_id, preprocessing_manifest)
+    )
+    if export and profiled_export:
+        if sensor_profile is None or extrinsic_version is None:
+            raise typer.BadParameter(
+                "profiled export requires both --sensor-profile and --extrinsic-version"
+            )
+    preprocessing_payload: dict[str, Any] | None = None
+    if preprocessing_manifest is not None:
+        try:
+            payload = json.loads(preprocessing_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise typer.BadParameter(
+                f"cannot read --preprocessing-manifest {preprocessing_manifest}: {exc}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("--preprocessing-manifest root must be a JSON object")
+        preprocessing_payload = payload
     if out is None:
         out = Path.cwd() / f"{db_path.stem}.rrd"
     if export or full_pgo:
@@ -469,6 +512,25 @@ def main(
             )
     if world is None:
         world = "world"  # empty lidar stream; the frame is moot
+
+    export_preprocessing = {
+        "lidar_stream": lidar_stream,
+        "frame": world,
+        "voxel_size": voxel,
+        "pgo_tolerance": pgo_tol,
+        "tf_tolerance": tf_tolerance,
+        "column_carving": carve,
+        "denoise": denoise,
+        "bottom_cutoff": bottom_cutoff,
+    }
+    if (
+        export
+        and preprocessing_payload is not None
+        and preprocessing_payload.get("map_export") != export_preprocessing
+    ):
+        raise typer.BadParameter(
+            "--preprocessing-manifest map_export does not match the actual dimos map global options"
+        )
 
     # Registration: sensor-frame clouds get a per-frame tf lookup lifting them
     # into the world frame (frames with no tf answer are dropped); clouds
@@ -681,6 +743,23 @@ def main(
         print(f"exporting PGO twopass map to {out_path}...")
         out_path.write_bytes(pgo_map.lcm_encode())
         print(f"wrote {out_path}")
+        if profiled_export:
+            assert sensor_profile is not None
+            assert extrinsic_version is not None
+            if preprocessing_payload is not None:
+                preprocessing = preprocessing_payload
+            else:
+                preprocessing = export_preprocessing
+            profile = build_map_profile(
+                map_id=map_id or db_path.stem,
+                sensor_profile=sensor_profile,
+                voxel_size=voxel,
+                extrinsic_version=extrinsic_version,
+                preprocessing=preprocessing,
+                source_dataset=str(db_path),
+            )
+            profile_path = write_map_profile(out_path, profile)
+            print(f"wrote {profile_path}")
         print()
         print("load back with:")
         print("    from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2")

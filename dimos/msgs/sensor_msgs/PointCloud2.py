@@ -712,6 +712,7 @@ class PointCloud2(Timestamped):
         mode: str = "spheres",
         fill_mode: str = "solid",
         bottom_cutoff: float | None = None,
+        top_cutoff: float | None = None,
         **kwargs: object,
     ) -> Archetype:
         """Convert to Rerun archetype for visualization.
@@ -723,6 +724,8 @@ class PointCloud2(Timestamped):
                 (requires register_colormap_annotation() called once).
             mode: "points" for raw points, "boxes" for cubes (default), or "spheres" for sized spheres
             fill_mode: Fill mode for boxes - "solid", "majorwireframe", or "densewireframe"
+            bottom_cutoff: Hide points below this z value in the visualization.
+            top_cutoff: Hide points above this z value in the visualization.
             **kwargs: Additional args (ignored for compatibility)
 
         Returns:
@@ -734,8 +737,13 @@ class PointCloud2(Timestamped):
         if len(points) == 0:
             return rr.Points3D([]) if mode != "boxes" else rr.Boxes3D(centers=[])
 
-        if bottom_cutoff is not None:
-            points = points[points[:, 2] >= bottom_cutoff]
+        if bottom_cutoff is not None or top_cutoff is not None:
+            height_mask = np.ones(len(points), dtype=bool)
+            if bottom_cutoff is not None:
+                height_mask &= points[:, 2] >= bottom_cutoff
+            if top_cutoff is not None:
+                height_mask &= points[:, 2] <= top_cutoff
+            points = points[height_mask]
             if len(points) == 0:
                 return rr.Points3D([]) if mode != "boxes" else rr.Boxes3D(centers=[])
 
@@ -847,3 +855,16 @@ class PointCloud2(Timestamped):
     def __repr__(self) -> str:
         """String representation."""
         return f"PointCloud(points={len(self)}, frame_id='{self.frame_id}', ts={self.ts})"
+
+
+def pointcloud_to_rerun_height_clipped(
+    cloud: PointCloud2,
+    *,
+    bottom_cutoff: float | None = None,
+    top_cutoff: float | None = None,
+) -> Archetype:
+    """Lightweight, multiprocessing-safe Rerun height-clipping override."""
+    return cloud.to_rerun(
+        bottom_cutoff=bottom_cutoff,
+        top_cutoff=top_cutoff,
+    )

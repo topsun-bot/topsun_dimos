@@ -53,8 +53,43 @@ static std::atomic<bool> g_running{true};
 static lcm::LCM* g_lcm = nullptr;
 static PointLio* g_point_lio = nullptr;
 
-static double get_publish_ts() {
+static double get_host_ts() {
     return std::chrono::duration<double>( std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+// Mid-360 packet timestamps use the lidar's clock (often device uptime), while
+// the rest of DimOS uses host epoch time. Freeze one receive-time offset so the
+// original sampling intervals are preserved without breaking camera/odom joins.
+// Staleness is checked separately with host monotonic receive times downstream.
+static std::mutex g_sensor_clock_mutex;
+static std::optional<double> g_sensor_to_host_offset_sec;
+
+static void observe_sensor_clock(uint64_t sensor_ts_ns) {
+    if (sensor_ts_ns == 0) { return; }
+    const double sensor_ts = static_cast<double>(sensor_ts_ns) / 1e9;
+    std::lock_guard<std::mutex> lock(g_sensor_clock_mutex);
+    if (!g_sensor_to_host_offset_sec.has_value()) {
+        g_sensor_to_host_offset_sec = get_host_ts() - sensor_ts;
+    }
+}
+
+static std::optional<double> sensor_to_host_ts(double sensor_ts) {
+    if (!std::isfinite(sensor_ts) || sensor_ts <= 0.0) { return std::nullopt; }
+    std::lock_guard<std::mutex> lock(g_sensor_clock_mutex);
+    if (!g_sensor_to_host_offset_sec.has_value()) { return std::nullopt; }
+    return sensor_ts + *g_sensor_to_host_offset_sec;
+}
+
+static bool source_state_changed(
+    double source_ts,
+    const std::optional<double>& last_published_source_ts
+) {
+    if (!std::isfinite(source_ts) || source_ts <= 0.0) { return false; }
+    if (!last_published_source_ts.has_value()) { return true; }
+    // Publish both forward progress and rollback. Downstream rejects duplicates
+    // and latches a rollback, but neither condition may be hidden by fresh host
+    // publication timestamps.
+    return std::abs(source_ts - *last_published_source_ts) > 1e-9;
 }
 
 // Parse a comma-separated list of doubles (CLI vector args); empty on bad input.
@@ -189,6 +224,7 @@ static void on_point_cloud(const uint32_t /*handle*/, const uint8_t /*dev_type*/
     if (!g_running.load() || data == nullptr) { return; }
 
     uint64_t ts_ns = get_timestamp_ns(data);
+    observe_sensor_clock(ts_ns);
     uint16_t dot_num = data->dot_num;
 
     // Per-point intra-packet offset (matches livox_ros_driver2). Without it all
@@ -236,6 +272,7 @@ static void on_imu_data(const uint32_t /*handle*/, const uint8_t /*dev_type*/, L
     if (!g_running.load() || data == nullptr || !g_point_lio) { return; }
 
     uint64_t pkt_ts_ns = get_timestamp_ns(data);
+    observe_sensor_clock(pkt_ts_ns);
     double ts = static_cast<double>(pkt_ts_ns) / 1e9;
     auto* imu_pts = reinterpret_cast<const LivoxLidarImuRawPoint*>(data->data);
     uint16_t dot_num = data->dot_num;
@@ -379,6 +416,7 @@ int main(int argc, char** argv) {
     // Livox hardware config
     std::string host_ip = mod.arg("host_ip", "192.168.1.5");
     std::string lidar_ip = mod.arg("lidar_ip", "192.168.1.155");
+    std::string device_model = mod.arg("device_model", "mid360");
     g_frequency = mod.arg_float("frequency", 10.0f);
     g_frame_id = mod.arg_required("frame_id");
     g_sensor_frame_id = mod.arg_required("sensor_frame_id");
@@ -408,7 +446,7 @@ int main(int argc, char** argv) {
         printf("[pointlio] lidar topic: %s\n", g_lidar_topic.empty() ? "(disabled)" : g_lidar_topic.c_str());
         printf("[pointlio] odometry topic: %s\n", g_odometry_topic.empty() ? "(disabled)" : g_odometry_topic.c_str());
         printf("[pointlio] tuning: filter_size_surf=%.3f ivox_res=%.3f lidar_type=%d\n", params.filter_size_surf, params.ivox_grid_resolution, params.lidar_type);
-        printf("[pointlio] host_ip: %s  lidar_ip: %s  frequency: %.1f Hz\n", host_ip.c_str(), lidar_ip.c_str(), g_frequency);
+        printf("[pointlio] host_ip: %s  lidar_ip: %s  model: %s  frequency: %.1f Hz\n", host_ip.c_str(), lidar_ip.c_str(), device_model.c_str(), g_frequency);
         printf("[pointlio] pointcloud_freq: %.1f Hz  odom_freq: %.1f Hz\n", pointcloud_freq, odom_freq);
     }
 
@@ -437,6 +475,9 @@ int main(int argc, char** argv) {
     auto odom_interval = std::chrono::microseconds( static_cast<int64_t>(1e6 / odom_freq));
     std::optional<std::chrono::steady_clock::time_point> last_pc_publish;
     std::optional<std::chrono::steady_clock::time_point> last_odom_publish;
+    std::optional<double> last_pc_source_ts;
+    std::optional<double> last_odom_source_ts;
+    bool estimator_has_lidar = false;
 
 
     auto run_main_iter = [&](std::chrono::steady_clock::time_point now) {
@@ -486,36 +527,62 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "[pointlio] feed_lidar frame: %zu points\n", num_points);
             }
             point_lio.feed_lidar(lidar_msg);
+            estimator_has_lidar = true;
         }
 
         // One Point-LIO IESKF step (cheap when queues empty).
         point_lio.process();
 
         auto pose = point_lio.get_pose();
-        if (!pose.empty() && (pose[0] != 0.0 || pose[1] != 0.0 || pose[2] != 0.0)) {
-            double ts = get_publish_ts();
+        auto odom = point_lio.get_odometry();
+        const auto& orientation = odom.pose.pose.orientation;
+        const double orientation_norm_sq =
+            orientation.x * orientation.x + orientation.y * orientation.y +
+            orientation.z * orientation.z + orientation.w * orientation.w;
+        const bool estimator_pose_valid =
+            std::isfinite(orientation_norm_sq) && orientation_norm_sq > 1e-12;
+        // A stationary estimator legitimately starts at (0, 0, 0). Treating
+        // that pose as uninitialized suppresses every cloud and odometry
+        // message until the robot moves, which defeats no-motion validation
+        // and keeps downstream navigation health latched off. Point-LIO does,
+        // however, emit zero-quaternion placeholders for a short interval
+        // after the first lidar frame. Do not let those placeholders enter
+        // recording, TF, map, or navigation streams.
+        if (estimator_has_lidar && !pose.empty() && estimator_pose_valid) {
+            // The Point-LIO core only advances this stamp when it consumes a new
+            // sensor state. Reusing the last pose must not make a dead Mid-360
+            // look healthy merely because this main loop is still running.
+            const double source_ts = odom.header.stamp.toSec();
+            const auto host_ts = sensor_to_host_ts(source_ts);
+            if (!host_ts.has_value()) { return; }
 
-            const bool lidar_due = !g_lidar_topic.empty() && now - *last_pc_publish >= pc_interval;
+            const bool lidar_due = !g_lidar_topic.empty() &&
+                now - *last_pc_publish >= pc_interval &&
+                source_state_changed(source_ts, last_pc_source_ts);
 
             // get_body_cloud is the loop's costliest step, so build it only when
             // a publish is due.
             if (lidar_due) {
                 auto body_cloud = point_lio.get_body_cloud();
                 if (body_cloud && !body_cloud->empty()) {
-                    publish_lidar(body_cloud, ts);
+                    publish_lidar(body_cloud, *host_ts);
                     last_pc_publish = now;
+                    last_pc_source_ts = source_ts;
                     if (pointlio_debug) {
-                        fprintf(stderr, "[pointlio] publish lidar: %zu points  pose=(%.3f, %.3f, %.3f)\n", body_cloud->size(), pose[0], pose[1], pose[2]);
+                        fprintf(stderr, "[pointlio] publish lidar: %zu points  source_ts=%.6f pose=(%.3f, %.3f, %.3f)\n", body_cloud->size(), source_ts, pose[0], pose[1], pose[2]);
                     }
                 }
             }
 
             // Pose + covariance at odom_freq.
-            if (!g_odometry_topic.empty() && now - *last_odom_publish >= odom_interval) {
-                publish_odometry(point_lio.get_odometry(), ts);
+            if (!g_odometry_topic.empty() &&
+                now - *last_odom_publish >= odom_interval &&
+                source_state_changed(source_ts, last_odom_source_ts)) {
+                publish_odometry(odom, *host_ts);
                 last_odom_publish = now;
+                last_odom_source_ts = source_ts;
                 if (pointlio_debug) {
-                    fprintf(stderr, "[pointlio] publish odom: pose=(%.3f, %.3f, %.3f)\n", pose[0], pose[1], pose[2]);
+                    fprintf(stderr, "[pointlio] publish odom: source_ts=%.6f pose=(%.3f, %.3f, %.3f)\n", source_ts, pose[0], pose[1], pose[2]);
                 }
             }
         }
@@ -523,7 +590,7 @@ int main(int argc, char** argv) {
 
     // Packet source: Livox SDK callbacks from its own threads feed the
     // accumulator/EKF; the main thread below owns run_main_iter.
-    if (!livox_common::init_livox_sdk(host_ip, lidar_ip, ports, debug)) {
+    if (!livox_common::init_livox_sdk(host_ip, lidar_ip, ports, device_model, debug)) {
         return 1;
     }
     SetLivoxLidarPointCloudCallBack(on_point_cloud, nullptr);

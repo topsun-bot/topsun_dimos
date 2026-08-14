@@ -326,7 +326,11 @@ def _build_blueprint(
     from dimos.hardware.sensors.lidar.virtual_mid360.module import VirtualMid360
 
     pointlio_kwargs: dict[str, Any] = dict(
-        host_ip=args.host_ip, lidar_ip=args.lidar_ip, odom_freq=args.odom_freq, debug=False
+        host_ip=args.host_ip,
+        lidar_ip=args.lidar_ip,
+        device_model=args.device_model,
+        odom_freq=args.odom_freq,
+        debug=args.debug,
     )
     pointlio_kwargs.update(overrides)
 
@@ -338,6 +342,7 @@ def _build_blueprint(
                 delay=args.warmup_sec,  # hold streaming until PointLio's SDK is up
                 host_ip=args.host_ip,
                 lidar_ip=args.lidar_ip,
+                device_model=args.device_model,
                 alias_iface=args.alias_iface,
                 # When the NIC is provisioned by hand, skip the module's own sudo
                 # (it runs in a tty-less worker where a password prompt can't appear).
@@ -362,11 +367,10 @@ def _poll_until_drained(
     """Block until the pcap drains or a cap is hit; False if Point-LIO never
     produced odometry within the startup timeout.
 
-    Drain is detected on the *lidar* stream's latest timestamp going flat: lidar
-    is input-driven, so it stops advancing the moment the pcap is exhausted. The
-    odometry stream can't be used for this — Point-LIO keeps publishing odometry
-    (dead-reckoning) at odom_freq after input stops, with ever-advancing
-    timestamps, so its stream never looks stagnant and the run would hang."""
+    Drain is detected on the *lidar* stream's latest timestamp going flat. Native
+    Point-LIO now suppresses both lidar and odometry when its source state does not
+    advance; retaining lidar as the drain signal keeps this compatible with older
+    binaries whose odometry publisher re-stamped stale state with fresh host time."""
     last_lidar_max: float | None = None
     first_max: float | None = None
     stagnant_since: float | None = None
@@ -521,7 +525,10 @@ def main(argv: list[str]) -> int:
         "--rate", type=float, default=1.0, help="replay-speed multiplier (default 1.0)"
     )
     parser.add_argument(
-        "--odom-freq", type=float, default=30.0, help="Point-LIO odometry rate Hz (default 30)"
+        "--odom-freq",
+        type=float,
+        default=10.0,
+        help="maximum Point-LIO odometry publish rate Hz (default 10)",
     )
     parser.add_argument(
         "--max-sensor-sec",
@@ -548,6 +555,17 @@ def main(argv: list[str]) -> int:
     # Addressing knobs (override to run two replays at once).
     parser.add_argument("--host-ip", default="192.168.1.5")
     parser.add_argument("--lidar-ip", default="192.168.1.155")
+    parser.add_argument(
+        "--device-model",
+        choices=("mid360", "mid360s"),
+        default="mid360",
+        help="Livox model advertised by replay and configured in Point-LIO",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="enable Point-LIO SDK connection and packet diagnostics",
+    )
     parser.add_argument(
         "--alias-iface", default="dimos-mid360", help="dummy iface the host/lidar IPs live on"
     )

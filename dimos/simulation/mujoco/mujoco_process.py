@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import base64
+from contextlib import nullcontext
 import json
 import pickle
 import signal
@@ -28,7 +29,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from dimos.core.global_config import GlobalConfig
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.simulation.mujoco.constants import (
     DEPTH_CAMERA_FOV,
     LIDAR_FPS,
@@ -44,6 +44,16 @@ from dimos.simulation.mujoco.shared_memory import ShmReader
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+
+class _HeadlessViewer:
+    """Minimal viewer contract for sensor-producing headless simulation."""
+
+    def is_running(self) -> bool:
+        return True
+
+    def sync(self) -> None:
+        pass
 
 
 class MockController:
@@ -71,8 +81,6 @@ class MockController:
 
 
 def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
-    import open3d as o3d  # type: ignore[import-untyped]
-
     robot_name = config.robot_model or "unitree_go1"
     if robot_name == "unitree_go2":
         robot_name = "unitree_go1"
@@ -109,7 +117,12 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
 
     shm.signal_ready()
 
-    with viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False) as m_viewer:
+    if config.dimsim_headless:
+        viewer_context = nullcontext(_HeadlessViewer())
+    else:
+        viewer_context = viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False)
+
+    with viewer_context as m_viewer:
         camera_size = (VIDEO_WIDTH, VIDEO_HEIGHT)
 
         # Create renderers
@@ -131,10 +144,11 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
         video_interval = 1.0 / VIDEO_FPS
         lidar_interval = 1.0 / LIDAR_FPS
 
-        m_viewer.cam.lookat = config.mujoco_camera_position_float[0:3]
-        m_viewer.cam.distance = config.mujoco_camera_position_float[3]
-        m_viewer.cam.azimuth = config.mujoco_camera_position_float[4]
-        m_viewer.cam.elevation = config.mujoco_camera_position_float[5]
+        if not config.dimsim_headless:
+            m_viewer.cam.lookat = config.mujoco_camera_position_float[0:3]
+            m_viewer.cam.distance = config.mujoco_camera_position_float[3]
+            m_viewer.cam.azimuth = config.mujoco_camera_position_float[4]
+            m_viewer.cam.elevation = config.mujoco_camera_position_float[5]
 
         while m_viewer.is_running() and not shm.should_stop():
             step_start = time.time()
@@ -208,16 +222,13 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
 
                 if all_points:
                     combined_points = np.vstack(all_points)
-                    pcd = o3d.geometry.PointCloud()
-                    pcd.points = o3d.utility.Vector3dVector(combined_points)
-                    pcd = pcd.voxel_down_sample(voxel_size=LIDAR_RESOLUTION)
-
-                    lidar_msg = PointCloud2(
-                        pointcloud=pcd,
-                        ts=time.time(),
+                    voxel_keys = np.floor(combined_points / LIDAR_RESOLUTION).astype(np.int64)
+                    _, unique_indices = np.unique(voxel_keys, axis=0, return_index=True)
+                    shm.write_lidar(
+                        combined_points[np.sort(unique_indices)],
+                        timestamp=time.time(),
                         frame_id="world",
                     )
-                    shm.write_lidar(lidar_msg)
 
                 last_lidar_time = current_time
 

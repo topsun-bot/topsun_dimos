@@ -37,6 +37,7 @@ logger = setup_logger()
 class ReplanningAStarPlannerConfig(ModuleConfig):
     robot_width: float | None = None
     robot_rotation_diameter: float | None = None
+    require_navigation_source_health: bool = False
 
 
 class ReplanningAStarPlanner(Module, NavigationInterface):
@@ -49,6 +50,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
     clicked_point: In[PointStamped]
     target: In[PoseStamped]
     stop_movement: In[Bool]
+    navigation_source_healthy: In[Bool]
 
     goal_reached: Out[Bool]
     navigation_state: Out[String]  # TODO: set it
@@ -72,6 +74,8 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
             self.config.g.model_copy(update=overrides) if overrides else self.config.g
         )
         self._planner = GlobalPlanner(effective_global_config)
+        self._navigation_source_healthy = not self.config.require_navigation_source_health
+        self._navigation_source_fault_latched = False
 
     @rpc
     def start(self) -> None:
@@ -91,14 +95,14 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
         self.register_disposable(
             Disposable(
                 self.goal_request.subscribe(
-                    lambda msg: self._planner.handle_goal_request(msg, entry_source="goal_request")
+                    lambda msg: self._handle_goal_request(msg, entry_source="goal_request")
                 )
             )
         )
         self.register_disposable(
             Disposable(
                 self.target.subscribe(
-                    lambda msg: self._planner.handle_goal_request(msg, entry_source="target")
+                    lambda msg: self._handle_goal_request(msg, entry_source="target")
                 )
             )
         )
@@ -106,7 +110,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
         self.register_disposable(
             Disposable(
                 self.clicked_point.subscribe(
-                    lambda pt: self._planner.handle_goal_request(
+                    lambda pt: self._handle_goal_request(
                         pt.to_pose_stamped(), entry_source="clicked_point"
                     )
                 )
@@ -117,6 +121,18 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
             self.register_disposable(
                 Disposable(self.stop_movement.subscribe(self._on_stop_movement))
             )
+
+        if self.config.require_navigation_source_health:
+            if self.navigation_source_healthy.transport is None:
+                logger.error(
+                    "Navigation-source health is required but its input stream is not connected"
+                )
+            else:
+                self.register_disposable(
+                    Disposable(
+                        self.navigation_source_healthy.subscribe(self._on_navigation_source_health)
+                    )
+                )
 
         self.register_disposable(self._planner.path.subscribe(self.path.publish))
 
@@ -142,10 +158,32 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
         if msg.data:
             self.cancel_goal()
 
+    def _on_navigation_source_health(self, msg: Bool) -> None:
+        """Latch source faults, cancel the current goal, and require a stack restart."""
+        if msg.data:
+            if not self._navigation_source_fault_latched:
+                self._navigation_source_healthy = True
+            return
+
+        self._navigation_source_healthy = False
+        self._navigation_source_fault_latched = True
+        self._planner.cancel_goal(failure_reason="navigation_source_fault")
+        logger.error("Navigation goal cancelled because the external source faulted")
+
+    def _handle_goal_request(self, goal: PoseStamped, *, entry_source: str) -> bool:
+        """Reject all goal entry points until the required source is healthy."""
+        if self.config.require_navigation_source_health and not self._navigation_source_healthy:
+            logger.error(
+                "Rejecting navigation goal while external source is unhealthy",
+                entry_source=entry_source,
+            )
+            return False
+        self._planner.handle_goal_request(goal, entry_source=entry_source)
+        return True
+
     @rpc
     def set_goal(self, goal: PoseStamped) -> bool:
-        self._planner.handle_goal_request(goal, entry_source="rpc_set_goal")
-        return True
+        return self._handle_goal_request(goal, entry_source="rpc_set_goal")
 
     @rpc
     def get_state(self) -> NavigationState:

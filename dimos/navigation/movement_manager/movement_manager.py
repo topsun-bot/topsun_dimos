@@ -47,6 +47,9 @@ MAX_CLICK_VERTICAL_M = 50.0
 class MovementManagerConfig(ModuleConfig):
     tele_cooldown_sec: float = 1.0
     tele_cmd_vel_scaling: Twist = Twist(Vector3(1, 1, 1), Vector3(1, 1, 1))
+    # Existing blueprints remain permissive. External navigation-source
+    # blueprints opt in and remain navigation-locked until the source is ready.
+    require_navigation_source_health: bool = False
 
 
 class MovementManager(Module):
@@ -65,6 +68,7 @@ class MovementManager(Module):
     recharge_task_active: In[Bool]
     recharge_servo_active: In[Bool]
     recharge_staging_goal: In[PointStamped]
+    navigation_source_healthy: In[Bool]
 
     goal: Out[PointStamped]
     way_point: Out[PointStamped]
@@ -81,6 +85,8 @@ class MovementManager(Module):
         self._last_teleop_time = 0.0
         self._recharge_task_active = False
         self._recharge_servo_active = False
+        self._navigation_source_healthy = not self.config.require_navigation_source_health
+        self._navigation_source_fault_latched = False
         self._trace = TraceSink("mux", config=self.config.g)
 
     @rpc
@@ -102,6 +108,12 @@ class MovementManager(Module):
         self.register_disposable(
             Disposable(self.recharge_staging_goal.subscribe(self._on_recharge_staging_goal))
         )
+        if self.config.require_navigation_source_health:
+            self.register_disposable(
+                Disposable(
+                    self.navigation_source_healthy.subscribe(self._on_navigation_source_health)
+                )
+            )
 
     @rpc
     def stop(self) -> None:
@@ -113,6 +125,12 @@ class MovementManager(Module):
     def _on_click(self, msg: PointStamped) -> None:
         if not all(math.isfinite(v) for v in (msg.x, msg.y, msg.z)):
             logger.warning("Ignored invalid click", x=msg.x, y=msg.y, z=msg.z)
+            return
+
+        with self._lock:
+            navigation_source_healthy = self._navigation_source_healthy
+        if not navigation_source_healthy:
+            logger.warning("Ignored navigation click while navigation source is unhealthy")
             return
         if (
             abs(msg.x) > MAX_CLICK_HORIZONTAL_M
@@ -153,9 +171,13 @@ class MovementManager(Module):
     def _on_nav(self, msg: Twist) -> None:
         suppressed_elapsed: float | None = None
         recharge_servo_active = False
+        navigation_source_healthy = False
         with self._lock:
             recharge_servo_active = self._recharge_servo_active
-            if recharge_servo_active:
+            navigation_source_healthy = self._navigation_source_healthy
+            if not navigation_source_healthy:
+                suppressed_elapsed = 0.0
+            elif recharge_servo_active:
                 # Visual recharge owns final docking motion. Planner velocity must not
                 # mix with the small camera-servoing commands.
                 suppressed_elapsed = 0.0
@@ -173,7 +195,13 @@ class MovementManager(Module):
             self._trace_mux(
                 "nav_command_suppressed",
                 msg,
-                source="navigation_recharge" if recharge_servo_active else "navigation",
+                source=(
+                    "navigation_source_fault"
+                    if not navigation_source_healthy
+                    else "navigation_recharge"
+                    if recharge_servo_active
+                    else "navigation"
+                ),
                 cooldown_elapsed_sec=suppressed_elapsed,
             )
             return
@@ -182,6 +210,13 @@ class MovementManager(Module):
     def _on_teleop(self, msg: Twist) -> None:
         recharge_was_active = False
         with self._lock:
+            if not self._navigation_source_healthy:
+                self._trace_mux(
+                    "teleop_command_suppressed",
+                    msg,
+                    source="navigation_source_fault",
+                )
+                return
             recharge_was_active = self._recharge_task_active or self._recharge_servo_active
             self._recharge_task_active = False
             self._recharge_servo_active = False
@@ -228,6 +263,14 @@ class MovementManager(Module):
         """Claim the navigation task while still allowing staging nav velocity."""
         active = bool(msg.data)
         with self._lock:
+            if active and not self._navigation_source_healthy:
+                self.recharge_task_granted.publish(Bool(data=False))
+                self._trace_mux(
+                    "recharge_task_suppressed",
+                    Twist(),
+                    source="navigation_source_fault",
+                )
+                return
             was_active = self._recharge_task_active
             self._recharge_task_active = active
             if not active:
@@ -245,7 +288,7 @@ class MovementManager(Module):
         """Grant final visual-servo velocity ownership only inside an active task."""
         requested = bool(msg.data)
         with self._lock:
-            active = requested and self._recharge_task_active
+            active = requested and self._navigation_source_healthy and self._recharge_task_active
             was_active = self._recharge_servo_active
             self._recharge_servo_active = active
         if active and not was_active:
@@ -259,7 +302,11 @@ class MovementManager(Module):
     def _on_recharge_staging_goal(self, msg: PointStamped) -> None:
         """Forward the recharge-owned staging goal while navigation still owns velocity."""
         with self._lock:
-            accepted = self._recharge_task_active and not self._recharge_servo_active
+            accepted = (
+                self._navigation_source_healthy
+                and self._recharge_task_active
+                and not self._recharge_servo_active
+            )
         if not accepted:
             logger.warning("Ignored recharge staging goal without task ownership")
             return
@@ -269,12 +316,38 @@ class MovementManager(Module):
     def _on_recharge_cmd(self, msg: Twist) -> None:
         """Forward recharge velocity only while recharge_active is true."""
         with self._lock:
-            active = self._recharge_servo_active
+            active = self._recharge_servo_active and self._navigation_source_healthy
         if not active:
             self._trace_mux("recharge_command_suppressed", msg, source="recharge")
             return
         self.cmd_vel.publish(msg)
         self._trace_mux("mux_command_published", msg, source="recharge")
+
+    def _on_navigation_source_health(self, msg: Bool) -> None:
+        """Gate autonomous motion when the selected lidar/odometry source fails.
+
+        A fault is latched after the source has become ready once. Recovery then
+        requires restarting the blueprint; a transient later ``True`` cannot
+        silently resume an old navigation goal. Viewer teleop is also blocked;
+        the independent physical remote remains the operator recovery path.
+        """
+        requested_healthy = bool(msg.data)
+        with self._lock:
+            if self._navigation_source_fault_latched:
+                return
+            was_healthy = self._navigation_source_healthy
+            if not requested_healthy and was_healthy:
+                self._navigation_source_fault_latched = True
+            self._navigation_source_healthy = requested_healthy
+
+        if requested_healthy:
+            logger.info("Navigation source is ready; autonomous velocity enabled")
+            return
+
+        self.cmd_vel.publish(Twist())
+        self._cancel_goal()
+        logger.error("Navigation source fault; autonomous motion stopped until restart")
+        self._trace_mux("navigation_source_fault_stop", Twist(), source="navigation_source")
 
     def _trace_mux(
         self,

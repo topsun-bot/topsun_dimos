@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "recording": "/Users/taojiang/.codex/worktrees/mid360-navigation-source/topsun_dimos/jiangtao/artifacts/mid360/sim-relocalization/navigation.db",
+  "thresholds": {
+    "max_cloud_odom_dt_s": 0.1,
+    "expected_min_radius_m": 0.5,
+    "expected_min_yaw_span_deg": 180.0
+  },
+  "timestamp": {
+    "odom": {
+      "count": 2809,
+      "duration_s": 75.4826328754425,
+      "average_hz": 37.20061016728994,
+      "regressions": 0,
+      "duplicates": 0,
+      "dt_s": {
+        "p50": 0.02626955509185791,
+        "p95": 0.041668152809143065,
+        "max": 0.15828990936279297
+      }
+    },
+    "lidar": {
+      "count": 143,
+      "duration_s": 74.82025909423828,
+      "average_hz": 1.897881692993697,
+      "regressions": 0,
+      "duplicates": 0,
+      "dt_s": {
+        "p50": 0.5026365518569946,
+        "p95": 0.5072074651718139,
+        "max": 3.4673328399658203
+      }
+    },
+    "tf": {
+      "count": 4381,
+      "duration_s": 78.80080485343933,
+      "average_hz": 55.583188625373936,
+      "regressions": 264,
+      "duplicates": 1176,
+      "dt_s": {
+        "p50": 0.02634608745574951,
+        "p95": 0.07115635871887194,
+        "max": 0.2278892993927002
+      }
+    }
+  },
+  "odom_pose": {
+    "pose_count": 2809,
+    "start_position_m": [
+      -0.1297090612746358,
+      -1.8080548491753524e-16,
+      -0.15579110604669566
+    ],
+    "end_position_m": [
+      0.8386824476925716,
+      0.5182099529616697,
+      0.06170867865598212
+    ],
+    "net_displacement_m": 1.1196561196787307,
+    "net_displacement_xy_m": 1.0983276696816489,
+    "max_radius_m": 1.475192136521622,
+    "max_radius_xy_m": 1.4565751316633246,
+    "path_length_m": 8.3637111914509,
+    "path_length_xy_m": 8.119963668065342,
+    "max_step_m": 0.09879911273846555,
+    "speed_xy_mps": {
+      "p50": 7.19558440339696e-05,
+      "p95": 0.858250538846231,
+      "max": 3.864310656451484
+    },
+    "quaternion_norm": {
+      "min": 0.9999999999999997,
+      "max": 1.0000000000000002,
+      "outside_1e_3": 0
+    },
+    "rpy_deg": {
+      "start": [
+        2.5501690114433663e-17,
+        -13.0,
+        6.6874096456744894e-18
+      ],
+      "end": [
+        -3.8762455852016364,
+        -12.070869635752778,
+        377.0330667381179
+      ],
+      "net": [
+        -3.8762455852016364,
+        0.9291303642472215,
+        377.0330667381179
+      ],
+      "span": [
+        28.004159232569886,
+        28.02733504528279,
+        473.18307200659973
+      ]
+    }
+  },
+  "cloud_odom": {
+    "matched_count": 143,
+    "timestamp_error_s": {
+      "p50": 0.005233049392700195,
+      "p95": 0.028000783920288087,
+      "max": 0.05751991271972656
+    },
+    "attached_pose_error_m": {
+      "p95": 0.0,
+      "max": 0.0
+    },
+    "attached_yaw_error_deg": {
+      "p95": 0.0,
+      "max": 0.0
+    }
+  },
+  "tf_tree": {
+    "message_count": 4381,
+    "edges": [
+      "base_link->camera_link",
+      "base_link->mid360_imu_link",
+      "camera_link->camera_optical",
+      "mid360_imu_link->mid360_link",
+      "world->base_link"
+    ],
+    "parents_by_child": {
+      "base_link": [
+        "world"
+      ],
+      "camera_link": [
+        "base_link"
+      ],
+      "camera_optical": [
+        "camera_link"
+      ],
+      "mid360_imu_link": [
+        "base_link"
+      ],
+      "mid360_link": [
+        "mid360_imu_link"
+      ]
+    },
+    "multi_parent_children": {},
+    "missing_required_edges": [],
+    "mount_profile": {
+      "matches": true,
+      "tolerance": 1e-06,
+      "errors": {
+        "base_link->mid360_imu_link": {
+          "translation_max_abs_m": 0.0,
+          "quaternion_max_abs": 0.0
+        },
+        "mid360_imu_link->mid360_link": {
+          "translation_max_abs_m": 0.0,
+          "quaternion_max_abs": 0.0
+        }
+      }
+    }
+  },
+  "checks": {
+    "odom_present": true,
+    "lidar_present": true,
+    "odom_timestamp_monotonic": true,
+    "lidar_timestamp_monotonic": true,
+    "odom_quaternion_valid": true,
+    "cloud_odom_time_aligned": true,
+    "tf_present": true,
+    "tf_single_parent": true,
+    "tf_required_edges_present": true,
+    "tf_mount_matches_profile": true,
+    "expected_translation_observed": true,
+    "expected_rotation_observed": true
+  },
+  "all_checks_passed": true,
+  "manual_checks_required": [
+    "Observed push direction agrees with the odom axes shown in Rerun.",
+    "World cloud remains stationary while the robot is translated and rotated.",
+    "Floor is level and straight walls do not split into double surfaces."
+  ]
+}

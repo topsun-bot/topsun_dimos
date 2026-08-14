@@ -30,11 +30,13 @@ Usage::
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import shlex
 import subprocess
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
@@ -51,12 +53,29 @@ _HOST_ROUTE_LEN = 32
 _DISCOVERY_BROADCAST = "255.255.255.255"
 # macOS has no dummy interfaces — the synthetic IPs are aliased onto loopback.
 _MACOS_IFACE = "lo0"
+# Linux reserves one byte of IFNAMSIZ=16 for the terminating NUL.
+_LINUX_IFACE_NAME_MAX_BYTES = 15
+
+
+def _native_build_command() -> str:
+    """Build with an explicit in-repo Rust dependency path.
+
+    A relative path input outside the virtual_mid360 flake is resolved against
+    the copied Nix store source by some Nix versions.  Compute the repository
+    root from this file so source checkouts and vehicle deployments behave the
+    same without embedding a machine-specific path in flake.lock.
+    """
+    rust_root = Path(__file__).resolve().parents[5] / "native" / "rust"
+    return (
+        "nix build -L .#default --no-write-lock-file "
+        f"--override-input dimos-rust {shlex.quote(f'path:{rust_root}')}"
+    )
 
 
 class VirtualMid360Config(NativeModuleConfig):
     cwd: str | None = "."
     executable: str = "result/bin/virtual_mid360"
-    build_command: str | None = "nix build -L .#default"
+    build_command: str | None = Field(default_factory=_native_build_command)
     # The rust binary reads its config as a JSON object on stdin (required).
     stdin_config: bool = True
     # Keep the Python-only NIC knobs out of the CLI args mirrored to the binary.
@@ -73,6 +92,8 @@ class VirtualMid360Config(NativeModuleConfig):
     lidar_ip: str = Field(
         default_factory=lambda: os.environ.get("DIMOS_MID360_LIDAR_IP", "192.168.1.155")
     )
+    # Must match the model configured in the consuming Livox SDK instance.
+    device_model: Literal["mid360", "mid360s"] = "mid360"
     # Host IP the data is delivered to (where the SDK listens).
     host_ip: str = Field(default_factory=lambda: os.environ.get("DIMOS_MID360_HOST_IP", ""))
     lidar_netns: str = Field(default_factory=lambda: os.environ.get("DIMOS_MID360_NETNS", ""))
@@ -85,6 +106,20 @@ class VirtualMid360Config(NativeModuleConfig):
     setup_network: bool = True
     # Name of the dummy interface the synthetic IPs are aliased onto.
     alias_iface: str = "dimos-mid360"
+
+    @field_validator("alias_iface")
+    @classmethod
+    def _validate_alias_iface(cls, value: str) -> str:
+        """Reject names Linux would fail to create with an opaque netlink error."""
+        encoded = value.encode("utf-8")
+        if not value or len(encoded) > _LINUX_IFACE_NAME_MAX_BYTES:
+            raise ValueError(
+                "alias_iface must be 1-15 bytes to fit Linux IFNAMSIZ; "
+                f"got {value!r} ({len(encoded)} bytes)"
+            )
+        if "/" in value or any(char.isspace() for char in value):
+            raise ValueError("alias_iface cannot contain '/' or whitespace")
+        return value
 
     def to_config_dict(self) -> dict[str, Any]:
         return {k: v for k, v in super().to_config_dict().items() if k not in self.cli_exclude}

@@ -115,6 +115,18 @@
       },
       "parent": []
     },
+    "livox-common": {
+      "flake": false,
+      "locked": {
+        "path": "../../common",
+        "type": "path"
+      },
+      "original": {
+        "path": "../../common",
+        "type": "path"
+      },
+      "parent": []
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1770841267,
@@ -137,6 +149,7 @@
         "fast-lio": "fast-lio",
         "flake-utils": "flake-utils",
         "lcm-extended": "lcm-extended",
+        "livox-common": "livox-common",
         "livox-sdk": "livox-sdk",
         "nixpkgs": "nixpkgs"
       }

@@ -19,14 +19,17 @@ import re
 import time
 from typing import Any, Literal
 
+from dimos_lcm.std_msgs import Bool
 import numpy as np
 import reactivex as rx
 from reactivex import Subject, combine_latest, operators as ops
+from reactivex.disposable import Disposable
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.mapping.map_profile import load_map_profile, map_profile_path
 from dimos.mapping.relocalization.relocalize import (
     relocalize as _relocalize,
     relocalize_with_initial as _relocalize_with_initial,
@@ -78,6 +81,12 @@ class Config(ModuleConfig):
     map_file: str | None = (
         None  # e.g. `-o relocalizationmodule.map_file=go2_hongkong_office_twopass_map`
     )
+    # 旧 Go2 地图没有 profile，默认保持兼容；Mid360 蓝图会开启强制校验。
+    require_map_profile: bool = False
+    expected_sensor_profile: str | None = None
+    expected_preprocess_config_hash: str | None = None
+    expected_extrinsic_version: str | None = None
+    require_navigation_source_health: bool = False
     # 快速 ICP 总开关；关闭后所有重定位都保持原全局 RANSAC 流程。
     fast_icp_enabled: bool = False
     # 有跨运行 JSON 初值时，1 万点即可开始本次运行的第一次快速匹配。
@@ -127,6 +136,7 @@ class RelocalizationModule(Module):
     # 输入：实时累积的当前局部/本次启动地图，通常由 VoxelGridMapper 发布。
     config: Config
     global_map: In[PointCloud2]
+    navigation_source_healthy: In[Bool]
     # 输出：可选发布原始 premap，便于在 Rerun 中看旧地图本体。
     loaded_map: Out[PointCloud2]
     # 输出：把 premap 变换到当前 world 后，与 local 融合得到的导航地图。
@@ -138,6 +148,8 @@ class RelocalizationModule(Module):
         super().__init__(**kwargs)
         # 缓存离线加载的 premap；没有 map_file 时保持 None，模块相当于禁用。
         self._premap: PointCloud2 | None = None
+        # 与地图同目录的 profile；用于阻止不同传感器/外参地图被静默混用。
+        self._map_profile: dict[str, Any] | None = None
         # 控制“点数不够，跳过重定位”日志频率，避免每帧刷屏。
         self._last_skip_log = 0.0
         # 保存并广播最近一次成功的 world <- map 变换；merge 和 TF 发布都依赖它。
@@ -171,11 +183,25 @@ class RelocalizationModule(Module):
         self._trace_last_published_T_map_world: np.ndarray | None = None
         self._trace_last_global_map_roi_ns = 0
         self._trace_last_merged_map_roi_ns = 0
+        self._navigation_source_healthy = not self.config.require_navigation_source_health
+        self._navigation_source_fault_latched = False
 
     @rpc
     def start(self) -> None:
         # 先启动 Module 基类，确保流、RPC 和生命周期资源已经就绪。
         super().start()
+
+        if self.config.require_navigation_source_health:
+            if self.navigation_source_healthy.transport is None:
+                logger.error(
+                    "Navigation-source health is required but its input stream is not connected"
+                )
+            else:
+                self.register_disposable(
+                    Disposable(
+                        self.navigation_source_healthy.subscribe(self._on_navigation_source_health)
+                    )
+                )
 
         # 没有配置 premap 时，不注册任何重定位/merge 订阅，避免误用空地图。
         if not self.config.map_file:
@@ -184,6 +210,7 @@ class RelocalizationModule(Module):
 
         # 将 CLI 传入的名字解析成实际 .pc2.lcm 路径，支持 cwd/repo/data 查找。
         path = resolve_named_path(self.config.map_file, MAP_SUFFIX)
+        self._map_profile = self._load_and_validate_map_profile(path)
         # 从 LCM 二进制文件反序列化出 PointCloud2，作为离线 premap。
         self._premap = PointCloud2.lcm_decode(path.read_bytes())
         # 强制设为 map 坐标系，后续配准得到的是 map <- world。
@@ -234,7 +261,8 @@ class RelocalizationModule(Module):
         premap_pts = self._premap_point_count()
         logger.info(
             f"Relocalization module started: map_file={self.config.map_file!r} "
-            f"premap_pts={premap_pts} loaded_map.frame_id={self._premap.frame_id!r}"
+            f"map_profile={self._map_profile_summary()} premap_pts={premap_pts} "
+            f"loaded_map.frame_id={self._premap.frame_id!r}"
         )
         self._log_relocalization_config()
 
@@ -272,6 +300,11 @@ class RelocalizationModule(Module):
         return self.config.map_file
 
     @rpc
+    def get_current_map_profile(self) -> dict[str, Any] | None:
+        """Return the validated map profile used by this run, if present."""
+        return dict(self._map_profile) if self._map_profile is not None else None
+
+    @rpc
     def get_world_to_map(self) -> Transform | None:
         """Return the latest validated world<-map transform, if available."""
         return self._last_world_to_map_tf
@@ -280,6 +313,66 @@ class RelocalizationModule(Module):
     def is_relocalized(self) -> bool:
         """Whether this run has published a validated world<-map transform."""
         return self._last_world_to_map_tf is not None and self._has_published_tf_this_run
+
+    def _on_navigation_source_health(self, msg: Bool) -> None:
+        """Invalidate the current registration when the source coordinate state faults."""
+        if msg.data:
+            if not self._navigation_source_fault_latched:
+                self._navigation_source_healthy = True
+            return
+
+        self._navigation_source_healthy = False
+        self._navigation_source_fault_latched = True
+        self._last_T_map_world = None
+        self._last_world_to_map_tf = None
+        self._has_published_tf_this_run = False
+        self._pending_cache_record = None
+        self._trace_last_candidate = None
+        self._trace_last_published_T_map_world = None
+        self._world_to_map.on_next(None)
+        # Clear the last merged-map sample held by CostMapper/viewers. The
+        # premap remains loaded, but cannot re-enter navigation until a fresh
+        # process establishes a new validated world<-map transform.
+        self.merged_map.publish(PointCloud2(frame_id=FRAME_WORLD, ts=time.time()))
+        logger.error(
+            "Relocalization invalidated because the external navigation source faulted; "
+            "restart and relocalize before navigation"
+        )
+
+    def _map_profile_summary(self) -> str:
+        if self._map_profile is None:
+            return "legacy/unprofiled"
+        return (
+            f"{self._map_profile['map_id']}:"
+            f"{self._map_profile['sensor_profile']}:"
+            f"{self._map_profile['extrinsic_version']}"
+        )
+
+    def _load_and_validate_map_profile(self, map_path: Path) -> dict[str, Any] | None:
+        """Load the map sidecar and enforce the blueprint's compatibility contract."""
+        profile = load_map_profile(map_path)
+        if profile is None:
+            if self.config.require_map_profile:
+                raise ValueError(
+                    "Map profile is required but missing: "
+                    f"map={map_path} profile={map_profile_path(map_path)}"
+                )
+            logger.warning("Loading legacy map without a sensor profile: map=%s", map_path)
+            return None
+
+        expected = {
+            "sensor_profile": self.config.expected_sensor_profile,
+            "preprocess_config_hash": self.config.expected_preprocess_config_hash,
+            "extrinsic_version": self.config.expected_extrinsic_version,
+        }
+        mismatches = [
+            f"{field}: expected={value!r}, actual={profile.get(field)!r}"
+            for field, value in expected.items()
+            if value is not None and profile.get(field) != value
+        ]
+        if mismatches:
+            raise ValueError("Incompatible map profile: " + "; ".join(mismatches))
+        return profile
 
     @staticmethod
     def _resolve_cache_path(value: str) -> Path:
@@ -562,6 +655,10 @@ class RelocalizationModule(Module):
         return len(msg) >= self._required_local_points()
 
     def _publish_tf(self, tf: Transform | None) -> None:
+        if self.config.require_navigation_source_health and not self._navigation_source_healthy:
+            if tf is not None:
+                logger.error("Discarding relocalization result while navigation source is unsafe")
+            return
         # TEMP: ICP 成败都强制用保存的 T 发布，用于判断狗是否同位置+同朝向
         if _TEMP_FORCE_PUBLISH_SAVED_T:
             tf = self._tf_from_T_map_world(_TEMP_SAVED_T_MAP_WORLD)
@@ -997,8 +1094,10 @@ class RelocalizationModule(Module):
         )
         return new_tf
 
-    def _publish_periodic(self, pair: tuple[int, Transform]) -> None:
+    def _publish_periodic(self, pair: tuple[int, Transform | None]) -> None:
         _, tf = pair
+        if tf is None:
+            return
         # 如果模块还没加载 premap，周期发布没有有效数据，直接退出。
         if self._premap is None:
             return

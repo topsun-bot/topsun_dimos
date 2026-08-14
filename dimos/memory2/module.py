@@ -325,8 +325,13 @@ class Recorder(MemoryModule):
 
     _pose_setters: dict[str, Any] = {}
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._stopping = False
+
     @rpc
     def start(self) -> None:
+        self._stopping = False
         super().start()
 
         if self.config.g.replay:
@@ -375,6 +380,14 @@ class Recorder(MemoryModule):
         if self.config.record_tf:
             self._record_tf()
 
+    @rpc
+    def stop(self) -> None:
+        # CompositeResource owns the SQLite store and stream subscriptions.
+        # Mark teardown before disposing either side so an in-flight callback
+        # cannot report a closed-database error while shutdown is in progress.
+        self._stopping = True
+        super().stop()
+
     def _data_ports(self) -> dict[str, In[Any]]:
         """The In ports to record generically — everything but the tf port."""
         return {name: port for name, port in self.inputs.items() if port is not self.tf}
@@ -393,6 +406,8 @@ class Recorder(MemoryModule):
         """
 
         async def on_msg(stamped: tuple[float, Any]) -> None:
+            if self._stopping:
+                return
             recv_ts, msg = stamped
             ts = self._resolve_ts(name, msg)
             pose = await self._resolve_pose(name, msg, ts)
@@ -403,11 +418,35 @@ class Recorder(MemoryModule):
                     ts,
                     getattr(msg, "ts", None),
                 )
-            stream.append(msg, ts=ts, pose=pose, tags={"reception_ts": recv_ts})
+            self._append_observation(
+                stream,
+                msg,
+                ts=ts,
+                pose=pose,
+                tags={"reception_ts": recv_ts},
+            )
 
         # Stamp arrival time before the coalescing dispatch queue.
         stamped = input_topic.pure_observable().pipe(ops.map(lambda msg: (time.time(), msg)))
         self.process_observable(stamped, on_msg)
+
+    def _append_observation(
+        self,
+        stream: Stream[Any],
+        msg: Any,
+        *,
+        ts: float,
+        pose: Pose | None,
+        tags: dict[str, Any],
+    ) -> None:
+        """Append one item, ignoring only a closed-store race during teardown."""
+        if self._stopping:
+            return
+        try:
+            stream.append(msg, ts=ts, pose=pose, tags=tags)
+        except sqlite3.ProgrammingError:
+            if not self._stopping:
+                raise
 
     def _prepare_streams(self) -> None:
         """On APPEND, drop the streams this recorder is about to (re)write — the
@@ -457,11 +496,14 @@ class Recorder(MemoryModule):
         tf_stream = self.store.stream("tf", TFMessage)
 
         def on_tf(msg: TFMessage) -> None:
+            if self._stopping:
+                return
             try:
                 for transform in msg.transforms:
                     tf_stream.append(TFMessage(transform), ts=transform.ts, pose=None)
             except sqlite3.ProgrammingError:
                 # A late LCM callback raced teardown and hit the closed store.
-                pass
+                if not self._stopping:
+                    raise
 
         self.register_disposable(Disposable(self.tf.subscribe(on_tf)))

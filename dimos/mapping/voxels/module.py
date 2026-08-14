@@ -14,16 +14,24 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import TYPE_CHECKING, Any
 
+from dimos_lcm.std_msgs import Bool  # type: ignore[import-untyped]
+from reactivex.disposable import Disposable
+
 from dimos.core.core import rpc
-from dimos.core.module import ModuleConfig
+from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.mapping.voxels.grid import VoxelGrid
 from dimos.memory2.module import StreamModule
 from dimos.memory2.stream import Stream
 from dimos.memory2.transform import Transformer
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -114,3 +122,91 @@ class VoxelGridMapper(StreamModule[PointCloud2, PointCloud2]):
     @rpc
     def stop(self) -> None:
         super().stop()
+
+
+class HealthGatedVoxelGridMapper(VoxelGridMapper):
+    """Clear run-local voxels permanently when an external source faults.
+
+    This variant is used only when the point cloud and pose share one external
+    coordinate source. A false health event makes every accumulated voxel
+    untrustworthy, so the map cannot be reused until the stack restarts.
+    """
+
+    navigation_source_healthy: In[Bool]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._grid_lock = threading.Lock()
+        self._grid: VoxelGrid | None = None
+        self._frame_count = 0
+        self._source_healthy = False
+        self._source_fault_latched = False
+
+    def _make_grid(self) -> VoxelGrid:
+        fields = set(VoxelGridMapperConfig.model_fields) - set(ModuleConfig.model_fields)
+        fields.discard("emit_every")
+        return VoxelGrid(**self.config.model_dump(include=fields))
+
+    @rpc
+    def start(self) -> None:
+        # StreamModule requires exactly one input. This safety variant has a
+        # second health input and therefore owns the grid subscriptions itself.
+        Module.start(self)
+        if self.navigation_source_healthy.transport is None:
+            raise RuntimeError("HealthGatedVoxelGridMapper requires navigation_source_healthy")
+        with self._grid_lock:
+            self._grid = self._make_grid()
+        self.register_disposable(
+            Disposable(self.navigation_source_healthy.subscribe(self._on_navigation_source_health))
+        )
+        self.register_disposable(Disposable(self.lidar.subscribe(self._on_lidar)))
+
+    @rpc
+    def stop(self) -> None:
+        with self._grid_lock:
+            grid, self._grid = self._grid, None
+        if grid is not None:
+            grid.dispose()
+        Module.stop(self)
+
+    def _on_navigation_source_health(self, msg: Bool) -> None:
+        if msg.data:
+            with self._grid_lock:
+                if not self._source_fault_latched:
+                    self._source_healthy = True
+            return
+
+        with self._grid_lock:
+            if self._source_fault_latched:
+                return
+            self._source_healthy = False
+            self._source_fault_latched = True
+            cleared_frame_count = self._frame_count
+            self._frame_count = 0
+            grid, self._grid = self._grid, None
+            cleared_voxel_count = grid.size() if grid is not None else 0
+        if grid is not None:
+            grid.dispose()
+
+        # One terminal empty update invalidates cached map samples. No later
+        # cloud is accepted in this process, even if health turns true again.
+        self.global_map.publish(PointCloud2(frame_id=self.config.frame_id, ts=time.time()))
+        logger.error(
+            "Navigation source fault latched; cleared run-local voxel map "
+            "(frames=%d, voxels=%d). Restart is required.",
+            cleared_frame_count,
+            cleared_voxel_count,
+        )
+
+    def _on_lidar(self, msg: PointCloud2) -> None:
+        output: PointCloud2 | None = None
+        with self._grid_lock:
+            if not self._source_healthy or self._source_fault_latched or self._grid is None:
+                return
+            self._grid.add_frame(msg)
+            self._frame_count += 1
+            emit_every = self.config.emit_every
+            if emit_every > 0 and self._frame_count % emit_every == 0:
+                output = self._grid.get_global_pointcloud2()
+        if output is not None:
+            self.global_map.publish(output)

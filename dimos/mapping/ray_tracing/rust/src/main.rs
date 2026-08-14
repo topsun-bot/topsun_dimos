@@ -49,6 +49,10 @@ struct RayTracingVoxelMap {
 
     map: VoxelMap,
     poses: VecDeque<(f64, Vector3<f32>, UnitQuaternion<f32>)>,
+    // LCM inputs are handled independently, so a cloud can be dispatched a
+    // few milliseconds before the pose that was published first. Retain only
+    // the newest unmatched cloud and retry it when odometry advances.
+    pending_lidar: Option<PointCloud2>,
     frame_count: u32,
     batch_points: Vec<(f32, f32, f32)>,
     batch_origins: Vec<(f32, f32, f32)>,
@@ -68,18 +72,28 @@ impl RayTracingVoxelMap {
                 )),
             ),
         );
+
+        if let Some(pending) = self.pending_lidar.take() {
+            self.on_lidar(pending).await;
+        }
     }
 
     async fn on_lidar(&mut self, msg: PointCloud2) {
         // Register with the pose nearest the cloud stamp, never a stale one.
-        let Some((translation, rotation)) = nearest_pose(&self.poses, time_secs(&msg.header.stamp))
-        else {
+        let cloud_stamp = time_secs(&msg.header.stamp);
+        let Some((translation, rotation)) = nearest_pose(&self.poses, cloud_stamp) else {
+            let replaced = retain_latest_cloud(&mut self.pending_lidar, msg);
             warn_throttled!(
                 Duration::from_secs(1),
-                "No odometry within tolerance of the cloud stamp, dropped a cloud.",
+                cloud_stamp,
+                replaced,
+                "No matching odometry yet; retained the latest cloud for retry.",
             );
             return;
         };
+        // A current cloud supersedes any older unmatched one. The queue is
+        // deliberately latest-wins so delayed odometry cannot create backlog.
+        self.pending_lidar = None;
         let origin = (translation.x, translation.y, translation.z);
 
         let voxel_size = self.config.voxel_size;
@@ -236,6 +250,11 @@ fn nearest_pose(
     }
 }
 
+/// Keep one unmatched cloud. Returns whether an older cloud was replaced.
+fn retain_latest_cloud(pending: &mut Option<PointCloud2>, msg: PointCloud2) -> bool {
+    pending.replace(msg).is_some()
+}
+
 struct ExtractError(&'static str);
 impl std::fmt::Display for ExtractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -384,6 +403,17 @@ mod tests {
             "stale poses must not register a cloud"
         );
         assert!(nearest_pose(&VecDeque::new(), 1.0).is_none());
+    }
+
+    #[test]
+    fn pending_cloud_queue_is_bounded_and_latest_wins() {
+        let mut pending = None;
+        let first = make_cloud(Vec::new(), 0, "sensor", Time { sec: 1, nsec: 0 });
+        let second = make_cloud(Vec::new(), 0, "sensor", Time { sec: 2, nsec: 0 });
+
+        assert!(!retain_latest_cloud(&mut pending, first));
+        assert!(retain_latest_cloud(&mut pending, second));
+        assert_eq!(time_secs(&pending.unwrap().header.stamp), 2.0);
     }
 
     #[test]

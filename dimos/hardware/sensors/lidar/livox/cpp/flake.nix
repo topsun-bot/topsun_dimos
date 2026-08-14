@@ -23,13 +23,13 @@
 
         livox-sdk2 = pkgs.stdenv.mkDerivation rec {
           pname = "livox-sdk2";
-          version = "1.2.5";
+          version = "1.3.1";
 
           src = pkgs.fetchFromGitHub {
             owner = "Livox-SDK";
             repo = "Livox-SDK2";
             rev = "v${version}";
-            hash = "sha256-NGscO/vLiQ17yQJtdPyFzhhMGE89AJ9kTL5cSun/bpU=";
+            hash = "sha256-XM2jhytXbLVd3jkeZrpxDjegPWPiXCaVQ3nYm1DD928=";
           };
 
           # macOS socket fixes (SO_RCVBUF too large, broadcast bind fails).

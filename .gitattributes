@@ -24,6 +24,11 @@ docs/assets/dimensional-logo-master-transparent.png -filter -diff -merge
 docs/assets/favicon.png -filter -diff -merge
 # Tiny official recharge marker must remain clonable without the upstream LFS service.
 jiangtao/aruco_recharge_20250624/aruco_id0.png -filter -diff -merge binary
+# Mid360 simulation recordings and generated relocalization maps are binary
+# validation assets. Keep them reproducible without inflating normal Git blobs.
+jiangtao/artifacts/mid360/**/*.db filter=lfs diff=lfs merge=lfs -text binary
+jiangtao/artifacts/mid360/**/*.lcm filter=lfs diff=lfs merge=lfs -text binary
+jiangtao/artifacts/mid360/**/*-odom.csv filter=lfs diff=lfs merge=lfs -text
 # DimSim scene data and agent model
 misc/DimSim/public/sims/*.json filter=lfs diff=lfs merge=lfs -text
 misc/DimSim/public/embodiment/*.glb filter=lfs diff=lfs merge=lfs -text

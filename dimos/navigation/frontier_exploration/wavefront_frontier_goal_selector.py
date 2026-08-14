@@ -91,6 +91,7 @@ class WavefrontConfig(ModuleConfig):
     info_gain_threshold: float = 0.03
     num_no_gain_attempts: int = 2
     goal_timeout: float = 15.0
+    require_navigation_source_health: bool = False
 
 
 class WavefrontFrontierExplorer(Module):
@@ -117,6 +118,7 @@ class WavefrontFrontierExplorer(Module):
     explore_cmd: In[Bool]
     stop_explore_cmd: In[Bool]
     stop_movement: In[Bool]
+    navigation_source_healthy: In[Bool]
 
     # LCM outputs
     goal_request: Out[PoseStamped]
@@ -150,6 +152,8 @@ class WavefrontFrontierExplorer(Module):
         self.exploration_active = False
         self.exploration_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
+        self._navigation_source_healthy = not self.config.require_navigation_source_health
+        self._navigation_source_fault_latched = False
 
     @rpc
     def start(self) -> None:
@@ -176,6 +180,15 @@ class WavefrontFrontierExplorer(Module):
         if self.stop_movement.transport is not None:
             unsub = self.stop_movement.subscribe(self._on_stop_movement)
             self.register_disposable(Disposable(unsub))
+
+        if self.config.require_navigation_source_health:
+            if self.navigation_source_healthy.transport is None:
+                logger.error(
+                    "Navigation-source health is required but its input stream is not connected"
+                )
+            else:
+                unsub = self.navigation_source_healthy.subscribe(self._on_navigation_source_health)
+                self.register_disposable(Disposable(unsub))
 
     @rpc
     def stop(self) -> None:
@@ -212,6 +225,28 @@ class WavefrontFrontierExplorer(Module):
         if msg.data and self.exploration_active:
             logger.info("WavefrontFrontierExplorer: stop_movement received, stopping exploration")
             self.stop_exploration()
+
+    def _on_navigation_source_health(self, msg: Bool) -> None:
+        """Stop exploration on source failure and keep it locked until restart."""
+        if msg.data:
+            if not self._navigation_source_fault_latched:
+                self._navigation_source_healthy = True
+            return
+
+        self._navigation_source_healthy = False
+        self._navigation_source_fault_latched = True
+        if not self.exploration_active:
+            return
+        self.exploration_active = False
+        self.no_gain_counter = 0
+        self.stop_event.set()
+        if (
+            self.exploration_thread
+            and self.exploration_thread.is_alive()
+            and threading.current_thread() != self.exploration_thread
+        ):
+            self.exploration_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+        logger.error("Exploration stopped because the external navigation source faulted")
 
     def _count_costmap_information(self, costmap: OccupancyGrid) -> int:
         """
@@ -710,6 +745,10 @@ class WavefrontFrontierExplorer(Module):
         Returns:
             bool: True if exploration started, False if already exploring
         """
+        if self.config.require_navigation_source_health and not self._navigation_source_healthy:
+            logger.error("Cannot start exploration while external navigation source is unhealthy")
+            return False
+
         if self.exploration_active:
             logger.warning("Exploration already active")
             return False

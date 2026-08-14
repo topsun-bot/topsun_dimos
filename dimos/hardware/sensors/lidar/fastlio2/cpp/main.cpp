@@ -396,6 +396,7 @@ int main(int argc, char** argv) {
     // Livox hardware config
     std::string host_ip = mod.arg("host_ip", "192.168.1.5");
     std::string lidar_ip = mod.arg("lidar_ip", "192.168.1.155");
+    std::string device_model = mod.arg("device_model", "mid360");
     g_frequency = mod.arg_float("frequency", 10.0f);
     g_frame_id = mod.arg_required("frame_id");
     g_sensor_frame_id = mod.arg_required("sensor_frame_id");
@@ -431,7 +432,7 @@ int main(int argc, char** argv) {
         printf("[fastlio2] lidar topic: %s\n", g_lidar_topic.empty() ? "(disabled)" : g_lidar_topic.c_str());
         printf("[fastlio2] odometry topic: %s\n", g_odometry_topic.empty() ? "(disabled)" : g_odometry_topic.c_str());
         printf("[fastlio2] acc_cov: %.3f  filter_size_surf: %.3f\n", params.acc_cov, params.filter_size_surf);
-        printf("[fastlio2] host_ip: %s  lidar_ip: %s  frequency: %.1f Hz\n", host_ip.c_str(), lidar_ip.c_str(), g_frequency);
+        printf("[fastlio2] host_ip: %s  lidar_ip: %s  model: %s  frequency: %.1f Hz\n", host_ip.c_str(), lidar_ip.c_str(), device_model.c_str(), g_frequency);
         printf("[fastlio2] pointcloud_freq: %.1f Hz  odom_freq: %.1f Hz\n", pointcloud_freq, odom_freq);
     }
 
@@ -467,7 +468,7 @@ int main(int argc, char** argv) {
 
     // The Livox SDK opens UDP sockets and dispatches via its own callback
     // threads; the main loop below consumes what's queued.
-    if (!livox_common::init_livox_sdk(host_ip, lidar_ip, ports, debug)) {
+    if (!livox_common::init_livox_sdk(host_ip, lidar_ip, ports, device_model, debug)) {
         return 1;
     }
     SetLivoxLidarPointCloudCallBack(on_point_cloud, nullptr);

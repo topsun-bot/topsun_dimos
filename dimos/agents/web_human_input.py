@@ -52,25 +52,29 @@ class WebInput(Module):
             audio_subject=audio_subject,
         )
 
-        normalizer = AudioNormalizer()
-
-        # Here to prevent unwanted imports in the file.
-        from dimos.stream.audio.stt.node_whisper import WhisperNode
-
-        stt_node = WhisperNode()
-
-        # Connect audio pipeline: browser audio → normalizer → whisper
-        normalizer.consume_audio(audio_subject.pipe(ops.share()))
-        stt_node.consume_audio(normalizer.emit_audio())
-
         # Subscribe to both text input sources
         # 1. Direct text from web interface
         unsub = self._web_interface.query_stream.subscribe(self._human_transport.publish)
         self.register_disposable(unsub)
 
-        # 2. Transcribed text from STT
-        unsub = stt_node.emit_text().subscribe(self._human_transport.publish)
-        self.register_disposable(unsub)
+        # 2. Transcribed text from STT. Browser text input remains usable on
+        # headless/simulation installs that intentionally omit Whisper.
+        try:
+            # Here to prevent unwanted imports in the file.
+            from dimos.stream.audio.stt.node_whisper import WhisperNode
+
+            normalizer = AudioNormalizer()
+            stt_node = WhisperNode()
+        except ImportError as exc:
+            logger.warning(
+                "WebInput microphone transcription disabled; direct web text input remains "
+                f"available: {exc}"
+            )
+        else:
+            normalizer.consume_audio(audio_subject.pipe(ops.share()))
+            stt_node.consume_audio(normalizer.emit_audio())
+            unsub = stt_node.emit_text().subscribe(self._human_transport.publish)
+            self.register_disposable(unsub)
 
         self._thread = Thread(target=self._web_interface.run, daemon=True)
         self._thread.start()

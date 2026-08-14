@@ -147,8 +147,14 @@ class ShmReader:
         odom_array[7] = timestamp
         self._increment_seq(2)
 
-    def write_lidar(self, lidar_msg: PointCloud2) -> None:
-        data = pickle.dumps(lidar_msg)
+    def write_lidar(
+        self,
+        points: NDArray[Any],
+        timestamp: float,
+        frame_id: str = "world",
+    ) -> None:
+        """Write a NumPy lidar payload without importing Open3D in MuJoCo."""
+        data = pickle.dumps((points.astype(np.float32, copy=False), timestamp, frame_id))
         data_len = len(data)
 
         if data_len > self.shm.lidar.size:
@@ -258,8 +264,15 @@ class ShmWriter:
                 data = bytes(lidar_array)
 
                 try:
-                    lidar_msg = pickle.loads(data)
-                    return lidar_msg, seq
+                    payload = pickle.loads(data)
+                    if isinstance(payload, PointCloud2):
+                        return payload, seq
+                    points, timestamp, frame_id = payload
+                    return PointCloud2.from_numpy(
+                        np.asarray(points, dtype=np.float32),
+                        frame_id=str(frame_id),
+                        timestamp=float(timestamp),
+                    ), seq
                 except Exception as e:
                     logger.error(f"Failed to deserialize lidar message: {e}")
         return None, 0

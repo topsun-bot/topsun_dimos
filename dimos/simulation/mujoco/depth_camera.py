@@ -42,8 +42,6 @@ def depth_image_to_point_cloud(
     Returns:
         numpy array of 3D points in world coordinates, shape (N, 3)
     """
-    import open3d as o3d  # type: ignore[import-untyped]
-
     height, width = depth_image.shape
 
     # Calculate camera intrinsics similar to StackOverflow approach
@@ -52,21 +50,17 @@ def depth_image_to_point_cloud(
     cx = width / 2  # principal point x
     cy = height / 2  # principal point y
 
-    # Create Open3D camera intrinsics
-    cam_intrinsics = o3d.camera.PinholeCameraIntrinsic(width, height, f, f, cx, cy)
-
-    # Convert numpy depth array to Open3D Image
-    o3d_depth = o3d.geometry.Image(depth_image.astype(np.float32))
-
-    # Create point cloud from depth image using Open3D
-    o3d_cloud = o3d.geometry.PointCloud.create_from_depth_image(
-        o3d_depth,
-        cam_intrinsics,
-        depth_scale=1.0,
+    depth = depth_image.astype(np.float32, copy=False)
+    valid_depth = np.isfinite(depth) & (depth > 0.0)
+    rows, cols = np.nonzero(valid_depth)
+    z = depth[rows, cols]
+    camera_points = np.column_stack(
+        (
+            (cols.astype(np.float32) - cx) * z / f,
+            (rows.astype(np.float32) - cy) * z / f,
+            z,
+        )
     )
-
-    # Convert Open3D point cloud to numpy array
-    camera_points: NDArray[Any] = np.asarray(o3d_cloud.points)
 
     if camera_points.size == 0:
         return np.array([]).reshape(0, 3)

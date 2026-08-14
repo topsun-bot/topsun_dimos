@@ -93,6 +93,7 @@ class MujocoConnection:
 
         self._stream_threads: list[threading.Thread] = []
         self._stop_events: list[threading.Event] = []
+        self._stderr_thread: threading.Thread | None = None
         self._is_cleaned_up = False
 
     camera_info_static: CameraInfo = CameraInfo.from_fov(
@@ -115,9 +116,15 @@ class MujocoConnection:
             # It needs libpython on the dylib search path; uv-installed Pythons
             # use @rpath which doesn't always resolve inside venvs, so we
             # point DYLD_LIBRARY_PATH at the real libpython directory.
-            executable = sys.executable if sys.platform != "darwin" else "mjpython"
+            use_mjpython = sys.platform == "darwin" and not self.global_config.dimsim_headless
+            executable = "mjpython" if use_mjpython else sys.executable
             env = os.environ.copy()
             if sys.platform == "darwin":
+                # mjpython is an app bundle. After an abnormal exit macOS may
+                # otherwise block glfwInit() behind a hidden window-restore
+                # dialog, leaving the simulator alive but producing no data.
+                env["ApplePersistenceIgnoreState"] = "YES"
+                env["NSQuitAlwaysKeepsWindows"] = "NO"
                 # on some systems mujoco looks in the wrong place for shared libraries. So we force it look in the right place
                 libdir = Path(sysconfig.get_config_var("LIBDIR") or "")
                 if libdir.is_dir():
@@ -129,6 +136,12 @@ class MujocoConnection:
                 stderr=subprocess.PIPE,
                 env=env,
             )
+            self._stderr_thread = threading.Thread(
+                target=self._monitor_process_stderr,
+                name="mujoco-stderr-monitor",
+                daemon=True,
+            )
+            self._stderr_thread.start()
 
         except Exception as e:
             self.shm_data.cleanup()
@@ -163,6 +176,24 @@ class MujocoConnection:
         # Timeout
         self.stop()
         raise RuntimeError("MuJoCo process failed to start (timeout)")
+
+    def _monitor_process_stderr(self) -> None:
+        """Drain simulator stderr and preserve the reason for an early exit."""
+        process = self.process
+        if process is None or process.stderr is None:
+            return
+        try:
+            for raw_line in iter(process.stderr.readline, b""):
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    logger.warning("MuJoCo subprocess stderr: %s", line)
+        except (OSError, ValueError):
+            if not self._is_cleaned_up:
+                logger.exception("Failed while reading MuJoCo subprocess stderr")
+        finally:
+            return_code = process.poll()
+            if return_code not in (None, 0) and not self._is_cleaned_up:
+                logger.error("MuJoCo subprocess exited unexpectedly with code %d", return_code)
 
     def stop(self) -> None:
         if self._is_cleaned_up:
@@ -211,6 +242,10 @@ class MujocoConnection:
                 logger.error(f"Error stopping MuJoCo process: {e}")
 
             self.process = None
+
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+        self._stderr_thread = None
 
         # Clean up shared memory
         if self.shm_data:

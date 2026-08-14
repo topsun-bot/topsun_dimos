@@ -59,6 +59,7 @@ from dimos.spec import perception
 # Human-readable enums; the C++ binary maps these strings to FAST-LIO's int codes.
 LidarType = Literal["livox", "velodyne", "ouster"]
 TimestampUnit = Literal["second", "millisecond", "microsecond", "nanosecond"]
+LivoxDeviceModel = Literal["mid360", "mid360s"]
 
 
 class FastLio2Config(NativeModuleConfig):
@@ -70,6 +71,7 @@ class FastLio2Config(NativeModuleConfig):
     # DIMOS_FASTLIO_HOST_IP.
     host_ip: str | None = Field(default_factory=lambda: os.environ.get("DIMOS_FASTLIO_HOST_IP"))
     lidar_ip: str | None = Field(default_factory=lambda: os.environ.get("DIMOS_FASTLIO_LIDAR_IP"))
+    device_model: LivoxDeviceModel = "mid360"
     frequency: float = 10.0
 
     # Odometry is published as frame_id (fixed) -> sensor_frame_id (moving sensor),

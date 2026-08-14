@@ -32,6 +32,8 @@ binary as plain CLI args (no YAML).
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import shlex
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
@@ -70,20 +72,37 @@ LidarType = Literal["avia", "velodyne", "ouster", "hesai", "unilidar"]
 TimestampUnit = Literal["second", "millisecond", "microsecond", "nanosecond"]
 # iVox local-map neighbour stencil.
 IvoxNearbyType = Literal["center", "nearby6", "nearby18", "nearby26"]
+LivoxDeviceModel = Literal["mid360", "mid360s"]
+
+
+def _native_build_command() -> str:
+    """Build from either a Git checkout or the rsynced Orin deployment tree."""
+    lidar_root = Path(__file__).resolve().parents[1]
+    livox_root = lidar_root / "livox" / "cpp"
+    common_root = lidar_root / "common"
+    return (
+        "nix build -L .#pointlio_native --no-write-lock-file "
+        "--fallback --option connect-timeout 1 "
+        f"--override-input livox-sdk {shlex.quote(f'path:{livox_root}')} "
+        f"--override-input livox-common {shlex.quote(f'path:{common_root}')}"
+    )
 
 
 class PointLioConfig(NativeModuleConfig):
     cwd: str | None = "cpp"
     executable: str = "result/bin/pointlio_native"
-    build_command: str | None = "nix build -L .#pointlio_native"
+    build_command: str | None = Field(default_factory=_native_build_command)
     # lidar_ip required; host_ip optional (auto-derived from lidar_ip's subnet).
     # Both fall back to DIMOS_POINTLIO_LIDAR_IP / DIMOS_POINTLIO_HOST_IP.
     host_ip: str | None = Field(default_factory=lambda: os.environ.get("DIMOS_POINTLIO_HOST_IP"))
     lidar_ip: str | None = Field(default_factory=lambda: os.environ.get("DIMOS_POINTLIO_LIDAR_IP"))
+    device_model: LivoxDeviceModel = "mid360"
     frequency: float = 10.0
 
-    # Odometry is published as frame_id (fixed) -> sensor_frame_id (moving sensor),
-    # and also broadcast on TF. The point cloud is stamped with sensor_frame_id
+    # Odometry is published as frame_id (fixed) -> sensor_frame_id. The native
+    # Point-LIO body cloud has lidar->IMU extrinsics applied and uses this same
+    # frame label. Existing blueprints retain the historical default name; new
+    # integrations should set it to their actual IMU/body frame explicitly.
     frame_id: str = FRAME_ODOM
     sensor_frame_id: str = "mid360_link"
 
@@ -92,7 +111,13 @@ class PointLioConfig(NativeModuleConfig):
     main_freq: float = 5000.0
 
     pointcloud_freq: float = 10.0
-    odom_freq: float = 30.0
+    # This is a publication ceiling, not an IMU-rate predictor. The wrapped
+    # Point-LIO core exposes a new corrected state only when a lidar frame has
+    # been processed, so 10 Hz avoids re-publishing one state as fresh odometry.
+    odom_freq: float = 10.0
+    # Disable this when another module owns the dynamic world -> base_link TF.
+    # Point-LIO still publishes odometry; only its direct TF relay is disabled.
+    publish_tf: bool = True
 
     debug: bool = False
 
@@ -177,9 +202,10 @@ class PointLio(NativeModule, perception.Lidar, perception.Odometry):
     def start(self) -> None:
         self._validate_network()
         super().start()
-        self.register_disposable(
-            Disposable(self.odometry.transport.subscribe(self._on_odom_for_tf, self.odometry))
-        )
+        if self.config.publish_tf:
+            self.register_disposable(
+                Disposable(self.odometry.transport.subscribe(self._on_odom_for_tf, self.odometry))
+            )
 
     def _on_odom_for_tf(self, msg: Odometry) -> None:
         self.tf.publish(

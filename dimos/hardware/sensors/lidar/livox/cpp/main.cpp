@@ -240,6 +240,7 @@ int main(int argc, char** argv) {
     // Optional config args
     std::string host_ip = mod.arg("host_ip", "192.168.1.5");
     std::string lidar_ip = mod.arg("lidar_ip", "192.168.1.155");
+    std::string device_model = mod.arg("device_model", "mid360");
     g_frequency = mod.arg_float("frequency", 10.0f);
     g_frame_id = mod.arg("frame_id", "lidar_link");
     g_imu_frame_id = mod.arg("imu_frame_id", "imu_link");
@@ -261,8 +262,8 @@ int main(int argc, char** argv) {
     printf("[mid360] Starting native Livox Mid-360 module\n");
     printf("[mid360] lidar topic: %s\n", g_lidar_topic.c_str());
     printf("[mid360] imu topic: %s\n", g_imu_topic.empty() ? "(disabled)" : g_imu_topic.c_str());
-    printf("[mid360] host_ip: %s  lidar_ip: %s  frequency: %.1f Hz\n",
-           host_ip.c_str(), lidar_ip.c_str(), g_frequency);
+    printf("[mid360] host_ip: %s  lidar_ip: %s  model: %s  frequency: %.1f Hz\n",
+           host_ip.c_str(), lidar_ip.c_str(), device_model.c_str(), g_frequency);
 
     // Signal handlers
     signal(SIGTERM, signal_handler);
@@ -277,7 +278,7 @@ int main(int argc, char** argv) {
     g_lcm = &lcm;
 
     // Init Livox SDK (in-memory config, no temp files)
-    if (!livox_common::init_livox_sdk(host_ip, lidar_ip, ports)) {
+    if (!livox_common::init_livox_sdk(host_ip, lidar_ip, ports, device_model)) {
         return 1;
     }
 
