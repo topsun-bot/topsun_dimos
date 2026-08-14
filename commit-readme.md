@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| Mid360 costmap 高度带裁切（路径不可达修复） | `30d98401` |
 | 旋转 settle 失败中止搜索 / worker GlobalConfig 全量同步 | `a3edc2eef` |
 | 合并 upstream/main（99 commits，0709~0729）前的基线 | `dde106238` |
 | spatial memory search V1 默认参数 | `28796439d` |
@@ -44,6 +45,56 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 30d98401 — fix(go2): clip Mid360 costmap projection to travel height band
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-08-14 22:09:15 +0800 |
+| **分支** | `codex/mid360-navigation-source` |
+| **作者** | `jiang.tao` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/mapping/costmapper.py` | 新增投影高度带裁切：3D→2D 投影前裁掉通行带之外的点，地面基准由最新 odom base z 减站高动态推算，odom 未到时 fail-open |
+| `dimos/mapping/pointclouds/occupancy.py` | `height_cost` 新增可选 `overhead_cutoff`：仅天花板回波的格子标 unknown 而非地形（默认关闭） |
+| `dimos/robot/unitree/go2/blueprints/smart/unitree_go2_mid360.py` | costmap 配置高度带 下0.10/上0.50m、站高 0.30m、起步安全半径 0.6m，支持 `DIMOS_MID360_*` env 覆盖 |
+| `dimos/mapping/test_costmapper_projection_band.py` | 新增：静态/odom 地面基准、无 odom fail-open、默认关闭行为不变 4 个用例 |
+| `dimos/robot/unitree/go2/test_mid360_costmap_projection.py` | 新增仅天花板邻格用例：旧行为出假坡墙、`overhead_cutoff` 后可通行 |
+| `dimos/mapping/test_costmapper_diagnostics.py` | trace 元数据期望值补 `overhead_cutoff` 字段 |
+
+**改进点**
+
+1. Mid360 是 360° 雷达，会把天花板/高处物体扫进 3D 地图；`height_cost` 把"仅天花板"格子当地形，平滑在其周围伪造陡坡墙，把 costmap 切成不连通碎块，表现为点击目标后回复"路径不可达"。
+2. 只在 2D 投影前裁切、3D 地图与重定位输入保持完整；地图 preprocess hash 未变，已建的图仍然有效。
+3. Point-LIO world 原点在 IMU 启动位姿处、地面不在 z=0，故地面基准用 odom 动态推算，站立/趴下启动均正确。真实矮障碍（≤0.5m）仍在带内，不会被误裁。
+
+**用法**
+
+```bash
+# Orin 上正常启动即可，默认已启用高度带
+dimos run unitree-go2-mid360
+
+# 现场调参（可选）
+export DIMOS_MID360_COSTMAP_BAND_BELOW=0.10   # 地面以下保留(米)
+export DIMOS_MID360_COSTMAP_BAND_ABOVE=0.50   # 地面以上保留(米)
+export DIMOS_MID360_STANDING_HEIGHT=0.30      # base_link 名义站高(米)
+export DIMOS_MID360_INITIAL_SAFE_RADIUS=0.6   # 起步安全半径(米)
+```
+
+启动后日志应出现 `CostMapper height band active: [x, y]m (floor_z=...)`，站立启动 floor_z 约 -0.4。
+
+**回滚**
+
+```bash
+git checkout 5fe02a74 -- dimos/mapping/costmapper.py dimos/mapping/pointclouds/occupancy.py dimos/robot/unitree/go2/blueprints/smart/unitree_go2_mid360.py
+# 或
+git reset --hard 5fe02a74
+```
+
+---
 
 ### f7edeb1f — docs(plan): expand Go2 odom fidelity rotation state machine and bounded recovery
 
