@@ -63,6 +63,17 @@ _MID360_MAP_VOXEL_SIZE_M = float(
 _MID360_VIEWER_MIN_HEIGHT_M = float(os.environ.get("DIMOS_MID360_VIEWER_MIN_HEIGHT_M", "-0.05"))
 _MID360_VIEWER_MAX_HEIGHT_M = float(os.environ.get("DIMOS_MID360_VIEWER_MAX_HEIGHT_M", "1.50"))
 _MID360_GLOBAL_MAP_EMIT_EVERY = int(os.environ.get("DIMOS_MID360_GLOBAL_MAP_EMIT_EVERY", "10"))
+# costmap 投影高度带(相对地面, 米). Mid360 会扫到天花板/高处物体, 若进入
+# 2D 投影会被 height_cost 当成地形并在平滑后形成假坡墙, 把 costmap 切成
+# 不连通碎块(表现为"路径不可达"). 带外的点只从投影里裁掉, 3D 地图完整.
+_MID360_COSTMAP_BAND_BELOW_M = float(os.environ.get("DIMOS_MID360_COSTMAP_BAND_BELOW", "0.10"))
+_MID360_COSTMAP_BAND_ABOVE_M = float(os.environ.get("DIMOS_MID360_COSTMAP_BAND_ABOVE", "0.50"))
+# base_link 中心距地面的名义站高. Point-LIO world 原点在 IMU 启动位姿,
+# 地面不在 z=0, 因此用最新 odom 的 base z 减去站高动态推算地面.
+_MID360_STANDING_HEIGHT_M = float(os.environ.get("DIMOS_MID360_STANDING_HEIGHT", "0.30"))
+# Mid360 自体盒会滤掉近场回波, 机器人起步位置周围默认是 unknown;
+# 起步小半径标记 free, 避免起点被未知/膨胀自锁.
+_MID360_INITIAL_SAFE_RADIUS_M = float(os.environ.get("DIMOS_MID360_INITIAL_SAFE_RADIUS", "0.6"))
 _MID360_SIM_RELOCALIZATION_MIN_LOCAL_POINTS = 5_000
 if _MID360_VIEWER_MIN_HEIGHT_M > _MID360_VIEWER_MAX_HEIGHT_M:
     raise ValueError(
@@ -210,7 +221,13 @@ _mid360_simulation_map = HealthGatedVoxelGridMapper.blueprint(
     emit_every=_MID360_GLOBAL_MAP_EMIT_EVERY,
 )
 
-_mid360_costmap = CostMapper.blueprint(require_navigation_source_health=True)
+_mid360_costmap = CostMapper.blueprint(
+    require_navigation_source_health=True,
+    projection_band_below_m=_MID360_COSTMAP_BAND_BELOW_M,
+    projection_band_above_m=_MID360_COSTMAP_BAND_ABOVE_M,
+    robot_standing_height_m=_MID360_STANDING_HEIGHT_M,
+    initial_safe_radius_meters=_MID360_INITIAL_SAFE_RADIUS_M,
+)
 
 # First-run validation stack. It intentionally contains no Go2 connection,
 # planner, or movement manager, so it cannot publish robot motion commands.

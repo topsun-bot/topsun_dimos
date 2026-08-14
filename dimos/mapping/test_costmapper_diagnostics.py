@@ -62,5 +62,6 @@ def test_costmapper_trace_records_reproducible_input_and_algorithm() -> None:
         "can_climb": 0.12,
         "ignore_noise": 0.03,
         "smoothing": 0.5,
+        "overhead_cutoff": None,
     }
     assert fields["initial_safe_radius_meters"] == 0.4

@@ -138,6 +138,11 @@ class HeightCostConfig(OccupancyConfig):
     can_climb: float = 0.15
     ignore_noise: float = 0.05
     smoothing: float = 1.0
+    # 仅有高处点的格子(格内最低点高于该绝对 z 值)视为悬空物, 标 unknown
+    # 而不是当作地形高度. can_pass_under 只对"同格同时有地面和天花板"生效,
+    # 360 度雷达(如 Mid360)常出现只有天花板回波的格子, 若当地形会让平滑在
+    # 其周围伪造陡坡墙. None 表示禁用, 保持旧行为.
+    overhead_cutoff: float | None = None
 
 
 def height_cost_occupancy(cloud: PointCloud2, **kwargs: Any) -> OccupancyGrid:
@@ -214,6 +219,13 @@ def height_cost_occupancy(cloud: PointCloud2, **kwargs: Any) -> OccupancyGrid:
     # Otherwise use max (solid obstacle)
     height_gap = max_height_map - min_height_map
     height_map = np.where(height_gap > cfg.can_pass_under, min_height_map, max_height_map)
+
+    if cfg.overhead_cutoff is not None:
+        # 格内最低点都在通行高度之上 => travel band 内没有任何观测.
+        # 悬空物不能投成地形, 否则平滑会在其周围插出假坡. NaN 比较恒为
+        # False, 未观测格不受影响.
+        overhead_only = min_height_map > cfg.overhead_cutoff
+        height_map = np.where(overhead_only, np.nan, height_map)
 
     # Track which cells have observations
     observed_mask = ~np.isnan(height_map)
