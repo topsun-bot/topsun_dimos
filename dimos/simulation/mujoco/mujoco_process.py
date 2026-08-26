@@ -80,6 +80,11 @@ class MockController:
         pass
 
 
+def _step_sleep_duration(*, timestep: float, n_steps: int, elapsed: float) -> float:
+    """Return wall-clock sleep needed to keep a batch of physics steps real-time."""
+    return max(0.0, timestep * n_steps - elapsed)
+
+
 def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
     robot_name = config.robot_model or "unitree_go1"
     if robot_name == "unitree_go2":
@@ -151,7 +156,7 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
             m_viewer.cam.elevation = config.mujoco_camera_position_float[5]
 
         while m_viewer.is_running() and not shm.should_stop():
-            step_start = time.time()
+            step_start = time.perf_counter()
 
             # Step simulation
             for _ in range(config.mujoco_steps_per_frame):
@@ -233,7 +238,16 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
                 last_lidar_time = current_time
 
             # Control simulation speed
-            time_until_next_step = model.opt.timestep - (time.time() - step_start)
+            # One loop advances ``mujoco_steps_per_frame`` physics ticks.  The
+            # old throttle slept for only one tick, making headless simulation
+            # run up to N times faster than wall time (N=7 by default).  That
+            # turned a normal planner command into metres of overshoot before
+            # its stop command could take effect.
+            time_until_next_step = _step_sleep_duration(
+                timestep=model.opt.timestep,
+                n_steps=config.mujoco_steps_per_frame,
+                elapsed=time.perf_counter() - step_start,
+            )
             if time_until_next_step > 0:
                 time.sleep(time_until_next_step)
 

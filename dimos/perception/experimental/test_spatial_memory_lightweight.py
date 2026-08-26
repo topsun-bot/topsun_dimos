@@ -91,13 +91,13 @@ def test_room_image_is_available_immediately_after_tag(spatial_memory_factory) -
     assert memory.tag_location_with_image(office, image) is True
 
     assert memory.room_collection.count() == 1
-    assert memory.get_room_images() == [
-        {
-            "name": "办公室",
-            "count": 1,
-            "images": [{"location_id": "office-front", "timestamp": office.timestamp}],
-        }
-    ]
+    room_images = memory.get_room_images()
+    assert len(room_images) == 1
+    assert room_images[0]["name"] == "办公室"
+    assert room_images[0]["count"] == 1
+    assert len(room_images[0]["images"]) == 1
+    assert room_images[0]["images"][0]["location_id"] == "office-front"
+    assert room_images[0]["images"][0]["timestamp"] == pytest.approx(office.timestamp)
     restored = memory.get_room_image("office-front")
     assert restored is not None
     assert restored.shape == image.shape
@@ -135,3 +135,18 @@ def test_restart_rebuilds_room_fifo_without_pruning_room_pixels(spatial_memory_f
     assert restarted.room_collection.get(include=[])["ids"] == ["meeting-latest"]
     assert restarted.get_room_image("office-old") is None
     assert restarted.get_room_image("meeting-latest") is not None
+
+
+def test_location_query_uses_persisted_pose_schema(spatial_memory_factory) -> None:
+    memory = spatial_memory_factory()
+    memory.vector_db.add_image_vector(
+        vector_id="nearby-frame",
+        image=np.zeros((8, 8, 3), dtype=np.uint8),
+        embedding=np.asarray([0.0, 1.0, 0.25, 0.75], dtype=np.float32),
+        metadata={"pos_x": 1.0, "pos_y": 2.0, "pos_z": 0.3, "timestamp": 1.0},
+    )
+
+    nearby = memory.query_by_location(1.1, 2.1, radius=0.2)
+
+    assert [result["id"] for result in nearby] == ["nearby-frame"]
+    assert memory.vector_db.get_all_locations() == [(1.0, 2.0, 0.3)]

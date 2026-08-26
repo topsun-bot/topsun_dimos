@@ -15,6 +15,7 @@
 from dataclasses import replace
 from itertools import pairwise
 import math
+from threading import Event
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +24,7 @@ from langchain_core.messages import HumanMessage
 import numpy as np
 import pytest
 
+from dimos.agents.capabilities import CAP_MOVEMENT
 from dimos.agents.skills.navigation import (
     NavigationSkillContainer,
     _EnrouteHitOutcome,
@@ -676,6 +678,38 @@ def test_room_initial_snapshot_uses_timestamped_filename(
     assert recorded[0].image_snapshot_path == f"/snapshots/{expected_stem}.jpg"
 
 
+def test_tag_location_persists_landmark_before_slow_clip_indexing() -> None:
+    nav = _nav_container()
+    nav._latest_odom = _pose(1.0, 2.0, yaw=0.3)
+    nav._latest_image = Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8))
+    clip_started = Event()
+    release_clip = Event()
+
+    def slow_clip_index(_location: RobotLocation, _image: Any) -> bool:
+        clip_started.set()
+        release_clip.wait()
+        return True
+
+    nav._spatial_memory = SimpleNamespace(
+        tag_location=lambda _location: True,
+        tag_location_with_image=slow_clip_index,
+    )
+    recorded: list[SpatialRecord] = []
+    nav._landmark_memory = SimpleNamespace(
+        save_snapshot=lambda _record_id, _image_bytes: None,
+        record=lambda record: recorded.append(record) or record.record_id,
+    )
+    nav._detect_single_frame_async = lambda *_args: None
+
+    result = nav.tag_location("办公室", num_photos=0)
+
+    assert result.startswith("Tagged '办公室'")
+    assert clip_started.wait(timeout=1.0)
+    assert len(recorded) == 1
+    assert recorded[0].name == "办公室"
+    release_clip.set()
+
+
 def test_enroute_confirmation_uses_fresh_bbox_and_rechecks_after_servo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1012,6 +1046,35 @@ def test_enroute_hit_reprojects_map_capture_pose_with_current_relocalization() -
     assert capture_pose.orientation.to_euler().z == pytest.approx(0.7)
 
 
+def test_enroute_hit_without_map_binding_keeps_capture_pose_in_world() -> None:
+    nav = _nav_container()
+    now = time.time()
+    snapshot = _SearchFrameSnapshot(
+        search_id="search_world",
+        leg_id=1,
+        image=Image.from_numpy(np.zeros((60, 100, 3), dtype=np.uint8), ts=now),
+        image_ts=now,
+        capture_pose_world=_pose(1.0, 2.0, yaw=0.1),
+        map_metadata={"relocalization_bound": False},
+        submitted_at=now,
+    )
+    hit = _SearchHit(
+        snapshot=snapshot,
+        bbox=(40.0, 10.0, 60.0, 50.0),
+        detected_at=now,
+        object_yaw_world=0.3,
+        object_yaw_map=None,
+    )
+
+    capture_pose = nav._capture_pose_for_hit(hit)
+
+    assert capture_pose is not None
+    assert capture_pose.position.x == pytest.approx(1.0)
+    assert capture_pose.position.y == pytest.approx(2.0)
+    assert capture_pose.frame_id == "world"
+    assert capture_pose.orientation.to_euler().z == pytest.approx(0.3)
+
+
 def test_relocalization_metadata_binds_memory_to_map_profile() -> None:
     nav = _nav_container()
     world_from_map = np.eye(4)
@@ -1084,6 +1147,68 @@ def test_profiled_relocalization_rejects_legacy_or_incompatible_memory() -> None
 
     assert nav._record_for_current_world(legacy) is None
     assert nav._record_for_current_world(wrong_profile) is None
+
+
+def test_relocalization_not_ready_rejects_stale_world_record() -> None:
+    nav = _nav_container()
+    nav._relocalization = SimpleNamespace(is_relocalized=lambda: False)
+    stale = SpatialRecord(
+        name="old office",
+        record_type=RecordType.ROOM,
+        position=(8.0, 3.0, 0.0),
+    )
+
+    assert nav._record_for_current_world(stale) is None
+
+
+def test_tagged_location_is_transformed_into_current_world(mocker) -> None:
+    nav = _nav_container()
+    world_from_map = np.eye(4)
+    world_from_map[0, 3] = 10.0
+    profile = {
+        "map_id": "office_mid360_v1",
+        "sensor_profile": "mid360_pointlio_v1",
+        "preprocess_config_hash": "abc123",
+        "voxel_size": 0.05,
+        "extrinsic_version": "mount_v1",
+    }
+    nav._relocalization = SimpleNamespace(
+        is_relocalized=lambda: True,
+        get_current_map_key=lambda: "office_map",
+        get_current_map_file=lambda: "office_map.pc2.lcm",
+        get_current_map_profile=lambda: profile,
+        get_world_to_map=lambda: SimpleNamespace(to_matrix=lambda: world_from_map),
+    )
+    nav._spatial_memory = SimpleNamespace(
+        query_tagged_location=lambda _query: RobotLocation(
+            name="办公室",
+            position=(99.0, 99.0, 0.0),
+            rotation=(0.0, 0.0, 0.0),
+            metadata={
+                "map_key": "office_map",
+                **profile,
+                "pose_map": {
+                    "position": [1.0, 2.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0],
+                },
+            },
+        )
+    )
+    nav._navigation = _FakeNavigation()
+    navigate = mocker.spy(nav, "_navigate_to")
+
+    result = nav._navigate_by_tagged_location("办公室")
+
+    assert result is not None
+    goal = navigate.call_args.args[0]
+    assert goal.position.x == pytest.approx(11.0)
+    assert goal.position.y == pytest.approx(2.0)
+    assert goal.frame_id == "world"
+
+
+def test_location_motion_skills_declare_movement_capability() -> None:
+    assert NavigationSkillContainer.tag_location.__skill_uses__ == [CAP_MOVEMENT]
+    assert NavigationSkillContainer.navigate_to_landmark.__skill_uses__ == [CAP_MOVEMENT]
 
 
 def test_room_sweep_forwards_enroute_search_and_stops_after_terminal_hit(
@@ -1611,7 +1736,7 @@ def test_object_landmark_continues_past_acceptance_margin_to_target(
     assert "Arrived near" in result
     assert wait_calls == 1
     assert len(nav._navigation.goals) == 1
-    assert nav._navigation.goals[0].position.x == pytest.approx(0.35)
+    assert nav._navigation.goals[0].position.x == pytest.approx(0.1)
 
 
 def test_object_landmark_immediately_sends_next_inch_goal_after_idle(
@@ -1624,7 +1749,7 @@ def test_object_landmark_immediately_sends_next_inch_goal_after_idle(
         position=(0.0, 0.0, 0.0),
     )
     nav._navigation = _FakeNavigation()
-    nav._latest_odom = _pose(0.9, 0.0)
+    nav._latest_odom = _pose(1.4, 0.0)
     nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
     nav._relocalize_interval_s = 30.0
     nav._coordinate_frame_stale_reason = lambda _target: None
@@ -1652,6 +1777,43 @@ def test_object_landmark_immediately_sends_next_inch_goal_after_idle(
     assert len(nav._navigation.goals) == wait_calls
     goal_xs = [goal.position.x for goal in nav._navigation.goals]
     assert all(current < previous for previous, current in pairwise(goal_xs))
+
+
+def test_room_landmark_returns_to_recorded_pose_in_world_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nav = _nav_container()
+    target = SpatialRecord(
+        name="仿真标记点",
+        record_type=RecordType.ROOM,
+        position=(2.0, 3.0, 0.0),
+        rotation=(0.0, 0.0, 0.0),
+    )
+    nav._navigation = _FakeNavigation()
+    nav._latest_odom = _pose(2.8, 3.0)
+    nav._landmark_memory = SimpleNamespace(get_all=lambda: [target])
+    nav._relocalize_interval_s = 30.0
+    nav._coordinate_frame_stale_reason = lambda _target: None
+
+    def complete_each_step(*args: Any, **_kwargs: Any) -> tuple[PoseStamped, bool]:
+        active_goal = args[0]
+        nav._on_odom(_pose(active_goal.position.x, active_goal.position.y))
+        return (active_goal, False)
+
+    monkeypatch.setattr(nav, "_wait_goal_with_relocalize", complete_each_step)
+
+    result = nav._navigate_to_landmark(
+        target,
+        arrival_action="stop",
+        arrival_distance=0.2,
+        run_arrival_action=False,
+    )
+
+    assert "Arrived near" in result
+    assert nav._navigation.goals
+    assert all(goal.frame_id == "world" for goal in nav._navigation.goals)
+    assert nav._navigation.goals[0].position.x < 2.8
+    assert nav._latest_odom.position.distance(make_vector3(*target.position)) <= 0.2
 
 
 def test_object_landmark_stops_when_completed_step_has_no_fresh_odom(
@@ -1697,8 +1859,8 @@ def test_inch_goal_uses_base_arrival_distance_not_acceptance_margin() -> None:
     nav._latest_odom = _pose(0.51, 0.0)
     inch = nav._inch_goal_toward(target, arrival_distance=0.5)
     assert inch is not None
-    assert nav._latest_odom.position.distance(inch.position) == pytest.approx(0.25)
-    assert inch.position.distance(target.position) == pytest.approx(0.26)
+    assert nav._latest_odom.position.distance(inch.position) == pytest.approx(0.5)
+    assert inch.position.distance(target.position) == pytest.approx(0.01)
 
 
 def test_object_landmark_does_not_run_arrival_action_without_visual_confirmation(

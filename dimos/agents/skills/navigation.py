@@ -156,7 +156,10 @@ _CAMERA_HFOV_DEG = float(__import__("os").getenv("DIMOS_CAMERA_HFOV_DEG", "69"))
 _ARRIVAL_DISTANCE_TOLERANCE_M = 0.10
 # ReplanningAStarPlanner accepts goals within 0.20m. Intermediate approach goals
 # must be farther away than that or they complete without producing any motion.
-_APPROACH_MIN_EXECUTABLE_STEP_M = 0.25
+# The planner accepts goals within 0.20m and may move a requested goal to a
+# nearby safe grid cell.  A 0.25m micro-step can therefore be declared reached
+# without any translation.  Keep enough margin for both tolerances.
+_APPROACH_MIN_EXECUTABLE_STEP_M = 0.50
 
 
 def _search_float_env(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -722,11 +725,18 @@ class NavigationSkillContainer(Module):
         """将存储在 map 坐标系中的记录转换到当前世界坐标系.
 
         如果记录的 map_key 与当前 map 不匹配则跳过 (返回 None);
-        如果记录无 map 坐标或重定位不可用, 原样返回.
+        重定位蓝图尚未 ready 或记录缺少有效 map 坐标时 fail closed;
+        仅没有重定位模块的普通导航蓝图原样返回 world 记录.
         转换后的记录会附带 pose_world_current 字段, 标记来源为重定位.
         """
         ctx = self._relocalization_context()
         if ctx is None:
+            if self._relocalization is not None:
+                logger.warning(
+                    "Skipping record '%s': relocalization is not ready",
+                    record.name,
+                )
+                return None
             return record
 
         metadata = record.metadata or {}
@@ -763,17 +773,17 @@ class NavigationSkillContainer(Module):
                 return None
 
         pose_map = metadata.get("pose_map")
-        # 无 map 坐标的旧记录无法转换, 原样返回
+        # 在重定位蓝图中不能把旧 world 坐标误当成当前 world 坐标.
         if not isinstance(pose_map, dict):
-            return record
+            return None
         raw_position = pose_map.get("position")
         raw_rotation = pose_map.get("rotation")
         if not isinstance(raw_position, (list, tuple)) or not isinstance(
             raw_rotation, (list, tuple)
         ):
-            return record
+            return None
         if len(raw_position) != 3 or len(raw_rotation) != 3:
-            return record
+            return None
 
         try:
             position_map = (
@@ -796,7 +806,7 @@ class NavigationSkillContainer(Module):
             logger.warning(
                 "Failed to transform record '%s' from map pose", record.name, exc_info=True
             )
-            return record
+            return None
 
         new_metadata = dict(metadata)
         new_metadata["pose_world_current"] = {
@@ -1210,7 +1220,7 @@ class NavigationSkillContainer(Module):
             return PoseStamped(
                 position=make_vector3(*current.position),
                 orientation=Quaternion.from_euler(Vector3(*current.rotation)),
-                frame_id="map",
+                frame_id="world",
             )
 
         capture = hit.snapshot.capture_pose_world
@@ -1221,7 +1231,7 @@ class NavigationSkillContainer(Module):
                 float(capture.position.z),
             ),
             orientation=Quaternion.from_euler(Vector3(0.0, 0.0, hit.object_yaw_world)),
-            frame_id="map",
+            frame_id="world",
         )
 
     def _store_enroute_search_hit(
@@ -1720,7 +1730,7 @@ class NavigationSkillContainer(Module):
             search_context=None,
         )
 
-    @skill
+    @skill(uses=[CAP_MOVEMENT])
     def tag_location(self, location_name: str, num_photos: int = -1) -> str:
         """标记当前位置并存储参考图像, 供后续导航和视觉重定位使用.
 
@@ -1772,7 +1782,7 @@ class NavigationSkillContainer(Module):
         )
 
         def _snap_one(name: str) -> bool:
-            """拍摄一张照片: 存入 CLIP 空间记忆, 并启动异步 VLM 检测线程."""
+            """拍摄一张照片并异步写入 CLIP 空间记忆及执行 VLM 检测."""
             pos = self._latest_odom.position if self._latest_odom else None
             rot_tuple = self._odom_euler_tuple()
             if pos is None or rot_tuple is None:
@@ -1782,9 +1792,12 @@ class NavigationSkillContainer(Module):
                 name=name,
                 position=(pos.x, pos.y, pos.z),
                 rotation=rot_tuple,
+                metadata=self._map_metadata_for_pose(
+                    (float(pos.x), float(pos.y), float(pos.z)),
+                    rot_tuple,
+                    observation_source="tagged_location",
+                ),
             )
-            # 先记录位置到空间记忆 (不含图像), 确保 CLIP 向量库和坐标库都有记录
-            self._spatial_memory.tag_location(location)
 
             image_saved = False
             latest_image = self._latest_image
@@ -1799,14 +1812,26 @@ class NavigationSkillContainer(Module):
                         rot_tuple,
                     )
                 )
-                try:
-                    # 将图像存入 CLIP 向量库作为房间参考图像, 用于后续视觉重定位
-                    image_saved = self._spatial_memory.tag_location_with_image(
-                        location,
-                        img_copy,
-                    )
-                except Exception:
-                    logger.exception("Failed to store room reference image for '%s'", name)
+                image_saved = True
+
+                # CLIP/Chroma 写入在繁忙的自动帧索引期间可能耗时数十秒。它是辅助
+                # 视觉索引，不应阻塞核心地标持久化或长期占用 movement capability。
+                def _store_room_reference() -> None:
+                    try:
+                        stored = self._spatial_memory.tag_location_with_image(
+                            location,
+                            img_copy,
+                        )
+                        if not stored:
+                            logger.warning("Failed to store room reference image for '%s'", name)
+                    except Exception:
+                        logger.exception("Failed to store room reference image for '%s'", name)
+
+                threading.Thread(
+                    target=_store_room_reference,
+                    daemon=True,
+                    name=f"clip-room-{name}-{len(captured_frames) - 1}",
+                ).start()
 
                 # 逐帧异步 VLM: 立即启动而非等所有帧拍完, 减少 VLM 检测延迟
                 frame_idx = len(captured_frames) - 1
@@ -1815,6 +1840,19 @@ class NavigationSkillContainer(Module):
                     args=(img_copy, pos_tuple, rot_tuple, name),
                     daemon=True,
                     name=f"vlm-frame-{name}-{frame_idx}",
+                ).start()
+            else:
+                # 没有相机时仍保留语义位置索引；同样不能让它阻塞核心地标记录。
+                def _store_location_only() -> None:
+                    try:
+                        self._spatial_memory.tag_location(location)
+                    except Exception:
+                        logger.exception("Failed to store tagged location for '%s'", name)
+
+                threading.Thread(
+                    target=_store_location_only,
+                    daemon=True,
+                    name=f"clip-location-{name}",
                 ).start()
 
             logger.info(
@@ -1825,13 +1863,11 @@ class NavigationSkillContainer(Module):
             )
             return image_saved
 
-        # 先在初始朝向拍一张
-        image_saved = _snap_one(location_name)
         position = self._latest_odom.position
         rot_tuple = self._odom_euler_tuple() or (0.0, 0.0, 0.0)
-        logger.info(f"Tagged location '{location_name}' at ({position.x:.2f},{position.y:.2f})")
 
-        # 每个位置名只创建一个 ROOM 地标 (record() 按名称合并; 拍照只追加 CLIP 图像)
+        # 核心地标必须先持久化。CLIP/Chroma 图像索引是辅助能力，即使其繁忙、
+        # 失败或超时，也不能导致标记点丢失。
         room_rec = SpatialRecord(
             name=location_name,
             record_type=RecordType.ROOM,
@@ -1844,8 +1880,7 @@ class NavigationSkillContainer(Module):
             ),
             session_id=self._memory_session_id,
         )
-        # 如果图像保存成功, 额外保存一张 JPEG 快照到地标记忆, 供 UI 展示和快速检索
-        if image_saved and self._latest_image is not None and hasattr(self._latest_image, "data"):
+        if self._latest_image is not None and hasattr(self._latest_image, "data"):
             try:
                 # Go2 相机为 RGB, cv2.imencode 按 BGR 编码; 直接用 .data 会红蓝互换
                 _, jpg = cv2.imencode(".jpg", self._latest_image.to_opencv())
@@ -1857,6 +1892,10 @@ class NavigationSkillContainer(Module):
                 pass
         self._landmark_memory.record(room_rec)
         logger.info("[tag_location] room landmark saved for '%s'", location_name)
+
+        # 地标落盘后再安排 CLIP/VLM 图像工作，避免辅助索引反压核心导航技能。
+        image_saved = _snap_one(location_name)
+        logger.info(f"Tagged location '{location_name}' at ({position.x:.2f},{position.y:.2f})")
 
         # 全景模式或手动指定 >=2 张时, 旋转机器人拍摄后续照片
         if auto_panorama or num_photos >= 2:
@@ -1902,7 +1941,7 @@ class NavigationSkillContainer(Module):
             if not image_saved:
                 suffix += " (CLIP room images failed — check Chroma/CLIP logs)"
             else:
-                suffix += " (with CLIP room images)"
+                suffix += " (CLIP room images queued)"
         return f"Tagged '{location_name}': ({position.x:.2f},{position.y:.2f}){extra}{suffix}."
 
     def _rotate_in_place_degrees(self, degrees: float) -> bool:
@@ -2307,10 +2346,25 @@ class NavigationSkillContainer(Module):
                 return None
 
         logger.info("Found tagged location", location=robot_location)
+        target = self._record_for_current_world(
+            SpatialRecord(
+                name=robot_location.name,
+                record_type=RecordType.ROOM,
+                position=robot_location.position,
+                rotation=robot_location.rotation,
+                metadata=robot_location.metadata,
+            )
+        )
+        if target is None:
+            logger.warning(
+                "Tagged location '%s' is unavailable in the current map frame",
+                robot_location.name,
+            )
+            return None
         goal_pose = PoseStamped(
-            position=make_vector3(*robot_location.position),
-            orientation=Quaternion.from_euler(Vector3(*robot_location.rotation)),
-            frame_id="map",
+            position=make_vector3(*target.position),
+            orientation=Quaternion.from_euler(Vector3(*target.rotation)),
+            frame_id="world",
         )
 
         return self._navigate_to(goal_pose, f"Found a tagged location called '{query}'.")
@@ -2905,8 +2959,8 @@ class NavigationSkillContainer(Module):
         v = max(0.15, min(0.6, dist * 0.4))
         # 步长 = 速度 * 0.35s, 并结合目标距离限制。
         step = min(v * 0.35, max(0.0, dist - arrival_distance * 0.85))
-        # A* 导航器的到达容差是 20cm；小于该值的中间目标会被直接判定到达，
-        # 不产生运动。微步至少 25cm，但绝不越过最终目标本身。
+        # A* 导航器的到达容差是 20cm, 安全目标栅格化还可能偏移数厘米;
+        # 微步至少 50cm 才能确保产生平移, 但绝不越过最终目标本身。
         step = min(dist, max(_APPROACH_MIN_EXECUTABLE_STEP_M, step))
         return PoseStamped(
             position=make_vector3(rx + ux * step, ry + uy * step, standoff_pose.position.z),
@@ -4404,7 +4458,7 @@ class NavigationSkillContainer(Module):
             logger.exception("find_room_visually failed")
             return f"Error identifying room: {e}"
 
-    @skill
+    @skill(uses=[CAP_MOVEMENT])
     def navigate_to_landmark(
         self,
         name: str,
@@ -4583,7 +4637,7 @@ class NavigationSkillContainer(Module):
             final_dest = PoseStamped(
                 position=make_vector3(target.position[0], target.position[1], target.position[2]),
                 orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
-                frame_id="map",
+                frame_id="world",
             )
 
             for i, wp in enumerate(all_waypoints):
@@ -4598,7 +4652,7 @@ class NavigationSkillContainer(Module):
                 segment_goal = PoseStamped(
                     position=make_vector3(wp.x, wp.y, 0.0),
                     orientation=Quaternion.from_euler(Vector3(0.0, 0.0, 0.0)),
-                    frame_id="map",
+                    frame_id="world",
                 )
                 self._navigation.set_goal(segment_goal)
                 deadline = time.time() + 120.0
@@ -4632,22 +4686,20 @@ class NavigationSkillContainer(Module):
                         target.position[2],
                     ),
                     orientation=Quaternion.from_euler(Vector3(0.0, 0.0, obj_yaw)),
-                    frame_id="map",
+                    frame_id="world",
                 )
             else:
-                # 房间/其他: 在目标前方 1.5m 处 standoff, 朝向目标 (yaw 方向)
-                # 这样机器人到达时是面向目标而非站在目标正上方
+                # 房间标签保存的是机器人标记时的位姿, 不是房间中心或物体坐标。
+                # 直接返回该位姿; 沿 yaw 再偏移会把“回到标记点”稳定地带到错误位置。
                 yaw = target.rotation[2]
-                offset_x = 1.5 * math.cos(yaw)
-                offset_y = 1.5 * math.sin(yaw)
                 standoff_pose = PoseStamped(
                     position=make_vector3(
-                        target.position[0] + offset_x,
-                        target.position[1] + offset_y,
+                        target.position[0],
+                        target.position[1],
                         target.position[2],
                     ),
                     orientation=Quaternion.from_euler(Vector3(0.0, 0.0, yaw)),
-                    frame_id="map",
+                    frame_id="world",
                 )
 
             approach_deadline = time.time() + 180.0

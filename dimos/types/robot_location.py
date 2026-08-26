@@ -17,6 +17,7 @@ RobotLocation type definition for storing and managing robot location data.
 """
 
 from dataclasses import dataclass, field
+import json
 import time
 from typing import Any
 import uuid
@@ -86,6 +87,17 @@ class RobotLocation:
         if self.frame_id is not None:
             metadata["frame_id"] = self.frame_id
 
+        # Chroma metadata values must be scalar. Preserve richer map/profile
+        # binding as one JSON string so tagged locations can be transformed
+        # into the current world frame after relocalization.
+        if self.metadata:
+            metadata["_metadata_json"] = json.dumps(
+                self.metadata,
+                default=str,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+
         return metadata
 
     @classmethod
@@ -99,6 +111,38 @@ class RobotLocation:
         Returns:
             RobotLocation object
         """
+        extra_metadata: dict[str, Any] = {}
+        raw_metadata = metadata.get("_metadata_json")
+        if isinstance(raw_metadata, str):
+            try:
+                decoded = json.loads(raw_metadata)
+                if isinstance(decoded, dict):
+                    extra_metadata.update(decoded)
+            except json.JSONDecodeError:
+                pass
+
+        extra_metadata.update(
+            {
+                k: v
+                for k, v in metadata.items()
+                if k
+                not in {
+                    "pos_x",
+                    "pos_y",
+                    "pos_z",
+                    "rot_x",
+                    "rot_y",
+                    "rot_z",
+                    "timestamp",
+                    "location_id",
+                    "frame_id",
+                    "location_name",
+                    "description",
+                    "_metadata_json",
+                }
+            }
+        )
+
         return cls(
             name=metadata.get("location_name", "unknown"),
             position=(
@@ -114,24 +158,7 @@ class RobotLocation:
             frame_id=metadata.get("frame_id"),
             timestamp=metadata.get("timestamp", time.time()),
             location_id=metadata.get("location_id", f"loc_{uuid.uuid4().hex[:8]}"),
-            metadata={
-                k: v
-                for k, v in metadata.items()
-                if k
-                not in [
-                    "pos_x",
-                    "pos_y",
-                    "pos_z",
-                    "rot_x",
-                    "rot_y",
-                    "rot_z",
-                    "timestamp",
-                    "location_id",
-                    "frame_id",
-                    "location_name",
-                    "description",
-                ]
-            },
+            metadata=extra_metadata,
         )
 
     def __str__(self) -> str:

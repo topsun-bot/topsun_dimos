@@ -141,3 +141,28 @@ def test_module_start_keeps_memory_when_new_memory_false(tmp_path: Path) -> None
         assert module.find_by_name("会议室") is not None
     finally:
         module.stop()
+
+
+def test_module_stop_before_start_does_not_overwrite_persisted_memory(tmp_path: Path) -> None:
+    """A sibling deployment failure must not erase landmarks before load()."""
+    from dimos.perception.detection.door.door_spatial_memory_module import (
+        SpatialLandmarkMemoryModule,
+    )
+
+    db_path = tmp_path / "landmarks.json"
+    snapshots_dir = tmp_path / "snapshots"
+    seed = SpatialLandmarkMemory(db_path=db_path, snapshots_dir=snapshots_dir)
+    seed.record(SpatialRecord(name="跨重启记忆", record_type=RecordType.ROOM))
+    original = db_path.read_bytes()
+
+    module = SpatialLandmarkMemoryModule(
+        db_path=str(db_path),
+        snapshots_dir=str(snapshots_dir),
+        new_memory=False,
+    )
+    module.stop()
+
+    assert db_path.read_bytes() == original
+    restored = SpatialLandmarkMemory(db_path=db_path, snapshots_dir=snapshots_dir)
+    assert restored.load()
+    assert restored.find_by_name("跨重启记忆") is not None

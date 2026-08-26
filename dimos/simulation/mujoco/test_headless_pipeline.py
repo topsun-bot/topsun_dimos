@@ -17,6 +17,7 @@ import pytest
 
 from dimos.simulation.mujoco import shared_memory
 from dimos.simulation.mujoco.depth_camera import depth_image_to_point_cloud
+from dimos.simulation.mujoco.mujoco_process import _step_sleep_duration
 from dimos.simulation.mujoco.shared_memory import ShmReader, ShmWriter
 
 
@@ -44,6 +45,11 @@ def test_depth_projection_ignores_invalid_depth_values() -> None:
     )
 
     assert points.shape == (0, 3)
+
+
+def test_physics_batch_throttle_accounts_for_every_substep() -> None:
+    assert _step_sleep_duration(timestep=0.005, n_steps=7, elapsed=0.010) == pytest.approx(0.025)
+    assert _step_sleep_duration(timestep=0.005, n_steps=7, elapsed=0.040) == 0.0
 
 
 def test_lidar_shared_memory_round_trip_constructs_pointcloud_on_parent(

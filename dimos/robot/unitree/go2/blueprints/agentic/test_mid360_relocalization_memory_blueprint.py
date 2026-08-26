@@ -64,7 +64,10 @@ from dimos.robot.unitree.go2.go2_mid360_static_transforms import (
     Go2OrinMid360StaticTf,
 )
 from dimos.robot.unitree.go2.mid360_map_profile import build_mid360_preprocessing_manifest
-from dimos.robot.unitree.go2.mid360_navigation_source import Go2Mid360NavigationSource
+from dimos.robot.unitree.go2.mid360_navigation_source import (
+    Go2Mid360NavigationSource,
+    Go2Mid360NavigationSourceConfig,
+)
 from dimos.robot.unitree.go2.mid360_simulation_adapter import Go2Mid360SimulationAdapter
 from dimos.spec.utils import spec_annotation_compliance, spec_structural_compliance
 from dimos.types.navigation_source_spec import NavigationSourceStateSpec
@@ -228,6 +231,7 @@ def test_mid360_sim_blueprint_reuses_production_source_without_native_udp_owner(
         == _MID360_SIM_RELOCALIZATION_MIN_LOCAL_POINTS
         == 5_000
     )
+    assert relocalization.kwargs["fitness_threshold"] == 0.65
 
 
 def test_mid360_sim_record_blueprint_records_exact_navigation_contract() -> None:
@@ -424,6 +428,21 @@ def test_mid360_simulation_source_validation_has_no_autonomous_command_owner() -
     assert PointLio not in modules
     assert ReplanningAStarPlanner not in modules
     assert MovementManager not in modules
+
+
+def test_mid360_simulation_source_tolerates_one_delayed_odom_interval() -> None:
+    source = next(
+        atom
+        for atom in unitree_go2_mid360_simulation_source_validation.active_blueprints
+        if atom.module is Go2Mid360NavigationSource
+    )
+
+    assert source.kwargs["lidar_stale_timeout_sec"] == 3.0
+    assert source.kwargs["odom_stale_timeout_sec"] == 1.0
+    assert source.kwargs["max_lidar_timestamp_step_sec"] == 3.0
+    assert source.kwargs["max_odom_timestamp_step_sec"] == 2.0
+    assert Go2Mid360NavigationSourceConfig().max_lidar_timestamp_step_sec == 2.0
+    assert Go2Mid360NavigationSourceConfig().max_odom_timestamp_step_sec == 0.5
 
 
 def test_mid360_map_record_uses_adapted_source_without_duplicate_livox_owner() -> None:

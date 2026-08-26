@@ -336,7 +336,17 @@ class GlobalPlanner(Resource):
 
         logger.info("Replanning.", attempt=self._replan_limiter.get_attempt())
 
-        if current_goal.position.distance(current_odom.position) < self._replan_goal_tolerance:
+        position_reached = (
+            current_goal.position.distance(current_odom.position) < self._replan_goal_tolerance
+        )
+        orientation_reached = (
+            abs(angle_diff(current_goal.orientation.euler[2], current_odom.orientation.euler[2]))
+            < self._rotation_tolerance
+        )
+        # A rotation-only goal has the same position from the start.  Treating
+        # position alone as success makes the stuck watchdog falsely report a
+        # completed turn even when yaw never changed.
+        if position_reached and orientation_reached:
             self.cancel_goal(arrived=True)
             return
 

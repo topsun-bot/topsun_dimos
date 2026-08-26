@@ -20,6 +20,7 @@ into blueprints and injected into skill containers via Spec protocols.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from dimos.constants import STATE_DIR
@@ -53,6 +54,11 @@ class SpatialLandmarkMemoryModule(Module):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        # Deployment and start are separate coordinator phases.  A failure in
+        # another module may call stop() on this instance before start() ever
+        # loaded the durable JSON.  In that state, saving the empty in-memory
+        # dict would destroy valid landmarks from the previous run.
+        self._persistence_initialized = False
         self._memory = SpatialLandmarkMemory(
             db_path=self.config.db_path,
             snapshots_dir=self.config.snapshots_dir,
@@ -64,22 +70,37 @@ class SpatialLandmarkMemoryModule(Module):
         super().start()
         if self.config.new_memory:
             n = self._memory.clear_all()
+            self._persistence_initialized = True
             logger.info(
                 "Cleared landmark memory on start (new_memory=True, removed %d record(s) from %s)",
                 n,
                 self.config.db_path,
             )
             return
+        db_existed = Path(self.config.db_path).exists()
         loaded = self._memory.load()
         if loaded:
+            self._persistence_initialized = True
             logger.info("Loaded %d landmark(s) from %s", self._memory.count(), self.config.db_path)
-        else:
+        elif not db_existed:
+            self._persistence_initialized = True
             logger.info("Starting with empty landmark memory")
+        else:
+            logger.warning(
+                "Landmark persistence was not initialized; preserving unreadable file %s",
+                self.config.db_path,
+            )
 
     @rpc
     def stop(self) -> None:
         """Persist landmarks and shut down."""
-        self._memory.save()
+        if self._persistence_initialized:
+            self._memory.save()
+        else:
+            logger.info(
+                "Skipping landmark save because start/load did not complete: %s",
+                self.config.db_path,
+            )
         super().stop()
 
     # RPC: CRUD

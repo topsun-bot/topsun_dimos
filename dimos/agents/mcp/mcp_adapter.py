@@ -41,7 +41,11 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-DEFAULT_TIMEOUT = 30
+# Physical skills such as navigation and panoramic tagging routinely take
+# longer than a short HTTP request.  Match McpClient's tool-call timeout so the
+# CLI does not report failure while the robot continues executing in the
+# background.
+DEFAULT_TIMEOUT = 120
 
 
 class McpError(Exception):

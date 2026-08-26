@@ -169,11 +169,13 @@ _pointlio_source = PointLio.blueprint(
 
 # MuJoCo's synthesized lidar runs at 2 Hz and can briefly pause while the
 # local CPU initializes CLIP/ONNX workers. Require several missed simulation
-# periods before latching a fault; the production Point-LIO gate below keeps
-# its stricter 1.0 s / 0.5 s defaults.
+# periods before latching a fault, and tolerate one delayed odometry interval.
+# The production Point-LIO gate below keeps its stricter defaults.
 _mid360_simulation_source = Go2Mid360NavigationSource.blueprint(
     lidar_stale_timeout_sec=3.0,
     odom_stale_timeout_sec=1.0,
+    max_lidar_timestamp_step_sec=3.0,
+    max_odom_timestamp_step_sec=2.0,
 )
 
 # Minimal simulation gate used before enabling mapping or autonomous movement.
@@ -206,6 +208,11 @@ _mid360_simulation_relocalization = RelocalizationModule.blueprint(
     expected_extrinsic_version=ORIN_NAVIGATION_EXTRINSIC_VERSION,
     require_navigation_source_health=True,
     min_local_points=_MID360_SIM_RELOCALIZATION_MIN_LOCAL_POINTS,
+    # A single MuJoCo view is deterministic but much sparser than a physical
+    # 360-degree scan and converges around 0.65. Requiring the production 0.8
+    # forces repeated in-place turns that destabilize the legacy Go1 policy,
+    # so simulation has its own acceptance threshold. Hardware remains 0.8.
+    fitness_threshold=0.65,
 )
 
 _mid360_map = HealthGatedVoxelGridMapper.blueprint(

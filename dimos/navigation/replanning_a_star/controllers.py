@@ -45,6 +45,7 @@ class PController:
     _k_angular: float = 0.5
     _max_angular_accel: float = 2.0
     _rotation_threshold: float = 90 * (math.pi / 180)
+    _mujoco_rotation_threshold: float = 15 * (math.pi / 180)
 
     def __init__(self, global_config: GlobalConfig, speed: float, control_frequency: float) -> None:
         self._global_config = global_config
@@ -65,6 +66,17 @@ class PController:
         yaw_error = angle_diff(desired_yaw, robot_yaw)
 
         angular_velocity = self._compute_angular_velocity(yaw_error)
+
+        # The legacy Go1 locomotion policy used for the Go2 MuJoCo stand-in
+        # amplifies a simultaneous forward + yaw command: a small 0.2 yaw
+        # correction can turn the body roughly 50 degrees in one second.  Use
+        # stop-turn-drive control for this backend so path following cannot
+        # spiral away from a short goal.  Hardware and other simulators retain
+        # the normal proportional steering below.
+        if self._global_config.simulation == "mujoco":
+            if abs(yaw_error) > self._mujoco_rotation_threshold:
+                return self._angular_twist(angular_velocity)
+            angular_velocity = 0.0
 
         # Rotate-then-drive: if heading error is large, rotate in place first
         if abs(yaw_error) > self._rotation_threshold:
@@ -104,9 +116,11 @@ class PController:
         return velocity
 
     def _angular_twist(self, angular_velocity: float) -> Twist:
-        # In simulation, we need stroger values
-        if self._global_config.simulation and abs(angular_velocity) < 0.8:
-            angular_velocity = 0.8 * np.sign(angular_velocity)
+        # The legacy Go1 policy used by MuJoCo has a sizeable yaw-command
+        # deadband. Use the controller's configured speed as its simulation
+        # floor, but never exceed that limit (the old hard-coded 0.8 did).
+        if self._global_config.simulation == "mujoco" and 0.0 < abs(angular_velocity) < self._speed:
+            angular_velocity = self._speed * np.sign(angular_velocity)
 
         return Twist(
             linear=Vector3(0.0, 0.0, 0.0),

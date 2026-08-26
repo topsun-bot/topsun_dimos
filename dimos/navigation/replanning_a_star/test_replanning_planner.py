@@ -15,6 +15,7 @@
 """Unit tests for the replanning A* navigation planner components:
 PositionTracker, ReplanLimiter, and GlobalPlanner."""
 
+import math
 from unittest.mock import MagicMock, patch
 
 from dimos_lcm.std_msgs import Bool
@@ -253,3 +254,21 @@ class TestGlobalPlannerGoalHandling:
         planner._plan_path("shutdown_race")
 
         planner._local_planner.start_planning.assert_not_called()
+
+    def test_stuck_rotation_goal_is_not_falsely_accepted_by_position(
+        self, planner: "MagicMock"
+    ) -> None:
+        planner._current_odom = _make_pose(0.0, 0.0)
+        planner._current_goal = PoseStamped(
+            position=Vector3(0.0, 0.0, 0.0),
+            orientation=Quaternion.from_euler(Vector3(0.0, 0.0, math.pi / 2)),
+        )
+
+        with (
+            patch.object(planner, "cancel_goal") as cancel_goal,
+            patch.object(planner, "_plan_path") as plan_path,
+        ):
+            planner._replan_path("stuck")
+
+        cancel_goal.assert_not_called()
+        plan_path.assert_called_once_with("stuck")
