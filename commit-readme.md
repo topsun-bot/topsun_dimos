@@ -21,6 +21,7 @@ git reset --hard <sha>
 
 | 想做的事 | 回滚到 |
 |----------|--------|
+| 导航记忆/规划器/Mid360 仿真加固（tag 异步、地标保护、pos_x 查询） | `865684bc` |
 | Mid360 costmap 高度带裁切（路径不可达修复） | `30d98401` |
 | 旋转 settle 失败中止搜索 / worker GlobalConfig 全量同步 | `a3edc2eef` |
 | 合并 upstream/main（99 commits，0709~0729）前的基线 | `dde106238` |
@@ -45,6 +46,59 @@ git reset --hard <sha>
 ---
 
 ## 提交记录
+
+### 865684bc — fix(go2): harden navigation memory, planner, and Mid360 sim stack
+
+| 字段 | 内容 |
+|---|---|
+| **时间** | 2026-08-26 13:59:20 +0800 |
+| **分支** | `codex/mid360-navigation-source` |
+| **作者** | `jiang.tao` |
+
+**修改文件**
+
+| 文件 | 改动 |
+|---|---|
+| `dimos/agents/skills/navigation.py` | 地标先落盘、CLIP 异步化；重定位未 ready 时 fail-closed；回标记点去掉 1.5m standoff；frame_id 统一为 world |
+| `dimos/types/robot_location.py` | Chroma 元数据用 `_metadata_json` 保留富 map/profile 绑定 |
+| `dimos/perception/detection/door/door_spatial_memory_module.py` | start/load 未完成前禁止 save，避免空 dict 覆盖有效地标 |
+| `dimos/perception/experimental/spatial_vector_db.py` | 空间查询键从 `x/y` 改为 `pos_x/pos_y`，与写入 schema 对齐 |
+| `dimos/navigation/replanning_a_star/global_planner.py` | 纯旋转目标需位置+朝向都满足才算到达 |
+| `dimos/navigation/replanning_a_star/controllers.py` | MuJoCo 改 stop-turn-drive，角速度下限不再硬编码 0.8 |
+| `dimos/simulation/mujoco/mujoco_process.py` | headless 按整批物理步节流，避免最高 7× 实时超调 |
+| `dimos/robot/unitree/go2/blueprints/smart/unitree_go2_mid360.py` | 仿真导航源时间戳容差与重定位 fitness 0.65（硬件仍 0.8） |
+| `dimos/agents/mcp/mcp_adapter.py` | 默认工具超时 30→120s，匹配长物理技能 |
+| `dimos/agents/mcp/test_mcp_adapter.py` 等测试 | 覆盖上述行为 |
+
+**改进点**
+
+1. `tag_location` 不再被 CLIP/Chroma 反压堵死，核心地标不会因图像索引失败而丢失。
+2. 修复地标 JSON 被 early-stop 清空、空间向量库坐标键错位两个数据正确性 bug。
+3. 重定位场景下拒绝用旧 world 坐标导航；房间标记点直接回到标记位姿。
+4. MuJoCo 仿真步长与转向控制对齐实时，避免 planner 停止命令来不及生效。
+
+**用法**
+
+```bash
+# Mid360 实机 / 仿真
+dimos run unitree-go2-mid360
+# 或
+dimos --simulation mujoco run unitree-go2-mid360
+
+# 标记与返回（MCP）
+dimos mcp call tag_location --arg location_name=客厅
+dimos mcp call navigate_to_location --arg location_name=客厅
+```
+
+**回滚**
+
+```bash
+git checkout f233f62d -- dimos/agents/skills/navigation.py dimos/types/robot_location.py dimos/perception/detection/door/door_spatial_memory_module.py dimos/perception/experimental/spatial_vector_db.py dimos/navigation/replanning_a_star/controllers.py dimos/navigation/replanning_a_star/global_planner.py dimos/simulation/mujoco/mujoco_process.py dimos/robot/unitree/go2/blueprints/smart/unitree_go2_mid360.py dimos/agents/mcp/mcp_adapter.py
+# 或
+git reset --hard f233f62d
+```
+
+---
 
 ### 30d98401 — fix(go2): clip Mid360 costmap projection to travel height band
 
