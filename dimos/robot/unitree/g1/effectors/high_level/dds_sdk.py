@@ -22,19 +22,6 @@ import time
 from typing import Any
 
 from reactivex.disposable import Disposable
-from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type: ignore[import-not-found]
-    MotionSwitcherClient,
-)
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # type: ignore[import-not-found]
-from unitree_sdk2py.g1.arm.g1_arm_action_client import (  # type: ignore[import-not-found]
-    G1ArmActionClient,
-)
-from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
-    ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
-    ROBOT_API_ID_LOCO_GET_FSM_ID,
-    ROBOT_API_ID_LOCO_GET_FSM_MODE,
-)
-from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore[import-not-found]
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
@@ -67,11 +54,9 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-_LOCO_API_IDS = {
-    "GET_FSM_ID": ROBOT_API_ID_LOCO_GET_FSM_ID,
-    "GET_FSM_MODE": ROBOT_API_ID_LOCO_GET_FSM_MODE,
-    "GET_BALANCE_MODE": ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
-}
+# Populated on start() so importing this module (blueprints, md-babel) does
+# not require the Unitree SDK wheel.
+_LOCO_API_IDS: dict[str, int] = {}
 
 
 def _env_int(name: str, default: int, *, min_v: int, max_v: int) -> int:
@@ -145,6 +130,28 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         super().start()
 
         network_interface = self.config.network_interface
+
+        from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type: ignore[import-not-found]
+            MotionSwitcherClient,
+        )
+        from unitree_sdk2py.core.channel import (
+            ChannelFactoryInitialize,  # type: ignore[import-not-found]
+        )
+        from unitree_sdk2py.g1.arm.g1_arm_action_client import (  # type: ignore[import-not-found]
+            G1ArmActionClient,
+        )
+        from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
+            ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
+            ROBOT_API_ID_LOCO_GET_FSM_ID,
+            ROBOT_API_ID_LOCO_GET_FSM_MODE,
+        )
+        from unitree_sdk2py.g1.loco.g1_loco_client import (
+            LocoClient,  # type: ignore[import-not-found]
+        )
+
+        _LOCO_API_IDS["GET_FSM_ID"] = ROBOT_API_ID_LOCO_GET_FSM_ID
+        _LOCO_API_IDS["GET_FSM_MODE"] = ROBOT_API_ID_LOCO_GET_FSM_MODE
+        _LOCO_API_IDS["GET_BALANCE_MODE"] = ROBOT_API_ID_LOCO_GET_BALANCE_MODE
 
         # Initialise DDS channel factory
         logger.info(f"Initializing DDS on interface: {network_interface}")

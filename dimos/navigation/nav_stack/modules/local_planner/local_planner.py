@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from dimos_lcm.geometry_msgs import PolygonStamped
 from dimos_lcm.std_msgs import Float32
@@ -93,7 +94,9 @@ class LocalPlannerConfig(NativeModuleConfig):
         "max_momentum_penalty": "maxMomentumPenalty",
     }
 
-    paths_dir: str = ""
+    # ``str``, ``Path``, or lazy ``LfsPath``. Typed ``Any`` so pydantic does
+    # not coerce via ``str(LfsPath)`` (that would pull LFS at import).
+    paths_dir: Any = None
 
     vehicle_length: float = 0.5  # m
     vehicle_width: float = 0.5  # m

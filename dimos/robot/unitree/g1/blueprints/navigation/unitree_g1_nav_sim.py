@@ -38,7 +38,8 @@ nav_config: dict[str, Any] = dict(
         "decay_time": 120,
     },
     local_planner={
-        "paths_dir": str(G1_LOCAL_PLANNER_PRECOMPUTED_PATHS),
+        # Keep the LfsPath object — str() would pull LFS at import time.
+        "paths_dir": G1_LOCAL_PLANNER_PRECOMPUTED_PATHS,
         "min_relative_z": -1.5,
         "freeze_ang": 180.0,
         "obstacle_height_threshold": 0.02,

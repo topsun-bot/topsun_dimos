@@ -177,7 +177,7 @@ class GreeterLandmarkStore:
 
 纯函数（可单测）：
 
-```python
+```python skip
 def parse_synonyms(raw: str) -> tuple[str, ...]: ...          # 逗号/顿号/空格分隔去重
 def is_guide_request(text: str, guide_keywords: tuple[str, ...]) -> bool: ...  # 带路 vs 问路
 def distance_2d(ax, ay, bx, by) -> float: ...
@@ -186,7 +186,7 @@ def within_arrival(px, py, landmark, threshold_m) -> bool: ...  # 平面到站�
 
 `GreeterTourSkillContainer(Module)`：
 
-```python
+```python skip
 class GreeterTourSkillConfig(ModuleConfig):
     store_path: str = ""                 # 空 → ~/.local/state/dimos/greeter_landmarks.json
     arrival_threshold_m: float = 0.8
@@ -246,7 +246,7 @@ class TourGuideSpec(Spec, Protocol):
 
 `G1HighLevelDdsSdk.publish_request` 原先只支持 loco 的 7101/7105，手臂命令（7106）落到 `unsupported_api`。改为：`start()` 初始化 `G1ArmActionClient`，`publish_request` 在 `topic == rt/api/arm/request` 时分派到 arm 服务。
 
-```python
+```python skip
 # import
 from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient  # type: ignore[import-not-found]
 
@@ -290,7 +290,7 @@ def _handle_arm_request(self, api_id, parameter):
 
 新增可选 `_tour` 注入与一个分支；`_tour=None`（笔记本三蓝图）时行为完全不变。
 
-```python
+```python skip
 from dimos.robot.unitree.g1.greeter_tour_skill_spec import TourGuideSpec
 
 class GreeterIntentRouter(Module):
@@ -330,7 +330,7 @@ class GreeterIntentRouter(Module):
 
 ### 4.3 `_greeter_stack.py` — 类型注解收紧
 
-```python
+```python skip
 from dimos.core.module import ModuleBase
 from dimos.spec.utils import Spec
 
@@ -425,7 +425,7 @@ GREETER_REMAPPINGS: list[
 
 **问题:** 缓存 TTS 播放使用 `sd.play()` + `time.sleep(0.3)` 作为"阻塞等待"，但 `sd.play()` 默认非阻塞，`time.sleep(0.3)` 远短于任意语音（最短问候语也在 1~2 秒）。
 
-```python
+```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
@@ -441,7 +441,7 @@ def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
 - `_run_greeting_shortcut()` → `greet_guest(welcome_template)` 内部 `_speak_skill.speak(text, blocking=True)` 提前返回 → 挥手在欢迎词没说完时启动。
 
 **修复建议:**
-```python
+```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
@@ -468,7 +468,7 @@ def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
 
 **文件:** `dimos/robot/unitree/g1/greeter_skill.py:44-46` 与 `dimos/robot/unitree/g1/effectors/high_level/dds_sdk.py:68-70`
 
-```python
+```python skip
 # greeter_skill.py (WebRTC 路径)
 _ARM_GET_ACTION_LIST_API_ID = 7107
 _ARM_EXECUTE_CUSTOM_ACTION_API_ID = 7108
@@ -502,7 +502,7 @@ _ARM_STOP_CUSTOM_ACTION_API_ID = 7113
 
 **文件:** `dimos/stream/audio/node_key_recorder.py:109-115`
 
-```python
+```python skip
 if not sys.stdin.isatty():
     logger.error(
         "KeyRecorder 无法读取终端键盘(模块在 worker 子进程运行)。"
@@ -541,7 +541,7 @@ if not sys.stdin.isatty():
 
 **文件:** `dimos/robot/unitree/g1/greeter_system_prompt.py:26`
 
-```python
+```python skip
 # 最高优先级:不可移动
 你处于"原地迎宾"模式,无法行走、转身或导航,也没有任何移动/导航技能...
 ```
@@ -647,7 +647,7 @@ shared arm const import 校验                                        → 7107/7
 
 **验证文件:** `dimos/agents/skills/speak_skill.py:181-190`
 
-```python
+```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd  # type: ignore[import-untyped]
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
@@ -674,7 +674,7 @@ def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
 
 **验证文件:** `dimos/robot/unitree/g1/effectors/high_level/commands.py:26-31`
 
-```python
+```python skip
 # G1 arm action service api_ids (see unitree_sdk2 g1_arm_action_api.hpp).
 # Defined here so the WebRTC (greeter_skill.py) and DDS (dds_sdk.py) paths share
 # a single source of truth.

@@ -8,7 +8,7 @@
 
 ### 1. `greeter_skill.py:56-61` — `start()`/`stop()` 无意义重写
 
-```python
+```python skip
 @rpc
 def start(self) -> None:
     super().start()
@@ -28,7 +28,7 @@ def stop(self) -> None:
 
 系统提示词中 14 个手臂命令及其含义是**手动敲进去的**：
 
-```python
+```python skip
 - `execute_arm_command(command_name)`:可选其一:
   "Handshake"(握手)、"HighFive"(击掌)、"Hug"(拥抱)、"HighWave"(高举挥手)、
   "Clap"(鼓掌)、"FaceWave"(面前挥手)、"LeftKiss"(左手飞吻)、"ArmHeart"(双臂比心)、
@@ -38,7 +38,7 @@ def stop(self) -> None:
 
 但 `greeter_skill.py:110-121` 的 docstring 是**动态从 `ARM_COMMANDS_DOC` 拼接**的：
 
-```python
+```python skip
 GreeterSkillContainer.execute_arm_command.__doc__ = f"""...
 {ARM_COMMANDS_DOC}
 """
@@ -52,7 +52,7 @@ GreeterSkillContainer.execute_arm_command.__doc__ = f"""...
 
 ### 3. `voice_input.py:93` — 可能触碰私有 API
 
-```python
+```python skip
 self._human_transport.lcm.stop()
 ```
 
@@ -107,13 +107,13 @@ OPENAI_BASE_URL=https://api.deepseek.com
 
 ### 7. `greeter_skill.py:78` — 多条返回值的拼接可读性
 
-```python
+```python skip
 return " ".join(results)
 ```
 
 `execute_g1_command` 每条返回形如 `"'HighWave' command executed successfully."`,多条用空格 join 后会连成一段英文。对 LLM 来说不影响理解,但如果后续需要调试,加换行会更清晰。可选改为：
 
-```python
+```python skip
 return "\n".join(results)
 ```
 

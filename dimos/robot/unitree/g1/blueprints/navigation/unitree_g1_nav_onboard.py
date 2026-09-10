@@ -55,7 +55,8 @@ unitree_g1_nav_onboard = (
                 "sensor_range": 40,  # meters
             },
             local_planner={
-                "paths_dir": str(G1_LOCAL_PLANNER_PRECOMPUTED_PATHS),
+                # Keep the LfsPath object — str() would pull LFS at import time.
+                "paths_dir": G1_LOCAL_PLANNER_PRECOMPUTED_PATHS,
                 "publish_free_paths": False,
                 "vehicle_width": G1.width_clearance,
                 "vehicle_length": G1.width_clearance,
