@@ -170,8 +170,28 @@ def test_connect_restart_invalidates_cache(client):
     assert client.skills.ping() == "pong"
 
 
+@contextmanager
+def _remote_source_from_blueprint(*instance_names: str):
+    """Like `_remote_source_with_instances`, but load via blueprint so restart
+    can see `_deployed_atoms` (the `deploy()` helper path does not record them).
+    """
+    coordinator = ModuleCoordinator(g=GlobalConfig(n_workers=0, viewer="none"))
+    coordinator.start()
+    try:
+        for instance_name in instance_names:
+            coordinator.load_blueprint(NamedRemoteModule.blueprint(instance_name=instance_name))
+        coordinator.start_rpc_service()
+        source = RemoteModuleSource()
+        try:
+            yield source
+        finally:
+            source.close()
+    finally:
+        coordinator.stop()
+
+
 def test_restart_evicts_cache_keyed_by_rpc_name():
-    with _remote_source_with_instances("robot0/namedremotemodule") as source:
+    with _remote_source_from_blueprint("robot0/namedremotemodule") as source:
         before = source.get_module("NamedRemoteModule")
         assert before.ping_name() == "robot0/namedremotemodule"
         source.restart_module_by_class_name("NamedRemoteModule", reload_source=False)
