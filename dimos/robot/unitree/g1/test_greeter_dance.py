@@ -16,23 +16,15 @@ from dimos.robot.unitree.g1.greeter_skill import resolve_dance_style
 
 
 def test_resolve_dance_style_laptop_webrtc() -> None:
-    assert (
-        resolve_dance_style("auto", "webrtc", onboard_compute=False) == "webrtc_arms"
-    )
+    assert resolve_dance_style("auto", "webrtc", onboard_compute=False) == "webrtc_arms"
 
 
 def test_resolve_dance_style_orin_auto() -> None:
-    assert (
-        resolve_dance_style("auto", "webrtc", onboard_compute=True) == "onboard_random"
-    )
+    assert resolve_dance_style("auto", "webrtc", onboard_compute=True) == "onboard_random"
 
 
 def test_resolve_dance_style_explicit() -> None:
     assert (
-        resolve_dance_style("onboard_random", "webrtc", onboard_compute=False)
-        == "onboard_random"
+        resolve_dance_style("onboard_random", "webrtc", onboard_compute=False) == "onboard_random"
     )
-    assert (
-        resolve_dance_style("webrtc_arms", "webrtc", onboard_compute=True)
-        == "webrtc_arms"
-    )
+    assert resolve_dance_style("webrtc_arms", "webrtc", onboard_compute=True) == "webrtc_arms"
