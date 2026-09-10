@@ -157,9 +157,11 @@ def respawn_bridge() -> Iterator[RelayBridgeModule]:
     try:
         yield module
     finally:
-        stop_module(module)
-        for transport in transports:
-            transport.stop()
+        try:
+            stop_module(module)
+        finally:
+            for transport in transports:
+                transport.stop()
 
 
 @pytest.fixture(scope="module")
@@ -434,9 +436,11 @@ def teleop_bridge() -> Iterator[RelayBridgeModule]:
     try:
         yield module
     finally:
-        stop_module(module)
-        for transport in transports:
-            transport.stop()
+        try:
+            stop_module(module)
+        finally:
+            for transport in transports:
+                transport.stop()
 
 
 async def _until(cond, what: str, timeout: float = 10.0) -> None:
@@ -508,8 +512,10 @@ def deadman_bridge() -> Iterator[tuple[RelayProcess, RelayBridgeModule]]:
     try:
         yield relay, module
     finally:
-        stop_module(module)
-        relay.stop()
+        try:
+            stop_module(module)
+        finally:
+            relay.stop()
 
 
 def test_teleop_relay_kill_deadman_deadline(

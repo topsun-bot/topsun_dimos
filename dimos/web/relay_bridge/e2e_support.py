@@ -16,6 +16,7 @@
 
 import asyncio
 from collections.abc import Callable, Sequence
+import threading
 import time
 
 from dimos.web.relay_bridge.protocol import (
@@ -38,11 +39,49 @@ def stop_module(module: RelayBridgeModule) -> None:
     The framework never shuts down the loop's default executor, so tests that
     drive a to_thread path (spawn/stop of a relay child) would trip the
     conftest thread-leak check on the idle asyncio_* workers.
+
+    Fixtures wrap this in ``try``/``finally`` so hand-wired LCM transports
+    still stop if ``module.stop()`` raises. After a killed relay child the
+    loop can still be running; ``_reap_loop`` shuts it down from the loop
+    thread instead of calling ``run_until_complete`` here.
     """
-    loop = module._loop
-    module.stop()
+    loop: asyncio.AbstractEventLoop | None = getattr(module, "_loop", None)
+    loop_thread: threading.Thread | None = getattr(module, "_loop_thread", None)
+    try:
+        module.stop()
+    finally:
+        _reap_loop(loop, loop_thread)
+
+
+def _reap_loop(
+    loop: asyncio.AbstractEventLoop | None, loop_thread: threading.Thread | None
+) -> None:
+    """Shut the default executor and join leftover run_forever threads.
+
+    ``Module.stop`` can return while the loop is still running (join timeout
+    after a killed relay child). ``run_until_complete`` then raises
+    "This event loop is already running"; schedule executor shutdown on the
+    loop thread instead, then ``loop.stop()``.
+    """
     if loop is not None and not loop.is_closed():
-        loop.run_until_complete(loop.shutdown_default_executor())
+
+        def _cancel_tasks() -> None:
+            for task in asyncio.all_tasks(loop):
+                task.cancel()
+
+        try:
+            if loop.is_running():
+                loop.call_soon_threadsafe(_cancel_tasks)
+                future = asyncio.run_coroutine_threadsafe(loop.shutdown_default_executor(), loop)
+                future.result(timeout=5.0)
+                loop.call_soon_threadsafe(loop.stop)
+            else:
+                loop.run_until_complete(loop.shutdown_default_executor())
+        except (RuntimeError, TimeoutError):
+            if loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+    if loop_thread is not None and loop_thread.is_alive():
+        loop_thread.join(timeout=5.0)
 
 
 async def next_control(client: RelayClient, timeout: float) -> Msg | DataFrame | None:
