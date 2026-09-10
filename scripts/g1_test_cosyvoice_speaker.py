@@ -66,7 +66,7 @@ def _synthesize_cosyvoice(text: str) -> np.ndarray:
 
 def main() -> None:
     iface = sys.argv[1] if len(sys.argv) > 1 else "eth0"
-    text = sys.argv[2] if len(sys.argv) > 2 else "您好，欢迎来访，我是智能接待员。"
+    text = sys.argv[2] if len(sys.argv) > 2 else "您好,欢迎来访,我是智能接待员。"
 
     print(f"CosyVoice synthesizing: {text!r}")
     audio = _synthesize_cosyvoice(text)

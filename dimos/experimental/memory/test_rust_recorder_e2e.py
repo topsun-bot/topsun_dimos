@@ -18,6 +18,7 @@ import importlib.util
 import os
 from pathlib import Path
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -75,6 +76,13 @@ class FakeTransport:
 
 @pytest.fixture(scope="module")
 def rust_recorder_executable() -> Path:
+    if _EXECUTABLE.is_file():
+        return _EXECUTABLE
+    if shutil.which("nix") is None:
+        pytest.skip(
+            "nix is required to build dimos-memory-recorder "
+            "(self-hosted CI installs it via docker/ros/install-nix.sh)"
+        )
     subprocess.run(
         [
             "nix",

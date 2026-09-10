@@ -38,7 +38,7 @@ def main() -> None:
     client.Init()
     client.SetVolume(85)
 
-    text = "语音测试，如果你听到这句话，说明 G1 喇叭正常。"
+    text = "语音测试,如果你听到这句话,说明 G1 喇叭正常。"
     print(f"Playing via G1 AudioClient.TtsMaker on {iface!r} ...")
     code = client.TtsMaker(text, 0)
     print(f"TtsMaker code={code}")

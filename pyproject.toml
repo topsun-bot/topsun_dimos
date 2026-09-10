@@ -776,6 +776,7 @@ ignore = [
     "*/Cargo.lock",
     "dimos/web/dimos_interface/themes.json",
     "dimos/agents/skills/navigation.py",
+    "dimos/agents/skills/follow_me.py",
     "dimos/manipulation/manipulation_module.py",
     "dimos/manipulation/test_roboplan.py",
     "misc/DimSim/scenes/apartment/objects/manifest.json",

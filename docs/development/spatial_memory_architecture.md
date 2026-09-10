@@ -128,7 +128,7 @@ flowchart TB
 | 名称 | 方向 | 类型 | 说明 |
 |------|------|------|------|
 | `color_image` | `In[Image]` | 唯一输入流 | blueprint 与相机 `autoconnect` |
-| （无 `Out` 流） | — | — | 查询均通过 RPC |
+| （无 `Out` 流） | - | - | 查询均通过 RPC |
 
 位姿**不**订阅 `odom` 流；`start()` 内通过 `self.tf.get("world", "base_link")` 取位姿。测试里可单独部署 `OdometryReplayModule` 填充 TF。
 

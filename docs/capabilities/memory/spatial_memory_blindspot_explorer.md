@@ -1066,7 +1066,7 @@ Sending: 检查附近有没有空间记忆盲区，有的话过去探索一下
 ---
 ---
 (timeout waiting for agent response)
-(no response from agent — is an agent module deployed?)
+(no response from agent - is an agent module deployed?)
 ```
 
 这不是空间记忆盲区算法返回的失败结果，而是自然语言 agent 链路没有返回任何消息。`dimos tell` 的链路是：向 `/human_input` 发布文本，然后等待 `/agent` 或 `/agent_idle`。如果超时期间没有收到 agent 输出，就会打印这两行。

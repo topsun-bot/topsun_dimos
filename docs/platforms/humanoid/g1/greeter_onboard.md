@@ -1,4 +1,4 @@
-# G1 Orin 导览迎宾 — 开发文档
+# G1 Orin 导览迎宾 - 开发文档
 
 在笔记本 WebRTC 版迎宾（见 [greeter.md](./greeter.md)）验证通过后，将同一套迎宾能力部署到 **G1 机载 Jetson Orin**：
 接入激光雷达建图、导航带路、地标到站介绍，声音与麦克风走机身硬件。
@@ -177,20 +177,20 @@ dimos --rerun-host 0.0.0.0 run unitree-g1-nav-onboard
 
 ## 7. 实现任务清单
 
-### 阶段 A — 空壳蓝图
+### 阶段 A - 空壳蓝图
 
 - [x] 新建 `dimos/robot/unitree/g1/blueprints/agentic/unitree_g1_greeter_onboard.py`
 - [x] `autoconnect` 合并 `nav_onboard` 与 greeter 模块，`GreeterSkillContainer` 注入 DDS Spec（`G1HighLevelDdsSdk` 结构化满足 `G1ConnectionSpec`）
 - [ ] SSH 上 `dimos run unitree-g1-greeter-onboard` 能启动不崩溃 *(真机)*
 - [x] `pytest dimos/robot/test_all_blueprints_generation.py` 注册蓝图
 
-### 阶段 B — 迎宾链路
+### 阶段 B - 迎宾链路
 
 - [x] DDS 下 `greet_guest` / `execute_arm_command` / `perform_dance`（全身舞）可用：`G1HighLevelDdsSdk.publish_request` 接入 `G1ArmActionClient`（7106 预设手势、7108/7113 全身舞）
 - [x] `VadVoiceInput` + `GreeterIntentRouter`；`prewarm_texts` 预缓存固定台词
 - [ ] 声音从 G1 喇叭出；说「你好」「挥挥手」与笔记本版行为一致 *(真机)*
 
-### 阶段 C — 标点、讲解词与导览
+### 阶段 C - 标点、讲解词与导览
 
 - [x] 扩展 `tag_location(name, intro_script, synonyms)`（G1 专用封装 `GreeterTourSkillContainer`）：标点时**同时持久化**坐标 + 讲解词
 - [x] 地标表可重载（`GreeterLandmarkStore` 写 JSON，重启后 `load()` 恢复名称/坐标/`intro_script`）
@@ -199,13 +199,13 @@ dimos --rerun-host 0.0.0.0 run unitree-g1-nav-onboard
 - [x] 「厕所在哪 / 带我去前台」→ 模板短路 → `GreeterTourSkillContainer.handle_location_query`（**不经 LLM**）
 - [x] 未录入地标名称仍走固定「未录入」模板，不编造位置
 
-### 阶段 D — 到站介绍
+### 阶段 D - 到站介绍
 
 - [x] 订阅 `corrected_odometry` 距离到达 → `speak(intro_script)`（播标点录入的讲解词，可选 `execute_arm_command`）
 - [x] 确认 `llm_enabled=False`：模板外问题仍固定拒答，与笔记本版一致
 - [x] **未**新建依赖 LLM 的 `greeter_tour_system_prompt`；移动 / 导航 / 讲解均由模板与标点数据驱动
 
-### 阶段 E — 文档与测试
+### 阶段 E - 文档与测试
 
 - [x] 单元测试：`test_greeter_landmark_store.py`、`test_greeter_tour_skill.py`（地标查询、到站判定、带路/讲解决策）
 - [x] 更新本文档「验收」一节为实测记录（见 §9.1）
@@ -332,9 +332,9 @@ dimos run unitree-g1-greeter-onboard
 
 ## 12. 相关文档
 
-- [greeter.md](./greeter.md) — 笔记本无移动迎宾（当前可用）
-- [index.md](./index.md) — G1 SSH、Sport 模式、导航栈
-- [greeter_review.md](./greeter_review.md) — 迎宾代码审查记录
+- [greeter.md](./greeter.md) - 笔记本无移动迎宾（当前可用）
+- [index.md](./index.md) - G1 SSH、Sport 模式、导航栈
+- [greeter_review.md](./greeter_review.md) - 迎宾代码审查记录
 
 ---
 
@@ -348,7 +348,7 @@ dimos run unitree-g1-greeter-onboard
 | 建图无输出 / 无 `corrected_odometry` | 确认 `LIDAR_HOST_IP` / `LIDAR_IP` 环境变量、Mid360 上电与网络可达（`ping 192.168.123.120`）；用 `dimos-viewer` 连 Rerun 看 FastLIO2 点云。 |
 | 标点报「尚未收到里程计数据」 | 导航栈（PGO）尚未发布 `corrected_odometry`；等建图起来、机器人移动几步后再 `tag_location`。 |
 | 「带我去X」不导航 | ① 该地标是否已 `tag_location`（`list_landmarks` 查）；② 句子需含带路关键词（带我去/带路/领我…），否则只播讲解词；③ 路径被占据/不可达时 `SimplePlanner` 不会前进。 |
-| 到站不播讲解词 | 平面距离需 ≤ `arrival_threshold_m`（默认 0.8 m）；若机器人停在阈值外（被障碍挡住），不会触发。标点坐标与导航目标同用 `corrected_odometry`/世界系——若 PGO 回环跳变较大可能偏移。 |
+| 到站不播讲解词 | 平面距离需 ≤ `arrival_threshold_m`（默认 0.8 m）；若机器人停在阈值外（被障碍挡住），不会触发。标点坐标与导航目标同用 `corrected_odometry`/世界系 -  - 若 PGO 回环跳变较大可能偏移。 |
 | 声音不从 G1 喇叭出 | 把 Orin 默认音频输出指到 G1 喇叭（ALSA/PulseAudio），见 §6.4；配 `DASHSCOPE_API_KEY` 用 CosyVoice 中文音色。 |
 | 麦克风不灵敏 / 误触发 | `VadVoiceInput` 默认输入设备需为机载麦；必要时调 VAD 阈值或换 `whisper_model`。 |
 | 标点丢失 | 地标表持久化在 `~/.local/state/dimos/greeter_landmarks.json`（可配 `GreeterTourSkillConfig.store_path`）；换用户/机器需迁移该文件。 |

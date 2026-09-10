@@ -1,8 +1,8 @@
 # Nav Stack
 
-A modular navigation stack for autonomous robot navigation: terrain classification, obstacle avoidance, global path planning, local trajectory selection, and loop-closure-corrected mapping — composed as Blueprint modules.
+A modular navigation stack for autonomous robot navigation: terrain classification, obstacle avoidance, global path planning, local trajectory selection, and loop-closure-corrected mapping - composed as Blueprint modules.
 
-Good fit when you have a lidar-equipped robot and need end-to-end autonomy: feed it a registered point cloud and odometry, and it produces velocity commands. No ROS — modules communicate over DimOS streams (LCM/SHM).
+Good fit when you have a lidar-equipped robot and need end-to-end autonomy: feed it a registered point cloud and odometry, and it produces velocity commands. No ROS - modules communicate over DimOS streams (LCM/SHM).
 
 ```python session=nav_stack
 from dimos.navigation.nav_stack.main import create_nav_stack
@@ -19,7 +19,7 @@ The stack consumes (typically from a SLAM module like `FastLio2`):
 | `registered_scan` | `PointCloud2` | World-frame lidar scan |
 | `odometry` | `Odometry` | SLAM odometry |
 
-It needs a goal source — `way_point` (`PointStamped`) drives the planners. A separate `MovementManager` module (`dimos/navigation/movement_manager/movement_manager.py`) is the usual goal source: it accepts `clicked_point` from a viewer/agent and produces `way_point`, plus it muxes `nav_cmd_vel` with `tele_cmd_vel` into the final `cmd_vel`.
+It needs a goal source - `way_point` (`PointStamped`) drives the planners. A separate `MovementManager` module (`dimos/navigation/movement_manager/movement_manager.py`) is the usual goal source: it accepts `clicked_point` from a viewer/agent and produces `way_point`, plus it muxes `nav_cmd_vel` with `tele_cmd_vel` into the final `cmd_vel`.
 
 The stack produces:
 
@@ -60,8 +60,8 @@ create_nav_stack(
 
 ### Global planner
 
-- **FarPlanner** (default) — visibility-graph planner, larger sensor range. Better for outdoor/long-range.
-- **SimplePlanner** (`planner="simple"`) — grid-based A*. Lighter, easier to debug.
+- **FarPlanner** (default) - visibility-graph planner, larger sensor range. Better for outdoor/long-range.
+- **SimplePlanner** (`planner="simple"`) - grid-based A*. Lighter, easier to debug.
 
 ### Exploration
 
@@ -69,7 +69,7 @@ create_nav_stack(
 
 ### Obstacle sensitivity
 
-Keep `obstacle_height_threshold` aligned between TerrainAnalysis and LocalPlanner — if TerrainAnalysis flags something but LocalPlanner's threshold is higher, the planner will drive through it.
+Keep `obstacle_height_threshold` aligned between TerrainAnalysis and LocalPlanner - if TerrainAnalysis flags something but LocalPlanner's threshold is higher, the planner will drive through it.
 
 ```python session=nav_stack
 create_nav_stack(
@@ -101,11 +101,11 @@ vis_config = nav_stack_rerun_config(
 ```
 
 Key visual elements:
-- **terrain_map** — green=ground, red=obstacle (height-based)
-- **path** — green line, local planner's chosen trajectory
-- **goal_path** — orange/yellow global plan
-- **way_point** — red sphere at the current intermediate target
-- **goal** — purple sphere at the navigation destination
+- **terrain_map** - green=ground, red=obstacle (height-based)
+- **path** - green line, local planner's chosen trajectory
+- **goal_path** - orange/yellow global plan
+- **way_point** - red sphere at the current intermediate target
+- **goal** - purple sphere at the navigation destination
 
 ## Architecture
 
@@ -226,10 +226,10 @@ class MyRobotControl(Module):
 
 ### Wiring notes
 
-- **Stream remap** — FastLio2 outputs `lidar`, nav_stack expects `registered_scan`. `odometry` matches on both sides automatically.
-- **`mount` pose** — sensor position relative to the ground. `z` shifts the SLAM origin so ground sits at z=0, which TerrainAnalysis depends on.
-- **`vehicle_height`** — tells TerrainAnalysis to ignore points above the robot (e.g. ceilings). Propagates to FarPlanner/SimplePlanner automatically.
-- **Differential drive** — for robots without strafe, set `path_follower={"vehicle_config": "standard"}`.
+- **Stream remap** - FastLio2 outputs `lidar`, nav_stack expects `registered_scan`. `odometry` matches on both sides automatically.
+- **`mount` pose** - sensor position relative to the ground. `z` shifts the SLAM origin so ground sits at z=0, which TerrainAnalysis depends on.
+- **`vehicle_height`** - tells TerrainAnalysis to ignore points above the robot (e.g. ceilings). Propagates to FarPlanner/SimplePlanner automatically.
+- **Differential drive** - for robots without strafe, set `path_follower={"vehicle_config": "standard"}`.
 
 ### Visualization
 

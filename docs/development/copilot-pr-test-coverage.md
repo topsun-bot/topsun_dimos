@@ -18,10 +18,10 @@
 
 本仓库已提供：
 
-- [`.github/copilot-instructions.md`](/.github/copilot-instructions.md) — 全仓库审查要点与评论模板
-- [`.github/instructions/test-coverage-review.instructions.md`](/.github/instructions/test-coverage-review.instructions.md) — `test/**`
-- [`.github/instructions/dimos-tests-dir-coverage-review.instructions.md`](/.github/instructions/dimos-tests-dir-coverage-review.instructions.md) — `dimos/**/tests/**`（如 `navigation/nav_stack/tests/`）
-- [`.github/instructions/dimos-tests-coverage-review.instructions.md`](/.github/instructions/dimos-tests-coverage-review.instructions.md) — `dimos/**/test_*.py`
+- [`.github/copilot-instructions.md`](/.github/copilot-instructions.md) - 全仓库审查要点与评论模板
+- [`.github/instructions/test-coverage-review.instructions.md`](/.github/instructions/test-coverage-review.instructions.md) - `test/**`
+- [`.github/instructions/dimos-tests-dir-coverage-review.instructions.md`](/.github/instructions/dimos-tests-dir-coverage-review.instructions.md) - `dimos/**/tests/**`（如 `navigation/nav_stack/tests/`）
+- [`.github/instructions/dimos-tests-coverage-review.instructions.md`](/.github/instructions/dimos-tests-coverage-review.instructions.md) - `dimos/**/test_*.py`
 
 > Copilot 使用 **PR 的 base 分支（通常是 `main`）** 上的指令文件。请先合入本说明与指令文件，再对功能 PR 启用自动审查。
 
@@ -31,8 +31,8 @@
 2. **Target branches**：包含 `main`（或 default branch）。
 3. **Branch rules**：勾选 **Automatically request Copilot code review**。
 4. 可选：
-   - **Review new pushes** — 每次 push 重新审查
-   - **Review draft pull requests** — 草稿阶段也出结果
+   - **Review new pushes** - 每次 push 重新审查
+   - **Review draft pull requests** - 草稿阶段也出结果
 
 参考：[Configuring automatic code review by GitHub Copilot](https://docs.github.com/en/copilot/using-github-copilot/code-review/configuring-automatic-code-review-by-copilot)
 
@@ -45,9 +45,9 @@
 
 1. PR 描述写清 **验收标准 / Test plan**（与 [PR 模板](/.github/pull_request_template.md) 一致）。
 2. 在功能变更之外，补充或修改对应测试。本仓库常见位置（Copilot 会扫描 PR diff 中**全部**匹配项）：
-   - `dimos/<module>/tests/` — 例：`dimos/navigation/nav_stack/tests/`
-   - `dimos/<module>/test_*.py` — 例：`dimos/perception/test_spatial_memory.py`
-   - `test/` — Quality Gate 专用（若团队使用）
+   - `dimos/<module>/tests/` - 例：`dimos/navigation/nav_stack/tests/`
+   - `dimos/<module>/test_*.py` - 例：`dimos/perception/test_spatial_memory.py`
+   - `test/` - Quality Gate 专用（若团队使用）
 3. PR 描述中的 **Test plan** 请列出新增/修改的测试文件路径，便于 Copilot 对照。
 4. 等待 Copilot 在 PR 中发表评论（通常数十秒内）；评论中应包含「本 PR 涉及的测试文件」列表；每次 push 若开启 **Review new pushes** 会更新。
 5. 手动触发（可选）：
