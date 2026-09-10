@@ -34,16 +34,28 @@ DENO_VERSION = "v2.6.10"
 _DENO_CACHE_DIR = CACHE_DIR / "deno"
 
 
-def ensure_deno() -> str:
+def find_deno() -> str | None:
+    """Return an existing Deno binary, or None if it is not installed.
+
+    Does not download. Tests that need Deno should skip from this result
+    *before* constructing modules or transports, so a skip cannot leak
+    ``run_forever`` / LCM threads.
+    """
     which = shutil.which("deno")
     if which:
         return which
 
     exe_name = "deno.exe" if platform.system() == "Windows" else "deno"
-    deno_dir = _DENO_CACHE_DIR / DENO_VERSION
-    deno_path = deno_dir / exe_name
+    deno_path = _DENO_CACHE_DIR / DENO_VERSION / exe_name
     if deno_path.exists():
         return str(deno_path)
+    return None
+
+
+def ensure_deno() -> str:
+    found = find_deno()
+    if found is not None:
+        return found
 
     # Pytest sessions must not hit GitHub for the binary: ubuntu matrix
     # jobs have no Deno, and parallel workers 403 the releases API.
@@ -52,6 +64,10 @@ def ensure_deno() -> str:
         import pytest
 
         pytest.skip("deno is not available")
+
+    exe_name = "deno.exe" if platform.system() == "Windows" else "deno"
+    deno_dir = _DENO_CACHE_DIR / DENO_VERSION
+    deno_path = deno_dir / exe_name
 
     triple = _deno_triple()
     url = f"https://github.com/denoland/deno/releases/download/{DENO_VERSION}/deno-{triple}.zip"

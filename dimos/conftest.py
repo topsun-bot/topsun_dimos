@@ -123,6 +123,12 @@ def _has_turbojpeg() -> bool:
         return False
 
 
+def _has_deno() -> bool:
+    from dimos.utils.deno import find_deno
+
+    return find_deno() is not None
+
+
 # A segfault in a C extension leaves NO kernel log line: faulthandler installs a
 # SIGSEGV handler, and the kernel only prints "segfault at ..." for *unhandled*
 # signals. The Python traceback is therefore the only evidence, and it has two
@@ -192,6 +198,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "skipif_no_turbojpeg: skip when native libturbojpeg is missing",
+    )
+    config.addinivalue_line(
+        "markers",
+        "skipif_no_deno: skip when the Deno runtime is not on PATH or in cache",
     )
     config.addinivalue_line("markers", "skipif_macos_bug: skip known-buggy tests on macOS")
     config.addinivalue_line("markers", "skipif_macos: skip tests not intended to run on macOS")
@@ -267,6 +277,7 @@ def pytest_collection_modifyitems(config, items):
             not _has_turbojpeg(),
             "native libturbojpeg unavailable",
         ),
+        "skipif_no_deno": (not _has_deno(), "deno is not available"),
         "skipif_macos_bug": (_is_macos(), "Some tests are buggy on Mac OS"),
         "skipif_macos": (_is_macos(), "Not intended to run on macOS"),
         "skipif_aarch64": (

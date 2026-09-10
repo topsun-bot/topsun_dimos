@@ -46,10 +46,10 @@ from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.web.relay_bridge.e2e_support import (
+    RelayE2E,
     arm_teleop,
     attach_viewer,
     collect_until,
-    stop_module,
 )
 from dimos.web.relay_bridge.protocol import (
     Stop as WireStop,
@@ -57,11 +57,7 @@ from dimos.web.relay_bridge.protocol import (
     Twist as WireTwist,
     Unsub,
 )
-from dimos.web.relay_bridge.relay_bridge_module import (
-    RelayBridgeConfig,
-    RelayBridgeModule,
-    default_manifest,
-)
+from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
 from dimos.web.relay_bridge.relay_process import RelayProcess
 from dimos.web.relay_bridge.wt_client import RelayClient
 
@@ -118,30 +114,10 @@ class _Publisher:
         self.image.stop()
 
 
-def _start_bridge() -> tuple[RelayBridgeModule, tuple[pLCMTransport, ...]]:
-    # web_build=False: tests must never trigger the npm-downloading build.
-    module = RelayBridgeModule(local_port=0, open_browser=False, web_build=False, robot_id=ROBOT_ID)
-    transports = (
-        pLCMTransport("/rb_e2e/odom"),
-        pLCMTransport("/rb_e2e/color_image"),
-        pLCMTransport("/rb_e2e/global_costmap"),
-    )
-    for transport in transports:
-        transport.start()
-    module.odom.transport = transports[0]
-    module.color_image.transport = transports[1]
-    module.global_costmap.transport = transports[2]
-    module.start()  # spawns the Deno relay, connects, registers
-    return module, transports
-
-
 @pytest.fixture(scope="module")
 def bridge() -> Iterator[RelayBridgeModule]:
-    module, _ = _start_bridge()
-    try:
+    with RelayE2E.local_bridge(ROBOT_ID) as module:
         yield module
-    finally:
-        module.stop()
 
 
 @pytest.fixture
@@ -153,15 +129,8 @@ def respawn_bridge() -> Iterator[RelayBridgeModule]:
     conftest thread-leak check. Owning the bridge scopes those threads to the
     test, with everything reaped here.
     """
-    module, transports = _start_bridge()
-    try:
+    with RelayE2E.local_bridge(ROBOT_ID) as module:
         yield module
-    finally:
-        try:
-            stop_module(module)
-        finally:
-            for transport in transports:
-                transport.stop()
 
 
 @pytest.fixture(scope="module")
@@ -203,6 +172,7 @@ def test_local_relay_port_collision_does_not_kill_listener() -> None:
             listener.stdout.close()
 
 
+@pytest.mark.skipif_no_deno
 @pytest.mark.skipif_no_turbojpeg
 def test_full_session_flow_and_lazy_encode(
     bridge: RelayBridgeModule, publisher: _Publisher
@@ -216,8 +186,10 @@ def test_full_session_flow_and_lazy_encode(
 
             frames = await collect_until(
                 viewer,
-                lambda fs: any(f.header.ch == "odom" for f in fs)
-                and any(f.header.ch == "color_image" for f in fs),
+                lambda fs: (
+                    any(f.header.ch == "odom" for f in fs)
+                    and any(f.header.ch == "color_image" for f in fs)
+                ),
                 timeout=15.0,
             )
             odom = next(f for f in frames if f.header.ch == "odom")
@@ -314,6 +286,7 @@ def _wait_costmap_unsubscribed(bridge: RelayBridgeModule) -> None:
     assert "global_costmap" not in bridge._session.unsubs, "bridge never heard the unsub"
 
 
+@pytest.mark.skipif_no_deno
 def test_costmap_full_grid_arrives_and_resends_on_subscribe(bridge: RelayBridgeModule) -> None:
     publisher = _CostmapPublisher()
     publisher.start()
@@ -333,6 +306,7 @@ def test_costmap_full_grid_arrives_and_resends_on_subscribe(bridge: RelayBridgeM
     assert bridge.encoded["global_costmap"] == encoded_before
 
 
+@pytest.mark.skipif_no_deno
 def test_costmap_replay_reflects_publishes_while_unwatched(bridge: RelayBridgeModule) -> None:
     # A different grid published with zero viewers must land in the raw cache,
     # so the next subscriber gets it - stamped with its arrival time (honest
@@ -364,6 +338,7 @@ def test_costmap_replay_reflects_publishes_while_unwatched(bridge: RelayBridgeMo
     assert t0 <= frame.header.ts <= t1
 
 
+@pytest.mark.skipif_no_deno
 def test_relay_child_death_respawns_and_recovers(
     respawn_bridge: RelayBridgeModule, publisher: _Publisher
 ) -> None:
@@ -404,43 +379,11 @@ def test_relay_child_death_respawns_and_recovers(
 # Teleop e2e: viewer datagrams -> relay lease gate -> bridge publishes.
 
 
-def _start_teleop_bridge() -> tuple[RelayBridgeModule, tuple[pLCMTransport, ...]]:
-    manifest = default_manifest(
-        RelayBridgeConfig(), ("color_image", "odom", "global_costmap", "tele_cmd_vel")
-    )
-    module = RelayBridgeModule(
-        local_port=0,
-        open_browser=False,
-        web_build=False,
-        robot_id=ROBOT_ID,
-        manifest=manifest,
-    )
-    transports = (
-        pLCMTransport("/rb_e2e/odom"),
-        pLCMTransport("/rb_e2e/color_image"),
-        pLCMTransport("/rb_e2e/global_costmap"),
-    )
-    for transport in transports:
-        transport.start()
-    module.odom.transport = transports[0]
-    module.color_image.transport = transports[1]
-    module.global_costmap.transport = transports[2]
-    module.start()
-    return module, transports
-
-
 @pytest.fixture
 def teleop_bridge() -> Iterator[RelayBridgeModule]:
     """Function-scoped: teleop lease state must not leak between tests."""
-    module, transports = _start_teleop_bridge()
-    try:
+    with RelayE2E.local_bridge(ROBOT_ID, teleop=True) as module:
         yield module
-    finally:
-        try:
-            stop_module(module)
-        finally:
-            for transport in transports:
-                transport.stop()
 
 
 async def _until(cond, what: str, timeout: float = 10.0) -> None:
@@ -464,6 +407,7 @@ async def _drive(viewer: RelayClient, seq: int, stop: asyncio.Event, vx: float =
     return seq
 
 
+@pytest.mark.skipif_no_deno
 def test_teleop_drive_and_estop(teleop_bridge: RelayBridgeModule) -> None:
     bridge = teleop_bridge
     twists: list[Twist] = []
@@ -498,26 +442,11 @@ def deadman_bridge() -> Iterator[tuple[RelayProcess, RelayBridgeModule]]:
     child there is no 1 s child watchdog, and a SIGKILLed relay sends no
     CONNECTION_CLOSE so the session-teardown zero stays out of reach: the
     teleop deadman is the only path that can stop the robot."""
-    relay = RelayProcess()
-    ready = relay.start()
-    manifest = default_manifest(RelayBridgeConfig(), ("tele_cmd_vel",))
-    module = RelayBridgeModule(
-        relay_url=ready.wt_url,
-        open_browser=False,
-        web_build=False,
-        robot_id=ROBOT_ID,
-        manifest=manifest,
-    )
-    module.start()
-    try:
-        yield relay, module
-    finally:
-        try:
-            stop_module(module)
-        finally:
-            relay.stop()
+    with RelayE2E.external_relay_bridge(ROBOT_ID) as pair:
+        yield pair
 
 
+@pytest.mark.skipif_no_deno
 def test_teleop_relay_kill_deadman_deadline(
     deadman_bridge: tuple[RelayProcess, RelayBridgeModule],
 ) -> None:
@@ -554,6 +483,7 @@ def test_teleop_relay_kill_deadman_deadline(
     asyncio.run(flow())
 
 
+@pytest.mark.skipif_no_deno
 def test_teleop_lease_exclusive_and_handover(teleop_bridge: RelayBridgeModule) -> None:
     bridge = teleop_bridge
     twists: list[Twist] = []

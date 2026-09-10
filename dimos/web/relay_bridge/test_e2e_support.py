@@ -22,14 +22,14 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from dimos.web.relay_bridge.e2e_support import stop_module
+from dimos.web.relay_bridge.e2e_support import RelayE2E
 
 if TYPE_CHECKING:
     from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
 
 
 class _StubBridge:
-    """Duck-typed stand-in: stop_module only needs stop/_loop/_loop_thread."""
+    """Duck-typed stand-in: RelayE2E.stop only needs stop/_loop/_loop_thread."""
 
     def __init__(self, loop: asyncio.AbstractEventLoop, thread: threading.Thread) -> None:
         self._loop = loop
@@ -39,6 +39,14 @@ class _StubBridge:
         # Leave the loop running, matching Module.stop() after a 2s join
         # timeout (killed relay child, leftover tasks).
         return
+
+
+class _Transport:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
 
 
 @contextmanager
@@ -57,20 +65,58 @@ def _orphaned_loop() -> Iterator[tuple[asyncio.AbstractEventLoop, threading.Thre
             loop.close()
 
 
-def test_stop_module_reaps_still_running_loop() -> None:
-    with _orphaned_loop() as (loop, thread):
-        stop_module(cast("RelayBridgeModule", _StubBridge(loop, thread)))
-        assert not thread.is_alive()
-        assert not loop.is_running()
+class TestRelayE2E:
+    def test_stop_reaps_still_running_loop(self) -> None:
+        with _orphaned_loop() as (loop, thread):
+            RelayE2E.stop(cast("RelayBridgeModule", _StubBridge(loop, thread)))
+            assert not thread.is_alive()
+            assert not loop.is_running()
 
+    def test_stop_reaps_when_module_stop_raises(self) -> None:
+        class _Raising(_StubBridge):
+            def stop(self) -> None:
+                raise RuntimeError("relay child already dead")
 
-def test_stop_module_still_reaps_when_module_stop_raises() -> None:
-    class _Raising(_StubBridge):
-        def stop(self) -> None:
-            raise RuntimeError("relay child already dead")
+        with _orphaned_loop() as (loop, thread):
+            transport = _Transport()
+            with pytest.raises(RuntimeError, match="relay child already dead"):
+                RelayE2E.stop(cast("RelayBridgeModule", _Raising(loop, thread)), (transport,))
+            assert not thread.is_alive()
+            assert not loop.is_running()
+            assert transport.stopped
 
-    with _orphaned_loop() as (loop, thread):
-        with pytest.raises(RuntimeError, match="relay child already dead"):
-            stop_module(cast("RelayBridgeModule", _Raising(loop, thread)))
-        assert not thread.is_alive()
-        assert not loop.is_running()
+    def test_stop_still_stops_transports_when_module_is_missing(self) -> None:
+        transport = _Transport()
+        RelayE2E.stop(None, (transport,))
+        assert transport.stopped
+
+    def test_require_deno_skips_without_starting_threads(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("dimos.web.relay_bridge.e2e_support.find_deno", lambda: None)
+        before = {t.ident for t in threading.enumerate() if t.is_alive()}
+        with pytest.raises(pytest.skip.Exception, match="deno is not available"):
+            RelayE2E.require_deno()
+        leaked = [
+            t.name
+            for t in threading.enumerate()
+            if t.is_alive() and t.ident not in before and t.name != "MainThread"
+        ]
+        assert leaked == []
+
+    def test_stop_runs_after_start_skips(self) -> None:
+        """Fixture shape: construct (loop live), start skips, finally must reap."""
+        with _orphaned_loop() as (loop, thread):
+            transport = _Transport()
+
+            class _SkipStart(_StubBridge):
+                def start(self) -> None:
+                    raise pytest.skip.Exception("deno is not available")
+
+            module = _SkipStart(loop, thread)
+            try:
+                module.start()
+            except pytest.skip.Exception:
+                RelayE2E.stop(cast("RelayBridgeModule", module), (transport,))
+            assert not thread.is_alive()
+            assert transport.stopped
