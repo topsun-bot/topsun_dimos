@@ -35,6 +35,7 @@ import pytest
 from dimos.agents import voice_input as voice_input_module
 from dimos.agents.voice_input import CockpitVoiceInput
 from dimos.stream.audio.base import AudioEvent
+from dimos.stream.audio.decode import ffmpeg_requirement
 from dimos.stream.audio.node_normalizer import AudioNormalizer
 from dimos.stream.audio.stt import node_whisper as whisper_module
 from dimos.web.relay_bridge.audio_codec import AudioChunk
@@ -107,6 +108,7 @@ def make_voice(monkeypatch: pytest.MonkeyPatch) -> Iterator[_MakeVoice]:
         monkeypatch.setattr(AudioNormalizer, "_normalize_audio", record_normalized)
         monkeypatch.setattr(whisper_module, "_USE_FASTER_WHISPER", False)
         monkeypatch.setattr(whisper_module, "whisper", FakeWhisper())
+        monkeypatch.setattr(voice_input_module, "ffmpeg_requirement", lambda: None)
         if not real_decode:
 
             def fake_decode(raw: bytes) -> AudioEvent | None:
@@ -147,6 +149,9 @@ def test_real_container_bytes_reach_pcm_and_human_input(
 ) -> None:
     # A real WAV through the real ffmpeg decode: the pipeline receives the
     # 16-kHz mono float32 PCM WhisperNode assumes, and text reaches the port.
+    requirement_error = ffmpeg_requirement()
+    if requirement_error is not None:
+        pytest.skip(requirement_error)
     h = make_voice(real_decode=True)
     raw = _wav_bytes()
     for seq, offset in enumerate(range(0, len(raw), 16_384)):

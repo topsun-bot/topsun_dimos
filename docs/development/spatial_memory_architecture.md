@@ -7,7 +7,7 @@
 
 ## 概述
 
-DimOS 的**空间记忆**指在机器人运动时，将**彩色相机帧**与 **world 坐标系下的位姿**绑定，用 **CLIP** 生成嵌入，写入 **ChromaDB** 与本地 **VisualMemory**，并支持：
+dimOS 的**空间记忆**指在机器人运动时，将**彩色相机帧**与 **world 坐标系下的位姿**绑定，用 **CLIP** 生成嵌入，写入 **ChromaDB** 与本地 **VisualMemory**，并支持：
 
 - 按**文本**（CLIP 图文匹配）检索历史画面与位姿
 - **命名地点**（`RobotLocation`）的语义标注与查询
@@ -32,7 +32,7 @@ DimOS 的**空间记忆**指在机器人运动时，将**彩色相机帧**与 **
 ### 模块分层
 
 ```
-相机 color_image (DimOS In[Image] / LCM)
+相机 color_image (dimOS In[Image] / LCM)
         │
         ▼
   SpatialMemory (Module)
@@ -132,7 +132,7 @@ flowchart TB
 
 位姿**不**订阅 `odom` 流；`start()` 内通过 `self.tf.get("world", "base_link")` 取位姿。测试里可单独部署 `OdometryReplayModule` 填充 TF。
 
-LCM：流与 RPC 经 DimOS `LCMTransport` / RPC 通道（测试示例：`LCMTransport("/test_video", Image)`；E2E 常见 `/rpc/McpClient/on_system_modules/res`）。**无**固定的全局 topic 名文档；由模块图动态连线。
+LCM：流与 RPC 经 dimOS `LCMTransport` / RPC 通道（测试示例：`LCMTransport("/test_video", Image)`；E2E 常见 `/rpc/McpClient/on_system_modules/res`）。**无**固定的全局 topic 名文档；由模块图动态连线。
 
 ### RPC 方法（`SpatialMemory`，`@rpc`）
 

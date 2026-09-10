@@ -17,8 +17,6 @@ import threading
 import time
 from typing import Any
 
-import cv2
-
 # Import LCM messages
 from dimos_lcm.vision_msgs import (
     BoundingBox2D,
@@ -46,6 +44,8 @@ logger = setup_logger(level=logging.INFO)
 
 def _create_opencv_tracker() -> Any:
     """Create a visual tracker (CSRT preferred; MIL/KCF fallbacks for slim OpenCV builds)."""
+    import cv2
+
     # Different OpenCV builds expose tracker constructors in different namespaces
     # (`cv2.legacy.*`, `cv2.Tracker*.create`, or direct `cv2.Tracker*_create`).
     # Collect all candidates and try them in priority order.

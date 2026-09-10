@@ -89,7 +89,7 @@ OPENAI_API_KEY=sk-deepseek-xxxx
 OPENAI_BASE_URL=https://api.deepseek.com
 ```
 
-多数 OpenAI 兼容客户端读的是 `OPENAI_API_BASE` 或 `OPENAI_BASE_URL`,具体取决于 `McpClient` 内部使用的 SDK。需要验证 DimOS 的 `McpClient` 到底读哪个环境变量，否则用户按文档配置后可能连接失败。
+多数 OpenAI 兼容客户端读的是 `OPENAI_API_BASE` 或 `OPENAI_BASE_URL`,具体取决于 `McpClient` 内部使用的 SDK。需要验证 dimOS 的 `McpClient` 到底读哪个环境变量，否则用户按文档配置后可能连接失败。
 
 ---
 
@@ -131,7 +131,7 @@ return "\n".join(results)
 
 > 依赖注入 `_connection: G1ConnectionSpec`,经 `publish_request` 下发宇树手臂动作。
 
-这实际上是 DimOS 框架的**模块依赖** -  - `Module` 子类的 `_connection` 字段由框架根据 blueprint 连线自动填充，并非构造函数/Setter 注入。建议改为：
+这实际上是 dimOS 框架的**模块依赖** -  - `Module` 子类的 `_connection` 字段由框架根据 blueprint 连线自动填充，并非构造函数/Setter 注入。建议改为：
 
 > 模块依赖 `_connection: G1ConnectionSpec`（框架自动注入），经 `publish_request` 下发手臂动作。
 
@@ -223,7 +223,7 @@ return "\n".join(results)
 ## 不予修改:仓库约定核实
 
 - **#1 空 `start/stop`**:`UnitreeG1SkillContainer`(`skill_container.py:70-75`) 确实也是纯
-  `super()` 空重写,保留一致合理。但修改记录称 "`SpeakSkill` 亦如此" 不准确 -  - 
+  `super()` 空重写,保留一致合理。但修改记录称 "`SpeakSkill` 亦如此" 不准确 -  -
   `SpeakSkill.start()`(`speak_skill.py:48-58`)有实质性的 TTS 初始化逻辑(DashScope/OpenAI
   分叉、音频输出节点接线),并非空重写。真正一致的兄弟文件只有 `UnitreeG1SkillContainer`。
   **结论**:不影响判断,但如对外展示建议删去 "SpeakSkill" 引用。

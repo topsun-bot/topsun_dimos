@@ -86,6 +86,7 @@ class SpyChat(BaseChatModel):
 # -- passive: recording -> Select -> encode -> prompt --------------------------------
 
 
+@pytest.mark.skipif_no_turbojpeg
 def test_passive_streams_reach_the_prompt(tmp_path: Path) -> None:
     store = _open_store(tmp_path / "rec.db")
     odom = store.stream("odom", PoseStamped)

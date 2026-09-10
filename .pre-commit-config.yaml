@@ -154,11 +154,19 @@ repos:
         entry: |
           bash -c '
             set -euo pipefail
+            if ! command -v cargo >/dev/null 2>&1; then
+              echo "cargo not on PATH; skipping clippy (rust CI job owns this check)"
+              exit 0
+            fi
             git ls-files "*Cargo.toml" | while read -r m; do
               cargo locate-project --manifest-path "$m" --workspace --message-format plain
             done | sort -u | while read -r root; do
               # A crate with its own flake carries system deps the root shell lacks.
               if [ -f "$(dirname "$root")/flake.nix" ]; then
+                if ! command -v nix >/dev/null 2>&1; then
+                  echo "nix not on PATH; skipping clippy for $root (rust CI job owns this check)"
+                  continue
+                fi
                 nix develop "path:$(dirname "$root")" -c cargo clippy --manifest-path "$root" --workspace --all-targets -- -D warnings
               else
                 cargo clippy --manifest-path "$root" --workspace --all-targets -- -D warnings
@@ -171,7 +179,7 @@ repos:
 
       - id: deno-fmt
         name: deno fmt (web/)
-        entry: bash -c 'cd web && deno fmt'
+        entry: bash -c 'command -v deno >/dev/null 2>&1 || { echo "deno not on PATH; skipping (web CI job owns this check)"; exit 0; }; cd web && deno fmt'
         language: system
         files: ^web/
         pass_filenames: false

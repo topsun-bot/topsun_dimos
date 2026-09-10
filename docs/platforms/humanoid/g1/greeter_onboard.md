@@ -1,6 +1,6 @@
 # G1 Orin 导览迎宾 - 开发文档
 
-在笔记本 WebRTC 版迎宾（见 [greeter.md](./greeter.md)）验证通过后，将同一套迎宾能力部署到 **G1 机载 Jetson Orin**：
+在笔记本 WebRTC 版迎宾（见 [greeter.md](/docs/platforms/humanoid/g1/greeter.md)）验证通过后，将同一套迎宾能力部署到 **G1 机载 Jetson Orin**：
 接入激光雷达建图、导航带路、地标到站介绍，声音与麦克风走机身硬件。
 
 > **状态**：`unitree-g1-greeter-onboard` 蓝图已实现（阶段 A–E 代码完成，离线测试通过）。真机行为（DDS 手势/全身舞、Mid360 建图、标点带路、到站讲解）需在 Orin 上验证，见 §9 与 §13。
@@ -139,7 +139,7 @@ ssh -L 3030:localhost:3030 unitree@192.168.123.164
 # 密码: 123
 ```
 
-更多网络说明见 [index.md](./index.md)。
+更多网络说明见 [index.md](/docs/platforms/humanoid/g1/index.md)。
 
 ### 6.2 关键 IP
 
@@ -171,7 +171,7 @@ dimos --rerun-host 0.0.0.0 run unitree-g1-nav-onboard
 
 ### 6.5 机器人姿态
 
-导航前 G1 须处于 Sport 平衡模式（手柄 **R2 + A** 等），见 [index.md](./index.md) 第 3 节。
+导航前 G1 须处于 Sport 平衡模式（手柄 **R2 + A** 等），见 [index.md](/docs/platforms/humanoid/g1/index.md) 第 3 节。
 
 ---
 
@@ -301,7 +301,7 @@ dimos run unitree-g1-greeter-onboard
 
 ---
 
-你是 DimOS 仓库里的实现工程师，负责 **G1 Orin 导览迎宾**（任务 4）。
+你是 dimOS 仓库里的实现工程师，负责 **G1 Orin 导览迎宾**（任务 4）。
 
 **已完成（勿破坏）**：笔记本版蓝图 `unitree-g1-greeter` / `-voice` / `-hands-free`，模块 `greeter_intent_router.py`、`greeter_skill.py`、`speak_skill.prewarm_texts()`。**对话策略：`llm_enabled=False`，仅模板短路，模板外固定拒答。**
 
@@ -332,9 +332,9 @@ dimos run unitree-g1-greeter-onboard
 
 ## 12. 相关文档
 
-- [greeter.md](./greeter.md) - 笔记本无移动迎宾（当前可用）
-- [index.md](./index.md) - G1 SSH、Sport 模式、导航栈
-- [greeter_review.md](./greeter_review.md) - 迎宾代码审查记录
+- [greeter.md](/docs/platforms/humanoid/g1/greeter.md) - 笔记本无移动迎宾（当前可用）
+- [index.md](/docs/platforms/humanoid/g1/index.md) - G1 SSH、Sport 模式、导航栈
+- [greeter_review.md](/docs/platforms/humanoid/g1/greeter_review.md) - 迎宾代码审查记录
 
 ---
 
@@ -342,7 +342,7 @@ dimos run unitree-g1-greeter-onboard
 
 | 现象 | 排查 |
 |------|------|
-| 手势/舞蹈不动作 | 手臂动作仅在 FSM 状态 500/501/801（Walk/Run）下生效；先确认 G1 处于 Sport 平衡模式（手柄 **R2 + A**，见 [index.md](./index.md) §3）。日志看 `G1 arm action client initialized`；`publish_request` 返回 `code != 0` 表示服务拒绝（多为 FSM 状态不对）。 |
+| 手势/舞蹈不动作 | 手臂动作仅在 FSM 状态 500/501/801（Walk/Run）下生效；先确认 G1 处于 Sport 平衡模式（手柄 **R2 + A**，见 [index.md](/docs/platforms/humanoid/g1/index.md) §3）。日志看 `G1 arm action client initialized`；`publish_request` 返回 `code != 0` 表示服务拒绝（多为 FSM 状态不对）。 |
 | `greet_guest` 有声音但不挥手 | 说明 TTS 正常但 `G1ArmActionClient` 未连上：确认 DDS 网卡 `network_interface`（默认 `eth0`）与 `ChannelFactoryInitialize` 成功；检查 `rt/api/arm/request` 是否被占用。 |
 | 跳舞只挥手不全身 | 全身舞需 Orin 机载（检测 `/etc/nv_tegra_release`）；非 Orin 会退化为 `webrtc_arms`。确认在机器人 Orin 上运行，且 `dance_names` 为有效 UniStore 动作名（`list_actions` 查询）。 |
 | 建图无输出 / 无 `corrected_odometry` | 确认 `LIDAR_HOST_IP` / `LIDAR_IP` 环境变量、Mid360 上电与网络可达（`ping 192.168.123.120`）；用 `dimos-viewer` 连 Rerun 看 FastLIO2 点云。 |

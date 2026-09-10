@@ -19,7 +19,6 @@ Uses GTSAM iSAM2 for pose graph optimization and PCL ICP for loop closure.
 
 from __future__ import annotations
 
-from pathlib import Path
 import time
 
 from reactivex.disposable import Disposable
@@ -40,7 +39,7 @@ logger = setup_logger()
 
 
 class PGOConfig(NativeModuleConfig):
-    cwd: str | None = str(Path(__file__).resolve().parent / "cpp")
+    cwd: str | None = "cpp"
     executable: str = "result/bin/pgo"
     build_command: str | None = "nix build .#default --no-write-lock-file"
 

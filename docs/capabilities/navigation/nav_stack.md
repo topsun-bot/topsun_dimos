@@ -2,7 +2,7 @@
 
 A modular navigation stack for autonomous robot navigation: terrain classification, obstacle avoidance, global path planning, local trajectory selection, and loop-closure-corrected mapping - composed as Blueprint modules.
 
-Good fit when you have a lidar-equipped robot and need end-to-end autonomy: feed it a registered point cloud and odometry, and it produces velocity commands. No ROS - modules communicate over DimOS streams (LCM/SHM).
+Good fit when you have a lidar-equipped robot and need end-to-end autonomy: feed it a registered point cloud and odometry, and it produces velocity commands. No ROS - modules communicate over dimOS streams (LCM/SHM).
 
 ```python session=nav_stack
 from dimos.navigation.nav_stack.main import create_nav_stack

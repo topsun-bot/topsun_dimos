@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -300,6 +301,17 @@ def get_data(name: str | Path) -> Path:
     # already pulled and decompressed, return it directly
     if file_path.exists():
         return file_path
+
+    # Ubuntu CI on topsun main removes git-lfs to prevent accidental pulls.
+    if shutil.which("git-lfs") is None:
+        if "pytest" in sys.modules:
+            import pytest
+
+            pytest.skip("git-lfs is not available")
+        raise RuntimeError(
+            "git-lfs is required to download test data.\n\n"
+            "Git LFS installation instructions: https://git-lfs.github.io/"
+        )
 
     # extract archive root (first path component) and nested path
     path_parts = Path(name).parts

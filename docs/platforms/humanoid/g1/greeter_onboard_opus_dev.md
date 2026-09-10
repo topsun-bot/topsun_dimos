@@ -2,7 +2,7 @@
 
 # G1 Orin 导览迎宾 - 开发记录与代码清单
 
-本文件记录依据 [`greeter_onboard.md`](./greeter_onboard.md) 完成的「G1 Orin 导览迎宾」（任务 4，阶段 A–E）的全部实现内容、新增/修改的代码，以及离线自测结果与真机待验证项。**未提交 git**。
+本文件记录依据 [`greeter_onboard.md`](/docs/platforms/humanoid/g1/greeter_onboard.md) 完成的「G1 Orin 导览迎宾」（任务 4，阶段 A–E）的全部实现内容、新增/修改的代码，以及离线自测结果与真机待验证项。**未提交 git**。
 
 ---
 
