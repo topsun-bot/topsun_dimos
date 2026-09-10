@@ -15,6 +15,7 @@
 """Locate or auto-install the pinned Deno runtime (used by DimSim and the web relay)."""
 
 import json
+import os
 from pathlib import Path
 import platform
 import shutil
@@ -43,6 +44,14 @@ def ensure_deno() -> str:
     deno_path = deno_dir / exe_name
     if deno_path.exists():
         return str(deno_path)
+
+    # Pytest sessions must not hit GitHub for the binary: ubuntu matrix
+    # jobs have no Deno, and parallel workers 403 the releases API.
+    # Production / wheel-smoke still auto-download below.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        import pytest
+
+        pytest.skip("deno is not available")
 
     triple = _deno_triple()
     url = f"https://github.com/denoland/deno/releases/download/{DENO_VERSION}/deno-{triple}.zip"
