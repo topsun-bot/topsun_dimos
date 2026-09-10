@@ -58,19 +58,28 @@ Default blueprints (`unitree-go2-agentic`, `unitree-g1-agentic`) are unchanged.
 ## Run
 
 Start HoloAgent `robot_bridge` on the robot (their default is `0.0.0.0:8000`).
-Then:
+`--holoagent-url` is a root `GlobalConfig` flag (same as `--replay`); put it
+**before** `run`. `run` does not declare it, so Click/Typer rejects
+`dimos run … --holoagent-url …`.
 
 ```bash
 # Go2
-dimos run unitree-go2-holoagent --holoagent-url http://127.0.0.1:8000
+dimos --holoagent-url http://127.0.0.1:8000 run unitree-go2-holoagent
 
 # G1
-dimos run unitree-g1-holoagent --holoagent-url http://127.0.0.1:8000
+dimos --holoagent-url http://127.0.0.1:8000 run unitree-g1-holoagent
+
+# Equivalent environment-variable override (also HOLOAGENT_URL):
+# DIMOS_HOLOAGENT_URL=http://127.0.0.1:8000 dimos run unitree-go2-holoagent
 
 # After the MCP-enabled stack is up:
 dimos mcp call holoagent_health
 dimos mcp call holoagent_semantic_nav --arg object_name="coffee machine" --arg floor=unknown --arg room=unknown
 ```
+
+`holoagent_arm` is G1-only (HoloAgent `g1_arm`). Both holoagent blueprints
+share one skill container, so the method is registered on Go2 too; prefer
+native Go2 skills there.
 
 Compose the same skill into an existing blueprint without a new file:
 

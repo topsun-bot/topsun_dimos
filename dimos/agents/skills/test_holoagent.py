@@ -89,6 +89,21 @@ def test_arm_and_stop() -> None:
     client.stop_navigation.assert_called_once()
 
 
+def test_bridge_uses_module_config_url() -> None:
+    from dimos.agents.skills.holoagent_client import HoloAgentBridgeClient
+    from dimos.core.global_config import GlobalConfig
+
+    skills = _BareHoloAgentSkills(None)
+    skills._client = None
+    skills.config = MagicMock()
+    skills.config.g = GlobalConfig(holoagent_url="http://10.1.2.3:8000")
+
+    client = skills._bridge()
+
+    assert isinstance(client, HoloAgentBridgeClient)
+    assert client.base_url == "http://10.1.2.3:8000"
+
+
 def test_holoagent_url_default() -> None:
     from dimos.core.global_config import GlobalConfig
 

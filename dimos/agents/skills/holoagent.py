@@ -63,7 +63,7 @@ class HoloAgentSkillContainer(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self._client = HoloAgentBridgeClient.from_global_config()
+        self._client = HoloAgentBridgeClient.from_global_config(self.config.g)
 
     @rpc
     def stop(self) -> None:
@@ -72,15 +72,16 @@ class HoloAgentSkillContainer(Module):
 
     def _bridge(self) -> HoloAgentBridgeClient:
         if self._client is None:
-            self._client = HoloAgentBridgeClient.from_global_config()
+            self._client = HoloAgentBridgeClient.from_global_config(self.config.g)
         return self._client
 
     @skill
     def holoagent_health(self) -> str:
         """Check whether a HoloAgent robot_bridge is reachable.
 
-        Calls GET /health on GlobalConfig.holoagent_url (default
-        http://127.0.0.1:8000). Use this before other holoagent_* skills.
+        Calls GET /health on this module's GlobalConfig.holoagent_url
+        (CLI ``--holoagent-url``, default http://127.0.0.1:8000). Use this
+        before other holoagent_* skills.
 
         Returns:
             Bridge status JSON, or an error string if the bridge is down.

@@ -17,7 +17,8 @@
 
 Requires a running HorizonRobotics HoloAgent ``robot_bridge`` for the
 ``holoagent_*`` skills (default ``http://127.0.0.1:8000``). Native DimOS
-navigation and sport skills remain available.
+navigation and sport skills remain available. ``holoagent_arm`` is a G1
+HoloAgent skill; prefer native Go2 skills for locomotion.
 """
 
 from dimos.agents.skills.holoagent import HoloAgentSkillContainer

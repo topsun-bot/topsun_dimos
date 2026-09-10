@@ -37,6 +37,8 @@ from typing import Any
 
 import requests
 
+from dimos.core.global_config import GlobalConfig
+
 _UNKNOWN = "unknown"
 _DEFAULT_TIMEOUT_SEC = 10.0
 
@@ -79,10 +81,14 @@ class HoloAgentBridgeClient:
         self._session = session or requests.Session()
 
     @classmethod
-    def from_global_config(cls) -> HoloAgentBridgeClient:
-        from dimos.core.global_config import global_config
+    def from_global_config(
+        cls, config: GlobalConfig | None = None
+    ) -> HoloAgentBridgeClient:
+        if config is None:
+            from dimos.core.global_config import global_config
 
-        return cls(global_config.holoagent_url)
+            config = global_config
+        return cls(config.holoagent_url)
 
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health")

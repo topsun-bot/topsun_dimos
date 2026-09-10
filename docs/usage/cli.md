@@ -28,6 +28,7 @@ dimos [GLOBAL OPTIONS] COMMAND [ARGS]
 | `--n-workers` | INT | `2` | Number of forkserver workers |
 | `--memory-limit` | TEXT | `auto` | Rerun viewer memory limit |
 | `--mcp-port` | INT | `9990` | MCP server port |
+| `--holoagent-url` | TEXT | `http://127.0.0.1:8000` | HoloAgent `robot_bridge` base URL (root flag; place before `run`) |
 | `--mcp-host` | TEXT | `127.0.0.1` | MCP server bind address |
 | `--transport` | `lcm\|zenoh` | `zenoh` | Transport backend for streams, RPC, and TF. Zenoh is the default on every platform and is pinned to localhost until you pass `--robot-ip` or enable scouting. Set `DIMOS_TRANSPORT` (env var or `.env`) to switch every process at once. Standalone CLIs like `humancli`, `agentspy`, and `dtop`, which also accept `--transport`. |
 | `--dtop` / `--no-dtop` | bool | `False` | Enable live resource monitor overlay |

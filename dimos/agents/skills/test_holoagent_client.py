@@ -111,6 +111,15 @@ def test_http_error_is_wrapped() -> None:
         client.health()
 
 
+def test_from_global_config_uses_passed_config() -> None:
+    from dimos.core.global_config import GlobalConfig
+
+    client = HoloAgentBridgeClient.from_global_config(
+        GlobalConfig(holoagent_url="http://10.9.8.7:8000/")
+    )
+    assert client.base_url == "http://10.9.8.7:8000"
+
+
 def test_non_json_body_is_wrapped() -> None:
     session = MagicMock()
     response = MagicMock()
