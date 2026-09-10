@@ -477,4 +477,4 @@ python -m pytest -svm tool -k "not bytes" dimos/protocol/pubsub/benchmark/test_b
 | `LCM`          | Robot LAN broadcast (UDP multicast) | Yes           | Yes     | Best-effort; can drop packets on LAN |
 | `Redis`        | Network pubsub via Redis server     | Yes           | Yes     | Central broker; adds hop             |
 | `ROS`          | ROS 2 topic communication           | Yes           | Yes     | Integrates with RViz/ROS tools       |
-| `DDS`          | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP                                  |
+| `DDS`          | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP. Dual-chain map + R0 freeze: [ros2-dds-r0-interface-freeze](/docs/architecture/ros2-dds-r0-interface-freeze.md) |
