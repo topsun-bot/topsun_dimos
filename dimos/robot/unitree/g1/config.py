@@ -23,6 +23,10 @@ from typing import Any
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.utils.data import LfsPath
+
+# Robot-specific CMU pathGenerator output for the G1 local planner (topsun onboard nav).
+G1_LOCAL_PLANNER_PRECOMPUTED_PATHS = LfsPath("unitree_g1_local_planner_precomputed_paths")
 
 
 @dataclass(frozen=True)

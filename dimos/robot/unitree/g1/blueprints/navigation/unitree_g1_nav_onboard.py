@@ -35,9 +35,9 @@ unitree_g1_nav_onboard = (
         FastLio2.blueprint(
             host_ip=os.getenv("LIDAR_HOST_IP", "192.168.123.164"),
             lidar_ip=os.getenv("LIDAR_IP", "192.168.123.120"),
-            mount=G1.internal_odom_offsets["mid360_link"],
-            map_freq=1.0,
-            config="default.yaml",
+            # Upstream FastLio2 dropped yaml `config` / `mount` / `map_freq`.
+            # Sensor height remains documented on G1.internal_odom_offsets["mid360_link"].
+            sensor_frame_id="mid360_link",
         ),
         create_nav_stack(
             planner="simple",
