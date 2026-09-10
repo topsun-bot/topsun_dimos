@@ -81,9 +81,7 @@ class HoloAgentBridgeClient:
         self._session = session or requests.Session()
 
     @classmethod
-    def from_global_config(
-        cls, config: GlobalConfig | None = None
-    ) -> HoloAgentBridgeClient:
+    def from_global_config(cls, config: GlobalConfig | None = None) -> HoloAgentBridgeClient:
         if config is None:
             from dimos.core.global_config import global_config
 
