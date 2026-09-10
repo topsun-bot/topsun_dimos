@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from dimos.robot.unitree.g1.greeter_intro_script_generator import (
     build_intro_script_prompt,
     default_intro_model,
