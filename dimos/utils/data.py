@@ -24,6 +24,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from types import FrameType
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.utils.logging_config import setup_logger
@@ -265,7 +266,7 @@ def _pull_lfs_archive(filename: str | Path) -> Path:
 
 def _pytest_in_running_test() -> bool:
     """True while pytest is executing a test or fixture, not during collection."""
-    frame = sys._getframe()
+    frame: FrameType | None = sys._getframe()
     while frame is not None:
         if frame.f_code.co_name in {
             "pytest_runtest_call",
