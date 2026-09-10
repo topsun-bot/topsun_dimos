@@ -43,8 +43,8 @@ from dimos.navigation.visual.query import (
     get_object_bbox_from_image,
     vlm_object_present_in_view,
 )
-from dimos.perception.experimental.object_tracking_spec import ObjectTrackingSpec
-from dimos.perception.experimental.spatial_memory_spec import SpatialMemorySpec
+from dimos.perception.object_tracking_spec import ObjectTrackingSpec
+from dimos.perception.spatial_memory_spec import SpatialMemorySpec
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 from dimos.types.door_memory_spec import SpatialLandmarkMemorySpec
 from dimos.types.robot_location import RobotLocation

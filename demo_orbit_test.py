@@ -41,7 +41,7 @@ from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.agents.skills.orbit_object import OrbitObjectSkillContainer
 from dimos.agents.web_human_input import WebInput
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.perception.experimental.spatial_perception import SpatialMemory
+from dimos.perception.spatial_perception import SpatialMemory
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 

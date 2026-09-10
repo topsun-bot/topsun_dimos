@@ -330,7 +330,7 @@ all_modules = {
     "simple-phone-teleop": "dimos.teleop.phone.phone_extensions.SimplePhoneTeleop",
     "simple-planner": "dimos.navigation.nav_stack.modules.simple_planner.simple_planner.SimplePlanner",
     "spatial-landmark-memory-module": "dimos.perception.detection.door.door_spatial_memory_module.SpatialLandmarkMemoryModule",
-    "spatial-memory": "dimos.perception.experimental.spatial_perception.SpatialMemory",
+    "spatial-memory": "dimos.perception.spatial_perception.SpatialMemory",
     "speak-skill": "dimos.agents.skills.speak_skill.SpeakSkill",
     "spot-high-level": "dimos.experimental.robot.bosdyn.spot.effectors.high_level.SpotHighLevel",
     "spot-recorder": "dimos.experimental.robot.bosdyn.spot.recorder.SpotRecorder",

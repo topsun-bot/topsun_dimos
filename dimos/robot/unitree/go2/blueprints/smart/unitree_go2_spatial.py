@@ -20,7 +20,7 @@ from dimos.navigation.bbox_navigation import BBoxNavigationModule
 from dimos.perception.detection.door.door_spatial_memory_module import SpatialLandmarkMemoryModule
 from dimos.perception.experimental.object_tracker_2d import ObjectTracker2D
 from dimos.perception.experimental.perceive_loop_skill import PerceiveLoopSkill
-from dimos.perception.experimental.spatial_perception import SpatialMemory
+from dimos.perception.spatial_perception import SpatialMemory
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 from dimos.robot.unitree.go2.connection import GO2Connection
 
