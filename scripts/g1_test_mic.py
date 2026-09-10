@@ -87,9 +87,7 @@ def _resolve_device(arg: str | None) -> tuple[int | None, dict]:
 
 def _record_unsafe(device: int | None, seconds: float) -> tuple[np.ndarray, int, float]:
     info = (
-        sd.query_devices(device, "input")
-        if device is not None
-        else sd.query_devices(kind="input")
+        sd.query_devices(device, "input") if device is not None else sd.query_devices(kind="input")
     )
     sample_rate = int(info.get("default_samplerate", 16000) or 16000)
     audio = sd.rec(
