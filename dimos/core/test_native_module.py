@@ -36,7 +36,12 @@ from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig, TransportBackend
 from dimos.core.module import Module
-from dimos.core.native_module import LogFormat, NativeModule, NativeModuleConfig
+from dimos.core.native_module import (
+    LogFormat,
+    NativeModule,
+    NativeModuleConfig,
+    NativeProcessTransport,
+)
 from dimos.core.stream import IO, In, Out
 from dimos.core.transport import LCMTransport, ZenohTransport
 from dimos.core.transport_factory import make_transport, transport_topic
@@ -316,6 +321,17 @@ def _launch(monkeypatch, transport: TransportBackend, **config_kwargs: Any) -> d
     module = StubBuildModule(executable=_ECHO, stdin_config=True, **config_kwargs)
     try:
         return json.loads(module._stdin_blob({}))
+    finally:
+        module.stop()
+
+
+def test_lcm_wired_native_exports_lcm_when_global_is_zenoh(monkeypatch) -> None:
+    monkeypatch.setattr(native_module_mod.global_config, "transport", "zenoh")
+    module = StubNativeModule(executable=_ECHO)
+    try:
+        module.set_transport("cmd_vel", LCMTransport("/cmd_vel", Twist))
+        assert NativeProcessTransport.env_name(module) == "lcm"
+        assert module._spawn_env()["DIMOS_TRANSPORT"] == "lcm"
     finally:
         module.stop()
 

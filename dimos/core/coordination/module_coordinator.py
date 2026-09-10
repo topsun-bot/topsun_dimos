@@ -27,7 +27,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from dimos.core.coordination.blueprint_config.values import deep_merge, plain
-from dimos.core.coordination.blueprints import TransportSpec, transport_config_name
+from dimos.core.coordination.blueprints import (
+    BlueprintAtom,
+    TransportSpec,
+    transport_config_name,
+)
 from dimos.core.coordination.coordinator_rpc import CoordinatorRPC
 from dimos.core.coordination.worker_manager import WorkerManager
 from dimos.core.coordination.worker_manager_python import WorkerManagerPython
@@ -48,7 +52,7 @@ from dimos.utils.safe_thread_map import safe_thread_map
 
 if TYPE_CHECKING:
     from dimos.core.coordination.blueprint_config.parsed import ParsedBlueprintConfig
-    from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
+    from dimos.core.coordination.blueprints import Blueprint
     from dimos.core.rpc_client import ModuleProxy, ModuleProxyProtocol
 
 logger = setup_logger()
@@ -191,10 +195,8 @@ class ModuleCoordinator(Resource):
         deployed_module = self._managers[module_class.deployment].deploy(
             module_class, global_config, kwargs
         )
-        name = kwargs.get("instance_name") or module_class.name
         with self._modules_lock:
-            self._deployed_modules[name] = deployed_module
-            self._instance_classes[name] = module_class
+            DeployedAtoms.record(self, module_class, kwargs, deployed_module)
         return deployed_module  # type: ignore[return-value]
 
     def deploy_parallel(self, module_specs: list[ModuleSpec]) -> list[ModuleProxy]:
@@ -227,9 +229,7 @@ class ModuleCoordinator(Resource):
             for (cls, _, kwargs), mod in zip(module_specs, results, strict=True):
                 if mod is None:
                     continue
-                name = kwargs.get("instance_name") or cls.name
-                self._deployed_modules[name] = mod
-                self._instance_classes[name] = cls
+                DeployedAtoms.record(self, cls, kwargs, mod)
         return results
 
     def build_all_modules(self) -> None:
@@ -661,6 +661,33 @@ class ModuleCoordinator(Resource):
             return
         finally:
             self.stop()
+
+
+class DeployedAtoms:
+    """Record a deployed instance under the same key restart and invalidate use.
+
+    ``list_modules`` / ``get_module`` key by ``rpc_name`` (the instance name
+    when namespaced). ``_restart_module`` looks up ``_deployed_atoms`` by that
+    same instance key. ``deploy()`` must store the atom there, not only the
+    class-name path that ``load_blueprint`` already fills.
+    """
+
+    @staticmethod
+    def record(
+        coordinator: ModuleCoordinator,
+        cls: type[ModuleBase],
+        kwargs: Mapping[str, Any],
+        module: Any,
+    ) -> None:
+        name = kwargs.get("instance_name") or cls.name
+        if not isinstance(name, str):
+            name = cls.name
+        atom_kwargs = dict(kwargs)
+        if name != cls.name:
+            atom_kwargs["instance_name"] = name
+        coordinator._deployed_modules[name] = module
+        coordinator._instance_classes[name] = cls
+        coordinator._deployed_atoms[name] = BlueprintAtom.create(cls, atom_kwargs)
 
 
 def _rpc_name(instance_key: str, cls: type[ModuleBase]) -> str:

@@ -60,6 +60,7 @@ from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
+from dimos.core.transport import LCMTransport, ZenohTransport, pLCMTransport, pZenohTransport
 from dimos.core.transport_factory import session_config
 from dimos.protocol.service.spec import SessionConfig
 from dimos.utils.logging_config import setup_logger
@@ -186,6 +187,49 @@ class NativeModuleConfig(ModuleConfig):
 _NativeConfig = TypeVar("_NativeConfig", bound=NativeModuleConfig, default=NativeModuleConfig)
 
 
+class NativeProcessTransport:
+    """Choose ``DIMOS_TRANSPORT`` for a native child without rewriting LCM pins.
+
+    C++ binaries (FastLio2, PointLio, Livox, nav-stack) implement LCM only
+    and call ``require_supported_transport()``. If every wired stream is LCM
+    — including coordinator ``transport_map`` pins — the child must see
+    ``lcm`` even when ``GlobalConfig.transport`` is zenoh.
+    """
+
+    @staticmethod
+    def wired_backends(module: NativeModule) -> set[str]:
+        backends: set[str] = set()
+        for name in list(module.inputs) + list(module.outputs) + list(module.ios):
+            stream = getattr(module, name, None)
+            if stream is None:
+                continue
+            transport = getattr(stream, "_transport", None)
+            if transport is None:
+                continue
+            if type(transport) in (LCMTransport, pLCMTransport):
+                backends.add("lcm")
+            elif type(transport) in (ZenohTransport, pZenohTransport):
+                backends.add("zenoh")
+        return backends
+
+    @staticmethod
+    def env_name(module: NativeModule) -> str:
+        extra = module.config.extra_env.get("DIMOS_TRANSPORT")
+        if extra:
+            return extra
+        pinned = module.config.session
+        if pinned is not None:
+            return pinned.transport
+        backends = NativeProcessTransport.wired_backends(module)
+        if backends == {"lcm"}:
+            return "lcm"
+        if backends == {"zenoh"}:
+            return "zenoh"
+        if "lcm" in backends:
+            return "lcm"
+        return global_config.transport
+
+
 class NativeModule(Module):
     """
     Module that wraps a native executable as a managed subprocess.
@@ -238,7 +282,7 @@ class NativeModule(Module):
     def _spawn_env(self) -> dict[str, str]:
         env = {**os.environ, **self.config.extra_env}
 
-        env["DIMOS_TRANSPORT"] = global_config.transport
+        env["DIMOS_TRANSPORT"] = NativeProcessTransport.env_name(self)
 
         env["RUST_LOG"] = _PYTHON_TO_RUST_LEVELS.get(
             os.environ.get("DIMOS_LOG_LEVEL", "").upper(), "info"
