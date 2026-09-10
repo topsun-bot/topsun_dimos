@@ -49,22 +49,26 @@ dimos restart          # stop + re-run with same original args
 
 Run `dimos list` for the full list.
 
-### Horizon HoloAgent / HoloMotion (optional)
+### Horizon forks (optional — stay external)
 
-Do **not** replace the blueprints above. The team forks stay external:
+Do **not** replace the blueprints above. Clone beside this repo; never vendor.
 
-- [yixinzhangagent/HoloAgent](https://github.com/yixinzhangagent/HoloAgent)
-- [yixinzhangagent/HoloMotion](https://github.com/yixinzhangagent/HoloMotion)
-
-Print DimOS demo commands or clone/status helpers (no robot motion):
+| Layer | Fork |
+|-------|------|
+| AGENT | [HoloAgent](https://github.com/yixinzhangagent/HoloAgent) (FSR-VLN + skills) |
+| MANIP | [HoloMotion](https://github.com/yixinzhangagent/HoloMotion) (G1 whole-body) |
+| NAV | [GeoFlowSlam](https://github.com/zhangyinxina-ui/GeoFlowSlam) (primary extra SLAM) |
+| PERCEPTION | [BIP3D](https://github.com/zhangyinxina-ui/BIP3D), [RoboOrchardLab](https://github.com/zhangyinxina-ui/RoboOrchardLab) |
+| SIM | [EmbodiedGen](https://github.com/zhangyinxina-ui/EmbodiedGen), [RoboTransfer](https://github.com/zhangyinxina-ui/RoboTransfer) |
 
 ```bash
 uv run python scripts/holo_bridge.py list-demos
 uv run python scripts/holo_bridge.py print-clone
 uv run python scripts/holo_bridge.py status
+uv run python scripts/holo_bridge.py taxonomy
 ```
 
-How the stacks relate: [docs/usage/holo_integration.md](docs/usage/holo_integration.md). README Quick Start: [README.md](README.md#go2--g1-agent-demos).
+In-tree first: `dimos --replay run unitree-go2-agentic`, `dimos --simulation run unitree-g1-agentic-sim`. Optional extra NAV: GeoFlowSlam or HoloAgent — not `dimos run`. Full map: [docs/usage/holo_integration.md](docs/usage/holo_integration.md). README: [README.md](README.md#go2--g1-agent-demos).
 
 ---
 

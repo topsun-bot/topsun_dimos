@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Thin CLI for DimOS Go2/G1 agent demos and optional Holo clones."""
+"""Thin CLI for DimOS Go2/G1 nav/agent demos and optional Horizon clones."""
 
 from dimos.robot.unitree.holo_workspace import main
 

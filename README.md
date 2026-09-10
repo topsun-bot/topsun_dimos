@@ -136,7 +136,7 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
 > [!IMPORTANT]
 > 🤖 Direct your favorite Agent (OpenClaw, Claude Code, etc.) to [AGENTS.md](AGENTS.md) and our [CLI and MCP](#agent-cli-and-mcp) interfaces to start building powerful Dimensional applications.
 >
-> This fork's day-one path is the existing DimOS **Go2 / G1 agentic blueprints**. Horizon [HoloAgent](https://github.com/yixinzhangagent/HoloAgent) and [HoloMotion](https://github.com/yixinzhangagent/HoloMotion) are optional external clones — see [Holo integration](docs/usage/holo_integration.md).
+> This fork's day-one path is the existing DimOS **Go2 / G1 agentic blueprints**. Horizon nav/manip forks stay optional external clones — see [Horizon taxonomy](docs/usage/holo_integration.md).
 
 # Installation
 
@@ -202,13 +202,13 @@ dimos list
 # Go2 — recorded session (no robot). First run may download LFS replay data.
 dimos --replay run unitree-go2-agentic
 
-# Go2 — real robot
+# Go2 — real robot (replace the placeholder IP)
 dimos run unitree-go2-agentic --robot-ip 192.168.123.161
 
 # G1 — MuJoCo + agent + skills (no real robot)
 dimos --simulation run unitree-g1-agentic-sim
 
-# G1 — real robot
+# G1 — real robot (replace the placeholder IP)
 dimos run unitree-g1-agentic --robot-ip 192.168.123.161
 ```
 
@@ -220,6 +220,8 @@ dimos agent-send "say hello"
 dimos mcp list-tools
 dimos stop
 ```
+
+In-tree nav (no LLM): `dimos --replay run unitree-go2`. NoMaD example: [examples/nav-go2](examples/nav-go2/README.md).
 
 Print the same cheat-sheet (does not start robots):
 
@@ -234,17 +236,29 @@ uv run python scripts/holo_bridge.py list-demos
 | `unitree-g1-agentic-sim` | G1 | `--simulation` | MuJoCo + G1 system prompt |
 | `unitree-g1-agentic` | G1 | `--robot-ip` | Same skills on hardware |
 
-Optional Horizon stacks (clone beside this repo; separate ROS 2 / Docker env — not `dimos run`):
+## Horizon fork taxonomy (keep external)
 
-- [yixinzhangagent/HoloAgent](https://github.com/yixinzhangagent/HoloAgent) — Embodied AgentOS, FSR-VLN, Unitree ROS 2 adapters
-- [yixinzhangagent/HoloMotion](https://github.com/yixinzhangagent/HoloMotion) — G1 whole-body motion (`holomotion check` is the no-action dry test)
+Clone beside this repo. Separate ROS 2 / Docker / C++ env — **not** `dimos run`. Do not vendor these trees.
+
+| Layer | Fork | Role vs DimOS | 中文 |
+|-------|------|---------------|------|
+| AGENT | [HoloAgent](https://github.com/yixinzhangagent/HoloAgent) | Optional AgentOS + FSR-VLN beside Go2/G1 agentic blueprints | AgentOS + FSR-VLN |
+| MANIP | [HoloMotion](https://github.com/yixinzhangagent/HoloMotion) | Optional G1 whole-body (`holomotion check` is the dry test) | G1 全身运动 |
+| NAV | [GeoFlowSlam](https://github.com/zhangyinxina-ui/GeoFlowSlam) | **Primary extra NAV** — RGBD-inertial + legged SLAM beside `unitree-go2` | 腿式 RGBD-惯性 SLAM |
+| PERCEPTION | [BIP3D](https://github.com/zhangyinxina-ui/BIP3D) | 2D↔3D grounding; later work in RoboOrchardLab | 2D↔3D 具身感知 |
+| PERCEPTION | [RoboOrchardLab](https://github.com/zhangyinxina-ui/RoboOrchardLab) | Training lab (`projects/bip3d_grounding`) | 具身训练实验室 |
+| SIM | [EmbodiedGen](https://github.com/zhangyinxina-ui/EmbodiedGen) | Sim-ready 3D worlds; does not replace MuJoCo | 仿真就绪 3D 世界 |
+| SIM | [RoboTransfer](https://github.com/zhangyinxina-ui/RoboTransfer) | Visual policy-transfer data synth | 视觉策略迁移数据 |
+
+Out of scope: Sparse4D, GUMP, CARLA/nuplan, OE-Skills, x2 bootprint. SocialRobot is legacy-only.
 
 ```bash
 uv run python scripts/holo_bridge.py print-clone
 uv run python scripts/holo_bridge.py status
+uv run python scripts/holo_bridge.py taxonomy
 ```
 
-How the stacks fit together, plus Holo build/run pointers: [docs/usage/holo_integration.md](docs/usage/holo_integration.md). Non-agent Go2 vision nav: [examples/nav-go2](examples/nav-go2/README.md).
+Full map + first pointers: [docs/usage/holo_integration.md](docs/usage/holo_integration.md).
 
 # Featured Runfiles
 

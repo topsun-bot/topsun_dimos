@@ -108,3 +108,8 @@ jiangtao/
 # Optional Horizon forks (clone beside or inside the checkout; never vendor)
 /HoloAgent/
 /HoloMotion/
+/GeoFlowSlam/
+/BIP3D/
+/RoboOrchardLab/
+/EmbodiedGen/
+/RoboTransfer/
