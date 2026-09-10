@@ -20,35 +20,40 @@ import requests
 
 from dimos.agents.skills.holoagent_client import (
     HoloAgentBridgeClient,
+    HoloAgentBridgeContract,
     HoloAgentBridgeError,
-    format_relative_cmd,
-    format_semantic_cmd,
 )
 
 
 def test_format_semantic_cmd_uses_unknown_for_blanks() -> None:
-    assert format_semantic_cmd("", "", "coffee machine") == "unknown,unknown,coffee machine"
-    assert format_semantic_cmd("1F", "pantry", "coffee machine") == "1F,pantry,coffee machine"
+    assert (
+        HoloAgentBridgeContract.format_semantic_cmd("", "", "coffee machine")
+        == "unknown,unknown,coffee machine"
+    )
+    assert (
+        HoloAgentBridgeContract.format_semantic_cmd("1F", "pantry", "coffee machine")
+        == "1F,pantry,coffee machine"
+    )
 
 
 def test_format_semantic_cmd_rejects_blank_object() -> None:
     with pytest.raises(HoloAgentBridgeError, match="object_name"):
-        format_semantic_cmd("1F", "pantry", "  ")
+        HoloAgentBridgeContract.format_semantic_cmd("1F", "pantry", "  ")
 
 
 def test_format_relative_cmd() -> None:
-    assert format_relative_cmd(1.0, 0.0, 90.0) == "1.0,0.0,90.0"
+    assert HoloAgentBridgeContract.format_relative_cmd(1.0, 0.0, 90.0) == "1.0,0.0,90.0"
 
 
 def test_format_relative_cmd_rejects_invalid() -> None:
     with pytest.raises(HoloAgentBridgeError, match="finite"):
-        format_relative_cmd(float("nan"), 0.0, 0.0)
+        HoloAgentBridgeContract.format_relative_cmd(float("nan"), 0.0, 0.0)
     with pytest.raises(HoloAgentBridgeError, match="all zero"):
-        format_relative_cmd(0.0, 0.0, 0.0)
+        HoloAgentBridgeContract.format_relative_cmd(0.0, 0.0, 0.0)
     with pytest.raises(HoloAgentBridgeError, match="displacement"):
-        format_relative_cmd(10.0, 0.0, 0.0)
+        HoloAgentBridgeContract.format_relative_cmd(10.0, 0.0, 0.0)
     with pytest.raises(HoloAgentBridgeError, match="rotation"):
-        format_relative_cmd(0.0, 0.0, 270.0)
+        HoloAgentBridgeContract.format_relative_cmd(0.0, 0.0, 270.0)
 
 
 def test_semantic_nav_posts_cmd_contract() -> None:
@@ -157,3 +162,14 @@ def test_non_json_body_is_wrapped() -> None:
         "http://127.0.0.1:8000", session=session
     ).stop_navigation()
     assert result == {"success": True, "text": "ok"}
+
+
+def test_requests_is_core_runtime_dependency() -> None:
+    """HoloAgent client imports requests at module load; it must not be extra-only."""
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    project_section = pyproject.read_text(encoding="utf-8").split(
+        "[project.optional-dependencies]", 1
+    )[0]
+    assert '"requests>=2.28"' in project_section

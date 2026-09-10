@@ -27,9 +27,8 @@ from typing import Any
 from dimos.agents.annotation import skill
 from dimos.agents.skills.holoagent_client import (
     HoloAgentBridgeClient,
+    HoloAgentBridgeContract,
     HoloAgentBridgeError,
-    check_relative_nav,
-    format_semantic_cmd,
 )
 from dimos.core.core import rpc
 from dimos.core.module import Module
@@ -115,7 +114,7 @@ class HoloAgentNavSkillContainer(Module):
             room: Room name such as "pantry" or "meeting room", or "unknown".
         """
         try:
-            format_semantic_cmd(floor, room, object_name)
+            HoloAgentBridgeContract.format_semantic_cmd(floor, room, object_name)
         except HoloAgentBridgeError as exc:
             return f"HoloAgent semantic_nav refused: {exc}"
         try:
@@ -145,14 +144,14 @@ class HoloAgentNavSkillContainer(Module):
         Args:
             forward: Forward displacement in meters. Negative is backward.
                 Magnitude must be finite and at most
-                ``MAX_RELATIVE_DISPLACEMENT_M`` (3.0 m).
+                ``HoloAgentBridgeContract.MAX_RELATIVE_DISPLACEMENT_M`` (3.0 m).
             left: Left displacement in meters. Negative is right. Same bound.
             rotation: Heading change in degrees. Positive is left/CCW.
                 Magnitude must be finite and at most
-                ``MAX_RELATIVE_ROTATION_DEG`` (180).
+                ``HoloAgentBridgeContract.MAX_RELATIVE_ROTATION_DEG`` (180).
         """
         try:
-            check_relative_nav(forward, left, rotation)
+            HoloAgentBridgeContract.check_relative_nav(forward, left, rotation)
         except HoloAgentBridgeError as exc:
             return f"HoloAgent relative_move refused: {exc}"
         try:
