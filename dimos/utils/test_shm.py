@@ -22,7 +22,7 @@ import uuid
 
 import pytest
 
-from dimos.utils.shm import ShmNotReadyError, attach_shm, create_or_attach_shm
+from dimos.utils.shm import ShmNotReadyError, _try_attach, attach_shm, create_or_attach_shm
 
 SIZE = 1 << 16
 
@@ -123,6 +123,26 @@ def test_a_wrongly_sized_segment_attaches_immediately(name):
         shm.close()
     finally:
         owner.close()
+
+
+def test_try_attach_treats_zero_size_mmap_as_not_ready(monkeypatch):
+    """Some platforms mmap the empty creation window as size 0, not ValueError."""
+    closed: list[bool] = []
+
+    class FakeShm:
+        size = 0
+        _name = "fake"
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr("dimos.utils.shm.SharedMemory", lambda *_a, **_k: FakeShm())
+    monkeypatch.setattr("dimos.utils.shm.unregister", lambda shm: shm)
+
+    shm, reason = _try_attach("fake")
+    assert shm is None
+    assert reason == "creator has not sized the segment yet"
+    assert closed == [True]
 
 
 def test_create_or_attach_splits_owner_and_reader(name, slow_ftruncate):
