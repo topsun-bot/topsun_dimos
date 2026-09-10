@@ -37,7 +37,6 @@ from typing import TYPE_CHECKING, Any
 
 import reactivex as rx
 from reactivex.disposable import Disposable
-import sounddevice as sd  # type: ignore[import-untyped]
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
@@ -46,10 +45,7 @@ from dimos.core.stream import In, Out
 from dimos.core.transport import pLCMTransport
 from dimos.stream.audio.base import AudioEvent
 from dimos.stream.audio.decode import decode_audio_bytes, ffmpeg_requirement
-from dimos.stream.audio.node_key_recorder import KeyRecorder
-from dimos.stream.audio.node_microphone import SounddeviceAudioSource
 from dimos.stream.audio.node_normalizer import AudioNormalizer
-from dimos.stream.audio.node_vad_recorder import VadRecorder
 from dimos.stream.audio.pipeline import whisper_pipeline
 from dimos.utils.logging_config import setup_logger
 from dimos.web.relay_bridge.audio_codec import AudioChunk
@@ -75,13 +71,16 @@ class VoiceInput(Module):
     config: VoiceInputConfig
 
     _human_transport: pLCMTransport[str] | None = None
-    _recorder: KeyRecorder | None = None
+    _recorder: Any | None = None
 
     @rpc
     def start(self) -> None:
         super().start()
 
-        # 延迟导入:让本模块(及使用它的蓝图)在未安装 Whisper 后端的机器上也能正常导入。
+        # Mic / PortAudio stay out of module import so CockpitVoiceInput tests
+        # do not initialize a sound device just to exercise the chat-panel path.
+        from dimos.stream.audio.node_key_recorder import KeyRecorder
+        from dimos.stream.audio.node_microphone import SounddeviceAudioSource
         from dimos.stream.audio.stt.node_whisper import WhisperNode
 
         self._human_transport = pLCMTransport("/human_input")
@@ -183,14 +182,17 @@ class VadVoiceInput(Module):
     agent_idle: In[bool]
 
     _human_transport: pLCMTransport[str] | None = None
-    _vad: VadRecorder | None = None
+    _vad: Any | None = None
     _enable_timer: Timer | None = None
 
     @rpc
     def start(self) -> None:
         super().start()
 
-        # 延迟导入:未装 Whisper 后端也能导入蓝图。
+        import sounddevice as sd  # type: ignore[import-untyped]
+
+        from dimos.stream.audio.node_microphone import SounddeviceAudioSource
+        from dimos.stream.audio.node_vad_recorder import VadRecorder
         from dimos.stream.audio.stt.node_whisper import WhisperNode
 
         self._human_transport = pLCMTransport("/human_input")
