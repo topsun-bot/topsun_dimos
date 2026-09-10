@@ -27,6 +27,7 @@ from dimos.robot.unitree.holo_workspace import (
     LAYER_SIM,
     DemoCommand,
     HoloWorkspace,
+    main,
 )
 
 EXPECTED_FORK_URLS = {
@@ -120,6 +121,12 @@ def test_status_missing_and_present(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert not rows["HoloMotion"].present
     assert not rows["GeoFlowSlam"].present
 
+    empty = dest / "GeoFlowSlam"
+    empty.mkdir()
+    rows = {row.repo.name: row for row in HoloWorkspace.status(dest)}
+    assert not rows["GeoFlowSlam"].present
+    assert rows["GeoFlowSlam"].detail == "path exists but README.md is missing"
+
     monkeypatch.setenv("HOLOMOTION_ROOT", str(tmp_path / "custom-motion"))
     custom = tmp_path / "custom-motion"
     custom.mkdir()
@@ -176,11 +183,48 @@ def test_cli_status_clone_taxonomy_and_next(
     assert "GeoFlowSlam" in next_out
 
 
+def test_default_dest_override_and_root_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    override = tmp_path / "holo-ws"
+    override.mkdir()
+    monkeypatch.setenv("HOLO_WORKSPACE", str(override))
+    assert HoloWorkspace.default_dest() == override.resolve()
+
+    monkeypatch.delenv("HOLO_WORKSPACE", raising=False)
+    monkeypatch.setattr(
+        "dimos.robot.unitree.holo_workspace.DIMOS_PROJECT_ROOT",
+        Path("/workspace-holo-root"),
+    )
+    dest = HoloWorkspace.default_dest()
+    assert dest == Path("/workspace-holo-root")
+    assert dest != Path("/")
+
+
 def test_default_dest_is_not_filesystem_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HOLO_WORKSPACE", raising=False)
     dest = HoloWorkspace.default_dest()
     assert dest != Path("/")
     assert dest.is_absolute()
+
+
+def test_all_present_next_steps_and_main(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dest = tmp_path / "all"
+    dest.mkdir()
+    for repo in HoloWorkspace.REPOS:
+        folder = dest / repo.dirname
+        folder.mkdir()
+        (folder / "README.md").write_text(f"# {repo.name}\n")
+    assert all(row.present for row in HoloWorkspace.status(dest))
+
+    names = {demo.name for demo in HoloWorkspace.all_demo_commands()}
+    assert "go2-nav-replay" in names
+    assert "go2-agentic-replay" in names
+    assert main(["--dest", str(dest), "next-steps"]) == 0
+    out = capsys.readouterr().out
+    assert "All seven forks are present" in out
 
 
 def test_demo_command_type() -> None:
