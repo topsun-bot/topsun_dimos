@@ -321,8 +321,9 @@ def test_raw_transport_pins_still_work() -> None:
     override flow."""
     from dimos.core.transport_factory import make_transport
 
-    # Pinned on the active backend: a plain LCM/Zenoh pin that does not match it
-    # is deliberately rebuilt by the backend switch, which is a different path.
+    # An explicit transport_map instance is a pin: honor it as declared.
+    # The global LCM↔Zenoh switch applies only to unmapped make_transport()
+    # streams, not to authored mappings.
     raw = make_transport("/raw_topic", FakeLCMMsg)
     bp = Blueprint(blueprints=()).transports(
         {

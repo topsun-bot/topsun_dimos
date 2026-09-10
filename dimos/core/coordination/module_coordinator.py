@@ -36,9 +36,7 @@ from dimos.core.module import ModuleBase, ModuleSpec, is_module_type
 from dimos.core.resource import Resource
 from dimos.core.stream import Transport
 from dimos.core.transport import (
-    LCMTransport,
     PubSubTransport,
-    ZenohTransport,
     pLCMTransport,
     pZenohTransport,
 )
@@ -685,37 +683,74 @@ def _is_name_unique(blueprint: Blueprint, name: str) -> bool:
     return sum(1 for n, _ in stream_name_types(blueprint) if n == name) == 1
 
 
+class StreamTransportPins:
+    """Module-declared `_stream_transport_pins` that the coordinator must honor.
+
+    Pins force a concrete transport class (typically ``pLCMTransport``) so
+    CLI/voice peers that still speak LCM stay connected when the global
+    backend is Zenoh. Declaring the dict on the module is not enough: this
+    class is what `_get_transport_for` reads when wiring streams.
+    """
+
+    @staticmethod
+    def declared_on(module: type[ModuleBase]) -> Mapping[str, type[PubSubTransport[Any]]]:
+        pins = getattr(module, "_stream_transport_pins", None)
+        return pins if pins else {}
+
+    @staticmethod
+    def collect(blueprint: Blueprint) -> dict[str, type[PubSubTransport[Any]]]:
+        collected: dict[str, type[PubSubTransport[Any]]] = {}
+        for atom in blueprint.active_blueprints:
+            pins = StreamTransportPins.declared_on(atom.module)
+            if not pins:
+                continue
+            for stream in atom.streams:
+                transport_cls = pins.get(stream.name)
+                if transport_cls is None:
+                    continue
+                remapped = blueprint.remapping_map.get((atom.name, stream.name), stream.name)
+                if not isinstance(remapped, str):
+                    continue
+                existing = collected.get(remapped)
+                if existing is not None and existing is not transport_cls:
+                    raise ValueError(
+                        f"conflicting transport pins for {remapped!r}: "
+                        f"{existing.__name__} vs {transport_cls.__name__}"
+                    )
+                collected[remapped] = transport_cls
+        return collected
+
+    @staticmethod
+    def instantiate(
+        transport_cls: type[PubSubTransport[Any]], topic: str, stream_type: type
+    ) -> PubSubTransport[Any]:
+        ctor: Any = transport_cls
+        built: PubSubTransport[Any] = (
+            ctor(topic)
+            if transport_cls in (pLCMTransport, pZenohTransport)
+            else ctor(topic, stream_type)
+        )
+        return built
+
+
 def _get_transport_for(blueprint: Blueprint, name: str, stream_type: type) -> PubSubTransport[Any]:
     topic = f"/{name}" if _is_name_unique(blueprint, name) else f"/{short_id()}"
+    transport_cls = StreamTransportPins.collect(blueprint).get(name)
+    if transport_cls is not None:
+        return StreamTransportPins.instantiate(transport_cls, topic, stream_type)
     return make_transport(topic, stream_type)
 
 
 def _coerce_transport_to_backend(transport: Transport[Any]) -> Transport[Any]:
-    """Rebuild an explicitly-mapped LCM/Zenoh transport for the active backend.
+    """Leave authored transports on the backend they were declared with.
 
-    Blueprints pin specific channels in their `transport_map` with e.g. `LCMTransport.spec(
-    "/cmd_vel", Twist)`. So the global transport switch reaches those too, rebuild the plain
-    LCM<->Zenoh pair via the factory when it doesn't match `global_config.transport`. Deliberate
-    non-default choices (`JpegLcmTransport`, SHM, ROS, DDS, WebRTC, ...) are exact-type-checked
-    out and left untouched.
+    Explicit ``transport_map`` entries (G1/Go2 hardware LCM bridges, CLI
+    pickled channels, ...) must not be rewritten when ``global_config.transport``
+    is Zenoh. Unmapped streams still go through ``make_transport()`` and follow
+    the global backend. Non-LCM/Zenoh transports (Jpeg, SHM, ROS, DDS, WebRTC)
+    were already left untouched.
     """
-    want = global_config.transport
-    is_pickled = type(transport) in (pLCMTransport, pZenohTransport)
-    is_lcm = type(transport) in (LCMTransport, pLCMTransport)
-    is_zenoh = type(transport) in (ZenohTransport, pZenohTransport)
-    if not isinstance(transport, PubSubTransport) or not (
-        (want == "zenoh" and is_lcm) or (want == "lcm" and is_zenoh)
-    ):
-        return transport
-
-    if is_pickled:
-        raw, msg_type = transport.topic, None
-    else:
-        raw, msg_type = transport.topic.topic, transport.topic.lcm_type
-    # Strip the Zenoh 'dimos/' namespace (if present) back to the logical name.
-    # The factory re-applies the right prefix for the target backend.
-    logical = raw[len("dimos/") :] if raw.startswith("dimos/") else raw
-    return make_transport(logical, msg_type)
+    return transport
 
 
 def _materialize_transports(
@@ -725,14 +760,14 @@ def _materialize_transports(
 
     WebRTC transports get a freshly constructed provider config from the
     resolved ``transports.<name>.*`` overrides; everything else builds from the
-    spec as-is, then gets coerced to the active pubsub backend. Returns
-    ready-to-use instances pickled into module workers.
+    spec as-is. Explicit LCM/Zenoh mappings stay on the declared backend.
+    Returns ready-to-use instances pickled into module workers.
     """
     materialized: dict[tuple[str, type], Transport[Any]] = {}
     for key, spec in blueprint.transport_map.items():
         if not isinstance(spec, TransportSpec):
             # Plain transport instance pinned directly in the blueprint — use
-            # as-is (modulo the global lcm/zenoh backend switch).
+            # as-is. Explicit LCM/Zenoh mappings are not rewritten.
             materialized[key] = _coerce_transport_to_backend(spec)
             continue
         config = None

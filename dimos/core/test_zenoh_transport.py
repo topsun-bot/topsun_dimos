@@ -16,17 +16,18 @@ from __future__ import annotations
 
 import pickle
 import threading
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import cast
 
 import numpy as np
 from pydantic import ValidationError
 import pytest
 
-from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.coordination.module_coordinator import (
     _coerce_transport_to_backend,
     _get_transport_for,
+    _materialize_transports,
     _run_configurators,
 )
 from dimos.core.global_config import GlobalConfig, global_config
@@ -239,22 +240,19 @@ def test_pzenoh_transport_pickle_preserves_topic_qos() -> None:
     assert t2._zenoh_topic == t._zenoh_topic
 
 
-def test_coerce_lcm_to_zenoh_typed(use_zenoh) -> None:
-    t = _coerce_transport_to_backend(LCMTransport("/cmd_vel", Image))
-    assert type(t) is ZenohTransport
-    assert t.topic.topic == "dimos/cmd_vel"
+def test_explicit_lcm_mapping_stays_lcm_when_backend_is_zenoh(use_zenoh) -> None:
+    orig = LCMTransport("/cmd_vel", Image)
+    assert _coerce_transport_to_backend(orig) is orig
 
 
-def test_coerce_pickled_lcm_to_zenoh(use_zenoh) -> None:
-    t = _coerce_transport_to_backend(pLCMTransport("/human_input"))
-    assert type(t) is pZenohTransport
-    assert t.topic == "dimos/human_input"
+def test_explicit_pickled_lcm_pin_stays_lcm_when_backend_is_zenoh(use_zenoh) -> None:
+    orig = pLCMTransport("/human_input")
+    assert _coerce_transport_to_backend(orig) is orig
 
 
-def test_coerce_zenoh_to_lcm_typed(use_lcm) -> None:
-    t = _coerce_transport_to_backend(ZenohTransport("dimos/cmd_vel", Image))
-    assert type(t) is LCMTransport
-    assert t.topic.topic == "/cmd_vel"
+def test_explicit_zenoh_mapping_stays_zenoh_when_backend_is_lcm(use_lcm) -> None:
+    orig = ZenohTransport("dimos/cmd_vel", Image)
+    assert _coerce_transport_to_backend(orig) is orig
 
 
 def test_coerce_identity_when_backend_matches(use_lcm) -> None:
@@ -265,3 +263,34 @@ def test_coerce_identity_when_backend_matches(use_lcm) -> None:
 def test_coerce_leaves_deliberate_jpeg_untouched(use_zenoh) -> None:
     jpeg = JpegLcmTransport("/color_image", Image)
     assert _coerce_transport_to_backend(jpeg) is jpeg
+
+
+class PinnedHumanInputModule(Module):
+    human_input: In[str]
+
+    _stream_transport_pins = {"human_input": pLCMTransport}
+
+
+def test_stream_transport_pins_honor_plcm_when_backend_is_zenoh(use_zenoh) -> None:
+    blueprint = autoconnect(PinnedHumanInputModule.blueprint())
+    transport = _get_transport_for(blueprint, "human_input", str)
+    assert type(transport) is pLCMTransport
+    assert transport.topic == "/human_input"
+
+
+def test_stream_transport_pins_follow_remapping(use_zenoh) -> None:
+    blueprint = autoconnect(PinnedHumanInputModule.blueprint()).remappings(
+        [(PinnedHumanInputModule, "human_input", "voice_in")]
+    )
+    transport = _get_transport_for(blueprint, "voice_in", str)
+    assert type(transport) is pLCMTransport
+    assert transport.topic == "/voice_in"
+
+
+def test_materialize_keeps_explicit_lcm_under_zenoh(use_zenoh) -> None:
+    pinned = LCMTransport("/g1/motor_states", Image)
+    bp = Blueprint(
+        blueprints=(),
+        transport_map=MappingProxyType({("motor_states", Image): pinned}),
+    )
+    assert _materialize_transports(bp, {})[("motor_states", Image)] is pinned

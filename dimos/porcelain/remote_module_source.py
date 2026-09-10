@@ -129,7 +129,25 @@ class RemoteModuleSource(ModuleSource):
 
     def restart_module_by_class_name(self, class_name: str, *, reload_source: bool) -> None:
         self._coord.call("restart_module_by_class_name", class_name, reload_source=reload_source)
-        self.invalidate(class_name)
+        self._invalidate_class(class_name)
+
+    def _invalidate_class(self, class_name: str) -> None:
+        """Drop every cached proxy whose descriptor matches *class_name*.
+
+        ``get_module`` caches under ``descriptor.rpc_name`` (for example
+        ``robot0/namedremotemodule``). Restarting by class name must evict
+        those keys, not only ``class_name`` itself.
+        """
+        with self._lock:
+            descriptors = self._descriptors
+            if descriptors is None:
+                descriptors = self._refresh_descriptors()
+            keys = {class_name}
+            for descriptor in descriptors.values():
+                if descriptor.class_name == class_name:
+                    keys.add(descriptor.rpc_name or descriptor.class_name)
+        for key in keys:
+            self.invalidate(key)
 
     def close(self) -> None:
         with self._lock:

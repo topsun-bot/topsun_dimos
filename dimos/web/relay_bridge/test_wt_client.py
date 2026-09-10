@@ -44,7 +44,7 @@ from dimos.web.relay_bridge.protocol import (
     encode_data_frame,
     encode_datagram,
 )
-from dimos.web.relay_bridge.wt_client import RelayClient, RelayRejectedError
+from dimos.web.relay_bridge.wt_client import HttpAuthority, RelayClient, RelayRejectedError
 
 
 class StubSession:
@@ -479,3 +479,11 @@ async def test_hello_rejection_preserves_error_code() -> None:
 async def test_connect_rejects_wrong_endpoint_path(url: str, role: Role) -> None:
     with pytest.raises(ValueError, match="relay URL path"):
         await RelayClient.connect(url, role)
+
+
+def test_http_authority_brackets_ipv6_literals() -> None:
+    assert HttpAuthority.hostport("::1", 4433) == "[::1]:4433"
+    assert HttpAuthority.hostport("2001:db8::1", 443) == "[2001:db8::1]:443"
+    assert HttpAuthority.hostport("127.0.0.1", 4433) == "127.0.0.1:4433"
+    assert HttpAuthority.hostport("localhost", 4433) == "localhost:4433"
+    assert HttpAuthority.hostport("[::1]", 4433) == "[::1]:4433"

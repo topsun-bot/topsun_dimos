@@ -673,6 +673,15 @@ class SessionImpl implements Session {
       // have been delivered before it died, so the outcome is unknown and
       // nothing is ever resent.
       this.#sweepPendingPublishes(runId, "connection_lost", "the relay connection died");
+      if (runId === this.#runId) {
+        // Reconnect has not incremented #runId yet. #wireRunId / #send still
+        // name this dead connection; fail publishes immediately instead of
+        // writing into a closed stream and waiting out the local timeout.
+        this.#wireRunId = -1;
+        this.#send = null;
+        this.#teleopControl = null;
+        this.#teleopDatagram = null;
+      }
     }
   }
 

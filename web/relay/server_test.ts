@@ -19,7 +19,7 @@ import {
   type RobotInfo,
   type RobotManifest,
 } from "@dimos/shared";
-import { startRelay } from "./server.ts";
+import { AdvertisedUrl, startRelay } from "./server.ts";
 
 const ROBOT: RobotInfo = { id: "deno-bot", name: "Deno Bot", model: "test" };
 // Raw (un-normalized) on purpose: the relay must forward it verbatim.
@@ -1169,6 +1169,14 @@ Deno.test({
   } finally {
     await relay.shutdown();
   }
+});
+
+Deno.test("AdvertisedUrl.wt brackets IPv6 literals", () => {
+  assertEquals(AdvertisedUrl.wt("::1", 4433), "https://[::1]:4433");
+  assertEquals(AdvertisedUrl.wt("2001:db8::1", 443), "https://[2001:db8::1]:443");
+  assertEquals(AdvertisedUrl.wt("127.0.0.1", 4433), "https://127.0.0.1:4433");
+  assertEquals(AdvertisedUrl.wt("0.0.0.0", 4433), "https://127.0.0.1:4433");
+  assertEquals(AdvertisedUrl.wt("[::1]", 4433), "https://[::1]:4433");
 });
 
 Deno.test("startRelay refuses a non-loopback host without the unsafe override", async () => {

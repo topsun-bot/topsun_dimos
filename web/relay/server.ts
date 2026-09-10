@@ -72,6 +72,17 @@ const LOCAL_CORS = { "access-control-allow-origin": "*" };
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
+/** WebTransport URL host:port. IPv6 literals must be bracketed (`https://[::1]:port`). */
+export class AdvertisedUrl {
+  static wt(host: string, port: number): string {
+    const urlHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+    const authority = urlHost.includes(":") && !urlHost.startsWith("[")
+      ? `[${urlHost}]:${port}`
+      : `${urlHost}:${port}`;
+    return `https://${authority}`;
+  }
+}
+
 function resolveDirUrl(dir: string, label: string): URL {
   // Canonical (realPath) so serveFrom compares symlink-free paths (macOS /tmp
   // is itself a symlink); href must end with "/" so new URL(name, root)
@@ -175,8 +186,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<RelayHandl
   const quicPort = endpoint.addr.port;
   // 127.0.0.1 rather than localhost: Chrome resolves localhost to ::1 first
   // and the endpoint binds IPv4. Hash pinning replaces hostname verification.
-  const urlHost = host === "0.0.0.0" ? "127.0.0.1" : host;
-  const wtUrl = `https://${urlHost}:${quicPort}`;
+  const wtUrl = AdvertisedUrl.wt(host, quicPort);
 
   const registry = new Registry();
   const sessions = new Set<WebTransport>();

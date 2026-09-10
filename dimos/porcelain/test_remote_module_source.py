@@ -21,7 +21,7 @@ from typing import Protocol
 
 import pytest
 
-from dimos.core.coordination.module_coordinator import ModuleCoordinator
+from dimos.core.coordination.module_coordinator import ModuleCoordinator, ModuleDescriptor
 from dimos.core.core import rpc
 from dimos.core.demos.stress_test_module import StressTestModule
 from dimos.core.global_config import GlobalConfig
@@ -168,6 +168,38 @@ def test_connect_restart_invalidates_cache(client):
     m_after = source.get_module("StressTestModule")
     assert m_before is not m_after
     assert client.skills.ping() == "pong"
+
+
+def test_restart_evicts_cache_keyed_by_rpc_name():
+    with _remote_source_with_instances("robot0/namedremotemodule") as source:
+        before = source.get_module("NamedRemoteModule")
+        assert before.ping_name() == "robot0/namedremotemodule"
+        source.restart_module_by_class_name("NamedRemoteModule", reload_source=False)
+        after = source.get_module("NamedRemoteModule")
+        assert before is not after
+        assert after.ping_name() == "robot0/namedremotemodule"
+
+
+def test_invalidate_class_evicts_every_rpc_name_key(mocker):
+    mocker.patch("dimos.porcelain.remote_module_source.CoordinatorRPC.connect")
+    source = RemoteModuleSource()
+    cached = object()
+    source._cache["robot0/namedremotemodule"] = cached
+    source._cache["NamedRemoteModule"] = object()
+    source._descriptors = {
+        "robot0/namedremotemodule": ModuleDescriptor(
+            class_name="NamedRemoteModule",
+            qualified_path="dimos.porcelain.test_remote_module_source.NamedRemoteModule",
+            rpc_names=["ping_name"],
+            rpc_name="robot0/namedremotemodule",
+        )
+    }
+
+    source._invalidate_class("NamedRemoteModule")
+
+    assert "robot0/namedremotemodule" not in source._cache
+    assert "NamedRemoteModule" not in source._cache
+    assert source._descriptors is None
 
 
 def test_connect_run_by_name_adds_module(running_app, client):

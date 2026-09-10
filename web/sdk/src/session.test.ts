@@ -511,6 +511,46 @@ describe("Session over a fake WebTransport", () => {
     for (const later of relays.slice(1)) expect(later.pubs()).toEqual([]);
   });
 
+  it("publish after control death fails fast as not_connected before reconnect", async () => {
+    let infoCalls = 0;
+    let releaseReconnect: () => void = () => {};
+    const holdReconnect = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
+    const relays: FakeRelayEnd[] = [];
+    const handle = connect(undefined, {
+      fetchInfo: async (signal) => {
+        if (infoCalls++ > 0) {
+          await Promise.race([
+            holdReconnect,
+            new Promise<never>((_, reject) => {
+              signal.addEventListener("abort", () => reject(new Error("aborted")), {
+                once: true,
+              });
+            }),
+          ]);
+        }
+        return INFO;
+      },
+      createWebTransport: () => {
+        const relay = new FakeRelayEnd();
+        relays.push(relay);
+        return relay.wt;
+      },
+    });
+    handles.push(handle);
+    await until(() => relays.length === 1, "first connection");
+    await goLiveChat(relays[0], handle);
+    const inflight = handle.publish("chat", 1.5);
+    await until(() => relays[0].pubs().length === 1, "pub sent");
+    relays[0].endControl();
+    await expectPublishError(inflight, "unknown", "connection_lost");
+    // Reconnect is gated: #runId still names the dead connection. Without
+    // invalidating #wireRunId / #send this would write to a closed stream.
+    await expectPublishError(handle.publish("chat", 2.5), "rejected", "not_connected");
+    releaseReconnect();
+  });
+
   it("close() settles every pending publish and clears its timer", async () => {
     const { relay, handle } = start();
     await goLiveChat(relay, handle);

@@ -50,6 +50,21 @@ logger = setup_logger()
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+
+class HttpAuthority:
+    """HTTP/3 ``:authority`` and URL host:port formatting for IPv4/IPv6."""
+
+    @staticmethod
+    def is_ipv6_literal(host: str) -> bool:
+        return ":" in host and not host.startswith("[")
+
+    @staticmethod
+    def hostport(host: str, port: int) -> str:
+        if HttpAuthority.is_ipv6_literal(host):
+            return f"[{host}]:{port}"
+        return f"{host}:{port}"
+
+
 # aioquic never drops an unsendable datagram: max_datagram_size is fixed at
 # 1200 B (no PMTUD) and _write_application retries _datagrams_pending[0]
 # forever, so a datagram that cannot fit one packet (~1165 B encoded) wedges
@@ -133,7 +148,7 @@ class RelayClient:
         # control. Viewer legs keep per-stream poisoning and routine ends.
         session.incoming_is_carrier = role == "robot"
         try:
-            session.open_session(f"{host}:{port}", path)
+            session.open_session(HttpAuthority.hostport(host, port), path)
             await asyncio.wait_for(session.session_ready.wait(), timeout)
         except BaseException:
             await ctx.__aexit__(None, None, None)
