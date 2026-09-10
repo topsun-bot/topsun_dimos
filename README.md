@@ -21,6 +21,7 @@
 [Docs](https://docs.dimensionalos.com) •
 [Hardware](#hardware) •
 [Installation](#installation) •
+[Go2 / G1 Agent Demos](#go2--g1-agent-demos) •
 [Agent CLI & MCP](#agent-cli-and-mcp) •
 [Blueprints](#blueprints) •
 [dimTELE: Remote Teleop](#dimtele-remote-teleop) •
@@ -134,6 +135,8 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
 
 > [!IMPORTANT]
 > 🤖 Direct your favorite Agent (OpenClaw, Claude Code, etc.) to [AGENTS.md](AGENTS.md) and our [CLI and MCP](#agent-cli-and-mcp) interfaces to start building powerful Dimensional applications.
+>
+> This fork's day-one path is the existing DimOS **Go2 / G1 agentic blueprints**. Horizon [HoloAgent](https://github.com/yixinzhangagent/HoloAgent) and [HoloMotion](https://github.com/yixinzhangagent/HoloMotion) are optional external clones — see [Holo integration](docs/usage/holo_integration.md).
 
 # Installation
 
@@ -186,13 +189,74 @@ export ROBOT_IP=<YOUR_ROBOT_IP>
 dimos run unitree-go2
 ```
 
+# Go2 / G1 Agent Demos
+
+Usable agent → robot path on this fork. Reuse the shipped blueprints; do not start from a parallel stack.
+
+**Prerequisites:** `uv` + Python 3.12, `uv sync --extra all` (add the `sim` extra for MuJoCo), `OPENAI_API_KEY` for the default GPT-4o agent. Replay uses `--replay`. Simulation uses `--simulation`. Hardware uses `--robot-ip` (placeholder `192.168.123.161` — replace it). Full agent CLI: [AGENTS.md](AGENTS.md).
+
+```bash
+# List runnable blueprints
+dimos list
+
+# Go2 — recorded session (no robot). First run may download LFS replay data.
+dimos --replay run unitree-go2-agentic
+
+# Go2 — real robot
+dimos run unitree-go2-agentic --robot-ip 192.168.123.161
+
+# G1 — MuJoCo + agent + skills (no real robot)
+dimos --simulation run unitree-g1-agentic-sim
+
+# G1 — real robot
+dimos run unitree-g1-agentic --robot-ip 192.168.123.161
+```
+
+With an agentic blueprint running:
+
+```bash
+dimos status
+dimos agent-send "say hello"
+dimos mcp list-tools
+dimos stop
+```
+
+Print the same cheat-sheet (does not start robots):
+
+```bash
+uv run python scripts/holo_bridge.py --help
+uv run python scripts/holo_bridge.py list-demos
+```
+
+| Blueprint | Robot | Mode | Notes |
+|-----------|-------|------|-------|
+| `unitree-go2-agentic` | Go2 | `--replay` or `--robot-ip` | GPT-4o + `@skill` + MCP (`McpServer` / `McpClient`) |
+| `unitree-g1-agentic-sim` | G1 | `--simulation` | MuJoCo + G1 system prompt |
+| `unitree-g1-agentic` | G1 | `--robot-ip` | Same skills on hardware |
+
+Optional Horizon stacks (clone beside this repo; separate ROS 2 / Docker env — not `dimos run`):
+
+- [yixinzhangagent/HoloAgent](https://github.com/yixinzhangagent/HoloAgent) — Embodied AgentOS, FSR-VLN, Unitree ROS 2 adapters
+- [yixinzhangagent/HoloMotion](https://github.com/yixinzhangagent/HoloMotion) — G1 whole-body motion (`holomotion check` is the no-action dry test)
+
+```bash
+uv run python scripts/holo_bridge.py print-clone
+uv run python scripts/holo_bridge.py status
+```
+
+How the stacks fit together, plus Holo build/run pointers: [docs/usage/holo_integration.md](docs/usage/holo_integration.md). Non-agent Go2 vision nav: [examples/nav-go2](examples/nav-go2/README.md).
+
 # Featured Runfiles
 
 | Run command | What it does |
 |-------------|-------------|
 | `dimos --replay run unitree-go2` | Quadruped navigation replay — SLAM, costmap, A* planning |
+| `dimos --replay run unitree-go2-agentic` | Go2 LLM agent + skills + MCP on replay data |
+| `dimos run unitree-go2-agentic --robot-ip 192.168.123.161` | Same Go2 agent on hardware (replace IP) |
 | `dimos --replay --replay-db go2_bigoffice run unitree-go2-memory` | Quadruped temporal memory replay |
 | `dimos --simulation run unitree-go2-agentic` | Quadruped agentic + MCP server in simulation |
+| `dimos --simulation run unitree-g1-agentic-sim` | G1 humanoid + GPT-4o agent + skills in MuJoCo |
+| `dimos run unitree-g1-agentic --robot-ip 192.168.123.161` | G1 agent on hardware (replace IP) |
 | `dimos --simulation run unitree-g1-sim` | Humanoid in MuJoCo simulation |
 | `dimos --replay run drone-basic` | Drone video + telemetry replay |
 | `dimos --replay run drone-agentic` | Drone + LLM agent with flight skills (replay) |

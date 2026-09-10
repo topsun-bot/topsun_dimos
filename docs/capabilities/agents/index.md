@@ -46,6 +46,8 @@ arrow from Agent.n up 0.5in then left until even with Input.n then to Input.n \
 
 The agent uses LangGraph with a configurable LLM. The default is `gpt-5.6-luna` and you need to provide an `OPENAI_API_KEY` environment variable. On startup, it discovers all `@skill`-annotated methods across deployed modules via RPC and exposes them as LangChain tools.
 
+Runnable Go2/G1 agent demos (replay, sim, hardware) and optional Horizon [HoloAgent](https://github.com/yixinzhangagent/HoloAgent) / [HoloMotion](https://github.com/yixinzhangagent/HoloMotion) clones: [Holo integration](/docs/usage/holo_integration.md), [README Quick Start](/README.md#go2--g1-agent-demos), [AGENTS.md](/AGENTS.md).
+
 ## Skills
 
 Skills are methods decorated with `@skill` on any `Module`. The agent discovers them automatically at startup.
