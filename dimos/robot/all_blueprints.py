@@ -266,6 +266,7 @@ all_modules = {
     "gstreamer-camera-module": "dimos.hardware.sensors.camera.gstreamer.gstreamer_camera.GstreamerCameraModule",
     "hand-teleop-module": "dimos.teleop.quest.quest_extensions.HandTeleopModule",
     "heuristic-grasp-module": "dimos.manipulation.grasping.heuristic_grasp.HeuristicGraspModule",
+    "holo-agent-nav-skill-container": "dimos.agents.skills.holoagent.HoloAgentNavSkillContainer",
     "holo-agent-skill-container": "dimos.agents.skills.holoagent.HoloAgentSkillContainer",
     "hosted-stats-module": "dimos.teleop.hosted.hosted_stats.HostedStatsModule",
     "joint-trajectory-controller": "dimos.manipulation.control.trajectory_controller.joint_trajectory_controller.JointTrajectoryController",

@@ -31,8 +31,24 @@ def test_format_semantic_cmd_uses_unknown_for_blanks() -> None:
     assert format_semantic_cmd("1F", "pantry", "coffee machine") == "1F,pantry,coffee machine"
 
 
+def test_format_semantic_cmd_rejects_blank_object() -> None:
+    with pytest.raises(HoloAgentBridgeError, match="object_name"):
+        format_semantic_cmd("1F", "pantry", "  ")
+
+
 def test_format_relative_cmd() -> None:
     assert format_relative_cmd(1.0, 0.0, 90.0) == "1.0,0.0,90.0"
+
+
+def test_format_relative_cmd_rejects_invalid() -> None:
+    with pytest.raises(HoloAgentBridgeError, match="finite"):
+        format_relative_cmd(float("nan"), 0.0, 0.0)
+    with pytest.raises(HoloAgentBridgeError, match="all zero"):
+        format_relative_cmd(0.0, 0.0, 0.0)
+    with pytest.raises(HoloAgentBridgeError, match="displacement"):
+        format_relative_cmd(10.0, 0.0, 0.0)
+    with pytest.raises(HoloAgentBridgeError, match="rotation"):
+        format_relative_cmd(0.0, 0.0, 270.0)
 
 
 def test_semantic_nav_posts_cmd_contract() -> None:
@@ -100,6 +116,15 @@ def test_empty_path_rejected() -> None:
         client.arm_skill("  ")
     with pytest.raises(HoloAgentBridgeError, match="non-empty"):
         client.navigation_signal("")
+
+
+@pytest.mark.parametrize("bad", ["../stop", "a/b", "foo?x=1", "bar#frag", "has space"])
+def test_unsafe_path_token_rejected(bad: str) -> None:
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=MagicMock())
+    with pytest.raises(HoloAgentBridgeError, match="single token"):
+        client.arm_skill(bad)
+    with pytest.raises(HoloAgentBridgeError, match="single token"):
+        client.navigation_signal(bad)
 
 
 def test_http_error_is_wrapped() -> None:

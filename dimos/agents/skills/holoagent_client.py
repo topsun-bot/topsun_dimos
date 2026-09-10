@@ -33,6 +33,8 @@ scripts.
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Any
 
 import requests
@@ -41,6 +43,11 @@ from dimos.core.global_config import GlobalConfig
 
 _UNKNOWN = "unknown"
 _DEFAULT_TIMEOUT_SEC = 10.0
+# DimOS-side short-adjustment limits. HoloAgent relative_nav turns these
+# values into an absolute pose; the upstream skill does not document bounds.
+MAX_RELATIVE_DISPLACEMENT_M = 3.0
+MAX_RELATIVE_ROTATION_DEG = 180.0
+_PATH_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class HoloAgentBridgeError(RuntimeError):
@@ -50,15 +57,55 @@ class HoloAgentBridgeError(RuntimeError):
 def format_semantic_cmd(floor: str, room: str, object_name: str) -> str:
     """Build the ``cmd`` string used by ``POST /api/semantic_nav``.
 
-    Empty tokens become ``unknown``, matching HoloAgent skill examples such as
-    ``unknown,unknown,coffee machine``.
+    Empty floor/room tokens become ``unknown``, matching HoloAgent skill
+    examples such as ``unknown,unknown,coffee machine``. ``object_name``
+    must be non-empty.
     """
-    return ",".join((_token(floor), _token(room), _token(object_name)))
+    target = object_name.strip()
+    if not target:
+        raise HoloAgentBridgeError("semantic_nav object_name must be non-empty")
+    return ",".join((_token(floor), _token(room), target))
 
 
 def format_relative_cmd(forward: float, left: float, rotation_deg: float) -> str:
     """Build the ``cmd`` string used by ``POST /api/relative_nav``."""
+    check_relative_nav(forward, left, rotation_deg)
     return f"{forward},{left},{rotation_deg}"
+
+
+def check_relative_nav(forward: float, left: float, rotation_deg: float) -> None:
+    """Reject non-finite, all-zero, or oversized relative-nav commands."""
+    for name, value in (
+        ("forward", forward),
+        ("left", left),
+        ("rotation", rotation_deg),
+    ):
+        if not math.isfinite(value):
+            raise HoloAgentBridgeError(f"{name} must be a finite number, got {value!r}")
+    if forward == 0.0 and left == 0.0 and rotation_deg == 0.0:
+        raise HoloAgentBridgeError("forward, left, and rotation are all zero")
+    if abs(forward) > MAX_RELATIVE_DISPLACEMENT_M or abs(left) > MAX_RELATIVE_DISPLACEMENT_M:
+        raise HoloAgentBridgeError(
+            f"relative displacement exceeds ±{MAX_RELATIVE_DISPLACEMENT_M} m "
+            "(short adjustment only; use semantic nav for longer goals)"
+        )
+    if abs(rotation_deg) > MAX_RELATIVE_ROTATION_DEG:
+        raise HoloAgentBridgeError(
+            f"relative rotation exceeds ±{MAX_RELATIVE_ROTATION_DEG} degrees "
+            "(short adjustment only)"
+        )
+
+
+def safe_path_token(value: str, kind: str) -> str:
+    """Return a single URL path token or raise ``HoloAgentBridgeError``."""
+    token = value.strip()
+    if not token:
+        raise HoloAgentBridgeError(f"{kind} name must be non-empty")
+    if not _PATH_TOKEN_RE.fullmatch(token):
+        raise HoloAgentBridgeError(
+            f"{kind} name must be a single token (letters, digits, '.', '_' or '-'), got {token!r}"
+        )
+    return token
 
 
 def _token(value: str) -> str:
@@ -109,16 +156,12 @@ class HoloAgentBridgeClient:
         return self._request("POST", "/api/navigation/stop")
 
     def navigation_signal(self, name: str) -> dict[str, Any]:
-        path_name = name.strip()
-        if not path_name:
-            raise HoloAgentBridgeError("navigation signal name must be non-empty")
-        return self._request("POST", f"/api/navigation/{path_name}")
+        return self._request(
+            "POST", f"/api/navigation/{safe_path_token(name, 'navigation signal')}"
+        )
 
     def arm_skill(self, skill_name: str) -> dict[str, Any]:
-        path_name = skill_name.strip()
-        if not path_name:
-            raise HoloAgentBridgeError("arm skill name must be non-empty")
-        return self._request("POST", f"/api/arm/{path_name}")
+        return self._request("POST", f"/api/arm/{safe_path_token(skill_name, 'arm skill')}")
 
     def _request(
         self,

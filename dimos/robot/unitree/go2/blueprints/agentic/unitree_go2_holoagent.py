@@ -16,18 +16,18 @@
 """Go2 agentic stack plus HoloAgent robot_bridge skills.
 
 Requires a running HorizonRobotics HoloAgent ``robot_bridge`` for the
-``holoagent_*`` skills (default ``http://127.0.0.1:8000``). Native DimOS
-navigation and sport skills remain available. ``holoagent_arm`` is a G1
-HoloAgent skill; prefer native Go2 skills for locomotion.
+``holoagent_*`` navigation skills (default ``http://127.0.0.1:8000``).
+Native DimOS navigation and sport skills remain available. G1 arm FIFO
+skills live on ``unitree-g1-holoagent`` only.
 """
 
-from dimos.agents.skills.holoagent import HoloAgentSkillContainer
+from dimos.agents.skills.holoagent import HoloAgentNavSkillContainer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitree_go2_agentic
 
 unitree_go2_holoagent = autoconnect(
     unitree_go2_agentic,
-    HoloAgentSkillContainer.blueprint(),
+    HoloAgentNavSkillContainer.blueprint(),
 )
 
 __all__ = ["unitree_go2_holoagent"]

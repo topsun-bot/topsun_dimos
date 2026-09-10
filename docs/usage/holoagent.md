@@ -49,7 +49,7 @@ A **client + skill shim**, not a port of FSR-VLN or robot_bridge:
 | --- | --- |
 | `dimos/agents/skills/holoagent_client.py` | HTTP client matching `bridge_config.yaml` |
 | `dimos/agents/skills/holoagent.py` | `@skill` methods for MCP / LLM |
-| `dimos/robot/unitree/go2/blueprints/agentic/unitree_go2_holoagent.py` | Go2 agentic + HoloAgent skills |
+| `dimos/robot/unitree/go2/blueprints/agentic/unitree_go2_holoagent.py` | Go2 agentic + HoloAgent nav skills |
 | `dimos/robot/unitree/g1/blueprints/agentic/unitree_g1_holoagent.py` | G1 agentic + HoloAgent skills |
 | `GlobalConfig.holoagent_url` | `--holoagent-url` / `DIMOS_HOLOAGENT_URL` / `HOLOAGENT_URL` |
 
@@ -77,9 +77,12 @@ dimos mcp call holoagent_health
 dimos mcp call holoagent_semantic_nav --arg object_name="coffee machine" --arg floor=unknown --arg room=unknown
 ```
 
-`holoagent_arm` is G1-only (HoloAgent `g1_arm`). Both holoagent blueprints
-share one skill container, so the method is registered on Go2 too; prefer
-native Go2 skills there.
+`holoagent_arm` is G1-only (HoloAgent `g1_arm`) and is registered only on
+`unitree-g1-holoagent`. Go2 uses `HoloAgentNavSkillContainer`.
+
+Relative moves are short adjustments: finite values, at least one non-zero
+axis, `|forward|`/`|left|` ≤ 3.0 m, `|rotation|` ≤ 180°. Longer goals should
+use `holoagent_semantic_nav` or native DimOS navigation.
 
 Compose the same skill into an existing blueprint without a new file:
 

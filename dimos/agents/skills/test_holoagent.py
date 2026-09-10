@@ -16,7 +16,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dimos.agents.skills.holoagent import HoloAgentSkillContainer
+from dimos.agents.skills.holoagent import (
+    HoloAgentNavSkillContainer,
+    HoloAgentSkillContainer,
+)
 from dimos.agents.skills.holoagent_client import HoloAgentBridgeError
 
 
@@ -33,17 +36,19 @@ def _container() -> tuple[_BareHoloAgentSkills, MagicMock]:
 
 
 def test_skills_are_annotated() -> None:
-    for name in (
+    nav_names = (
         "holoagent_health",
         "holoagent_semantic_nav",
         "holoagent_relative_move",
         "holoagent_stop_nav",
-        "holoagent_arm",
         "holoagent_navigation_signal",
-    ):
-        method = getattr(HoloAgentSkillContainer, name)
+    )
+    for name in nav_names:
+        method = getattr(HoloAgentNavSkillContainer, name)
         assert getattr(method, "__skill__", False), name
         assert method.__doc__, name
+    assert getattr(HoloAgentSkillContainer.holoagent_arm, "__skill__", False)
+    assert "holoagent_arm" not in HoloAgentNavSkillContainer.__dict__
 
 
 def test_semantic_nav_success() -> None:
@@ -64,11 +69,44 @@ def test_relative_move_rejects_zero() -> None:
     assert "refused" in result
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"forward": float("nan")},
+        {"forward": float("inf")},
+        {"left": float("-inf")},
+        {"forward": 3.1},
+        {"left": -3.1},
+        {"rotation": 181.0},
+    ],
+)
+def test_relative_move_rejects_non_finite_or_oversized(kwargs: dict[str, float]) -> None:
+    skills, client = _container()
+    result = skills.holoagent_relative_move(**kwargs)
+    client.relative_nav.assert_not_called()
+    assert "refused" in result
+
+
+def test_semantic_nav_rejects_blank_object() -> None:
+    skills, client = _container()
+    result = skills.holoagent_semantic_nav("   ")
+    client.semantic_nav.assert_not_called()
+    assert "refused" in result
+
+
 def test_relative_move_success() -> None:
     skills, client = _container()
     client.relative_nav.return_value = {"success": True}
     result = skills.holoagent_relative_move(0.5, 0.0, 15.0)
     client.relative_nav.assert_called_once_with(0.5, 0.0, 15.0)
+    assert "ok" in result
+
+
+def test_navigation_signal_success() -> None:
+    skills, client = _container()
+    client.navigation_signal.return_value = {"success": True}
+    result = skills.holoagent_navigation_signal("one_point_1")
+    client.navigation_signal.assert_called_once_with("one_point_1")
     assert "ok" in result
 
 

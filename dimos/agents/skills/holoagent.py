@@ -28,6 +28,8 @@ from dimos.agents.annotation import skill
 from dimos.agents.skills.holoagent_client import (
     HoloAgentBridgeClient,
     HoloAgentBridgeError,
+    check_relative_nav,
+    format_semantic_cmd,
 )
 from dimos.core.core import rpc
 from dimos.core.module import Module
@@ -55,8 +57,8 @@ def _format_bridge_result(action: str, result: dict[str, Any]) -> str:
     return f"HoloAgent {action} ok: {json.dumps(result, ensure_ascii=False)}"
 
 
-class HoloAgentSkillContainer(Module):
-    """Expose HoloAgent robot_bridge HTTP endpoints as DimOS agent skills."""
+class HoloAgentNavSkillContainer(Module):
+    """HoloAgent robot_bridge navigation skills (Go2 and G1)."""
 
     _client: HoloAgentBridgeClient | None = None
 
@@ -113,6 +115,10 @@ class HoloAgentSkillContainer(Module):
             room: Room name such as "pantry" or "meeting room", or "unknown".
         """
         try:
+            format_semantic_cmd(floor, room, object_name)
+        except HoloAgentBridgeError as exc:
+            return f"HoloAgent semantic_nav refused: {exc}"
+        try:
             result = self._bridge().semantic_nav(floor, room, object_name)
         except HoloAgentBridgeError as exc:
             logger.warning("HoloAgent semantic_nav failed: %s", exc)
@@ -138,14 +144,17 @@ class HoloAgentSkillContainer(Module):
 
         Args:
             forward: Forward displacement in meters. Negative is backward.
-            left: Left displacement in meters. Negative is right.
+                Magnitude must be finite and at most
+                ``MAX_RELATIVE_DISPLACEMENT_M`` (3.0 m).
+            left: Left displacement in meters. Negative is right. Same bound.
             rotation: Heading change in degrees. Positive is left/CCW.
+                Magnitude must be finite and at most
+                ``MAX_RELATIVE_ROTATION_DEG`` (180).
         """
-        if forward == 0.0 and left == 0.0 and rotation == 0.0:
-            return (
-                "HoloAgent relative_move refused: forward, left, and rotation "
-                "are all zero. Provide at least one non-zero value."
-            )
+        try:
+            check_relative_nav(forward, left, rotation)
+        except HoloAgentBridgeError as exc:
+            return f"HoloAgent relative_move refused: {exc}"
         try:
             result = self._bridge().relative_nav(forward, left, rotation)
         except HoloAgentBridgeError as exc:
@@ -171,6 +180,27 @@ class HoloAgentSkillContainer(Module):
         return _format_bridge_result("stop_nav", result)
 
     @skill
+    def holoagent_navigation_signal(self, name: str) -> str:
+        """Trigger a named HoloAgent navigation signal.
+
+        Sends POST /api/navigation/{name} (robot_bridge → chat_signal_pub).
+        Examples from HoloAgent robot-service skill: one_point_1, stop.
+
+        Args:
+            name: Signal name such as "one_point_1" or "stop".
+        """
+        try:
+            result = self._bridge().navigation_signal(name)
+        except HoloAgentBridgeError as exc:
+            logger.warning("HoloAgent navigation signal failed: %s", exc)
+            return f"HoloAgent navigation signal failed: {exc}"
+        return _format_bridge_result(f"navigation_signal({name})", result)
+
+
+class HoloAgentSkillContainer(HoloAgentNavSkillContainer):
+    """Navigation skills plus G1 HoloAgent arm FIFO skills."""
+
+    @skill
     def holoagent_arm(self, skill_name: str) -> str:
         """Trigger a HoloAgent G1 arm skill through robot_bridge.
 
@@ -188,20 +218,3 @@ class HoloAgentSkillContainer(Module):
             logger.warning("HoloAgent arm skill failed: %s", exc)
             return f"HoloAgent arm skill failed: {exc}"
         return _format_bridge_result(f"arm({skill_name})", result)
-
-    @skill
-    def holoagent_navigation_signal(self, name: str) -> str:
-        """Trigger a named HoloAgent navigation signal.
-
-        Sends POST /api/navigation/{name} (robot_bridge → chat_signal_pub).
-        Examples from HoloAgent robot-service skill: one_point_1, stop.
-
-        Args:
-            name: Signal name such as "one_point_1" or "stop".
-        """
-        try:
-            result = self._bridge().navigation_signal(name)
-        except HoloAgentBridgeError as exc:
-            logger.warning("HoloAgent navigation signal failed: %s", exc)
-            return f"HoloAgent navigation signal failed: {exc}"
-        return _format_bridge_result(f"navigation_signal({name})", result)
