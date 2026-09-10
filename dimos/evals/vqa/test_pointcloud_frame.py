@@ -32,6 +32,9 @@ from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 
+# Image streams are JPEG-encoded on append; ubuntu CI has no libturbojpeg.
+_needs_turbojpeg = pytest.mark.skipif_no_turbojpeg
+
 
 def _populate_required_streams(
     store: SqliteStore,
@@ -119,6 +122,7 @@ def test_rejects_missing_required_stream(missing_stream: str, tmp_path: Path) ->
         loader.start()
 
 
+@_needs_turbojpeg
 @pytest.mark.parametrize("empty_stream", ("color_image", "camera_info", "tf", "lidar"))
 def test_rejects_empty_required_stream(empty_stream: str, tmp_path: Path) -> None:
     dataset = tmp_path / "recording.db"
@@ -131,6 +135,7 @@ def test_rejects_empty_required_stream(empty_stream: str, tmp_path: Path) -> Non
         loader.start()
 
 
+@_needs_turbojpeg
 def test_uses_nonempty_lidar_when_pointlio_stream_is_empty(tmp_path: Path) -> None:
     dataset = tmp_path / "recording.db"
     with SqliteStore(path=dataset) as store:
@@ -140,6 +145,7 @@ def test_uses_nonempty_lidar_when_pointlio_stream_is_empty(tmp_path: Path) -> No
         assert loader.load(0).pointcloud.frame_id == "world"
 
 
+@_needs_turbojpeg
 def test_unresolvable_tf_still_allows_image_only_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -156,6 +162,7 @@ def test_unresolvable_tf_still_allows_image_only_fallback(
         assert loader.load_image(0).shape == (2, 2, 3)
 
 
+@_needs_turbojpeg
 def test_load_uses_recorded_camera_info_and_tf(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -207,6 +214,7 @@ def test_load_uses_recorded_camera_info_and_tf(
     assert np.allclose(frame.pointcloud_to_camera.to_matrix(), (-world_from_camera).to_matrix())
 
 
+@_needs_turbojpeg
 def test_load_resolves_tf_through_non_world_root(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -234,6 +242,7 @@ def test_load_resolves_tf_through_non_world_root(
     assert np.allclose(frame.pointcloud_to_camera.to_matrix(), np.eye(4))
 
 
+@_needs_turbojpeg
 def test_load_applies_camera_rectification_to_pointcloud_transform(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -268,6 +277,7 @@ def test_load_applies_camera_rectification_to_pointcloud_transform(
     assert np.allclose(frame.pointcloud_to_camera.to_matrix()[:3, :3], rectification)
 
 
+@_needs_turbojpeg
 def test_load_selects_camera_info_for_each_image_timestamp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

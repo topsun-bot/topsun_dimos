@@ -189,6 +189,7 @@ def test_unknown_channels_in_snapshot_are_ignored(bridge) -> None:
     assert image_transport(module).subscribers == []
 
 
+@pytest.mark.skipif_no_turbojpeg
 def test_encode_paths_and_max_hz_gate(bridge) -> None:
     module, clients = bridge
     client = clients[0]

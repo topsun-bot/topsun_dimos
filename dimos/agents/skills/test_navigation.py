@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterator
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -226,11 +227,24 @@ class MockedSemanticNavSkill(NavigationSkillContainer):
         return f"Successfuly arrived at '{query}'"
 
 
+_open_nav_containers: list[NavigationSkillContainer] = []
+
+
 def _nav_container() -> NavigationSkillContainer:
     with patch.object(navigation_module, "_create_vl_model", return_value=SimpleNamespace()):
         nav = NavigationSkillContainer()
     nav._skill_started = True
+    _open_nav_containers.append(nav)
     return nav
+
+
+@pytest.fixture(autouse=True)
+def _close_nav_containers() -> Iterator[None]:
+    try:
+        yield
+    finally:
+        while _open_nav_containers:
+            _open_nav_containers.pop()._close_module()
 
 
 class _FakeNavigation:

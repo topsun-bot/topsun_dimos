@@ -201,6 +201,7 @@ def test_local_relay_port_collision_does_not_kill_listener() -> None:
             listener.stdout.close()
 
 
+@pytest.mark.skipif_no_turbojpeg
 def test_full_session_flow_and_lazy_encode(
     bridge: RelayBridgeModule, publisher: _Publisher
 ) -> None:

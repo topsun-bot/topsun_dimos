@@ -35,6 +35,7 @@ import os
 from pathlib import Path
 import platform
 from queue import Empty, Queue
+import shutil
 import signal
 import socket
 import struct
@@ -61,7 +62,7 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.utils.data import get_data
+from dimos.utils.data import get_data, get_data_dir
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.ros1 import (
     deserialize_compressed_image,
@@ -380,7 +381,16 @@ class UnityBridgeModule(Module):
             logger.warning(f"Unity binary not found at {p}")
             return None
 
-        # Pull from LFS (auto-downloads + extracts on first use)
+        # Optional LFS lookup. Do not call get_data() when git-lfs is
+        # missing: that helper pytest.skips, which would abort Module.__init__
+        # after the event-loop thread is already running and leak it.
+        candidate = get_data_dir() / _LFS_ASSET / "environment" / "Model.x86_64"
+        if candidate.exists():
+            return candidate
+        if shutil.which("git-lfs") is None:
+            logger.warning("git-lfs unavailable; Unity binary not resolved")
+            return None
+
         try:
             data_dir = get_data(_LFS_ASSET)
             candidate = data_dir / "environment" / "Model.x86_64"

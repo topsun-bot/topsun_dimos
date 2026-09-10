@@ -263,6 +263,22 @@ def _pull_lfs_archive(filename: str | Path) -> Path:
     return file_path
 
 
+def _pytest_in_running_test() -> bool:
+    """True while pytest is executing a test or fixture, not during collection."""
+    frame = sys._getframe()
+    while frame is not None:
+        if frame.f_code.co_name in {
+            "pytest_runtest_call",
+            "pytest_runtest_setup",
+            "pytest_runtest_teardown",
+            "pytest_fixture_setup",
+            "call_fixture_func",
+        }:
+            return True
+        frame = frame.f_back
+    return False
+
+
 def get_data(name: str | Path) -> Path:
     """
     Get the path to a test data, downloading from LFS if needed.
@@ -304,14 +320,15 @@ def get_data(name: str | Path) -> Path:
 
     # Ubuntu CI on topsun main removes git-lfs to prevent accidental pulls.
     if shutil.which("git-lfs") is None:
-        if "pytest" in sys.modules:
-            import pytest
-
-            pytest.skip("git-lfs is not available")
-        raise RuntimeError(
+        message = (
             "git-lfs is required to download test data.\n\n"
             "Git LFS installation instructions: https://git-lfs.github.io/"
         )
+        if "pytest" in sys.modules and _pytest_in_running_test():
+            import pytest
+
+            pytest.skip("git-lfs is not available")
+        raise RuntimeError(message)
 
     # extract archive root (first path component) and nested path
     path_parts = Path(name).parts
