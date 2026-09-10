@@ -14,10 +14,13 @@
 
 """Shared helpers for relay bridge tests."""
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable, Sequence
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from dimos.web.relay_bridge.protocol import (
     DataFrame,
@@ -29,8 +32,10 @@ from dimos.web.relay_bridge.protocol import (
     TeleopStarted,
     Watch,
 )
-from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
 from dimos.web.relay_bridge.wt_client import RelayClient
+
+if TYPE_CHECKING:
+    from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
 
 
 def stop_module(module: RelayBridgeModule) -> None:
