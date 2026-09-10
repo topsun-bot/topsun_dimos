@@ -28,7 +28,7 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.global_config import global_config
 from dimos.mapping.costmapper import CostMapper
-from dimos.mapping.voxels import VoxelGridMapper
+from dimos.mapping.voxels.module import VoxelGridMapper
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
 
 sys.path.insert(0, str(Path(__file__).parent))

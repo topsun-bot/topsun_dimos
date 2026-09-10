@@ -23,13 +23,6 @@ MODE_API_ID = 7101
 ARM_TOPIC = "rt/api/arm/request"
 MODE_TOPIC = "rt/api/sport/request"
 
-# G1 arm action service api_ids (see unitree_sdk2 g1_arm_action_api.hpp).
-# Defined here so the WebRTC (greeter_skill.py) and DDS (dds_sdk.py) paths share
-# a single source of truth.
-ARM_GET_ACTION_LIST_API_ID = 7107
-ARM_EXECUTE_CUSTOM_ACTION_API_ID = 7108
-ARM_STOP_CUSTOM_ACTION_API_ID = 7113
-
 # G1 Arm Actions — all use ``ARM_API_ID`` on ``ARM_TOPIC``.
 G1_ARM_CONTROLS: list[tuple[str, int, str]] = [
     ("Handshake", 27, "Perform a handshake gesture with the right hand."),
@@ -101,22 +94,3 @@ def execute_g1_command(
         if logger is not None:
             logger.error(f"Failed to execute {command_name}: {exc}")
         return "Failed to execute the command."
-
-
-__all__ = [
-    "ARM_API_ID",
-    "ARM_COMMANDS",
-    "ARM_COMMANDS_DOC",
-    "ARM_EXECUTE_CUSTOM_ACTION_API_ID",
-    "ARM_GET_ACTION_LIST_API_ID",
-    "ARM_STOP_CUSTOM_ACTION_API_ID",
-    "ARM_TOPIC",
-    "G1_ARM_CONTROLS",
-    "G1_MODE_CONTROLS",
-    "MODE_API_ID",
-    "MODE_COMMANDS",
-    "MODE_COMMANDS_DOC",
-    "MODE_TOPIC",
-    "PublishRequest",
-    "execute_g1_command",
-]
