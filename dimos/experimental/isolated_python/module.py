@@ -58,7 +58,9 @@ class IsolatedPythonModuleConfig(NativeModuleConfig):
 
     # Isolated Python modules resolve their real command from the sibling project.
     executable: str = "uv"
-    startup_timeout: float = 30.0
+    # Cold `uv run --with-editable` on ubuntu CI downloads the host DimOS
+    # tree (opencv, scipy, …) before READY. 30s expired mid-import there.
+    startup_timeout: float = 180.0
     output_limit: int = 64 * 1024
 
 
@@ -227,8 +229,14 @@ class IsolatedPythonModule(NativeModule):
                             return
                         raise RuntimeError(f"Isolated Python runtime failed to start: {message}")
                     if self._process.poll() is not None:
-                        break
-            raise RuntimeError("Isolated Python runtime exited before becoming ready")
+                        raise RuntimeError(
+                            "Isolated Python runtime exited before becoming ready "
+                            f"(returncode={self._process.returncode})"
+                        )
+            raise RuntimeError(
+                "Isolated Python runtime did not become ready within "
+                f"{self.config.startup_timeout:.0f}s"
+            )
         except BaseException:
             if self._process is not None:
                 self.stop()
