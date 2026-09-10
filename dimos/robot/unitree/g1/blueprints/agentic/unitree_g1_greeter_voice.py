@@ -50,5 +50,3 @@ unitree_g1_greeter_voice = (
     .remappings(GREETER_REMAPPINGS)
     .global_config(n_workers=6, robot_model="unitree_g1")
 )
-
-__all__ = ["unitree_g1_greeter_voice"]

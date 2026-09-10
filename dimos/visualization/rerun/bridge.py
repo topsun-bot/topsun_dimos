@@ -522,6 +522,8 @@ class RerunBridgeModule(Module):
         save_path = save_dir / f"dimos_{timestamp}.rrd"
 
         try:
+            import rerun as rr
+
             rr.save(str(save_path))
         except Exception:
             logger.warning(f"Failed to enable rerun disk sink at {save_path}", exc_info=True)

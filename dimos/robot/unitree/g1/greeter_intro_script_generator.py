@@ -175,17 +175,3 @@ def resolve_intro_script_for_tag(
         except Exception:
             logger.exception("标点 LLM 生成讲解词失败,使用模板: %s", name)
     return fallback_intro_script(name, fallback_template), "fallback"
-
-
-__all__ = [
-    "ChatCompleter",
-    "LlmClientConfig",
-    "RequestsChatCompleter",
-    "build_intro_script_prompt",
-    "default_intro_model",
-    "fallback_intro_script",
-    "generate_intro_script_for_landmark",
-    "resolve_intro_script_for_tag",
-    "resolve_llm_client_config",
-    "sanitize_intro_script",
-]

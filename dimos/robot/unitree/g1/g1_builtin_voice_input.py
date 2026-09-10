@@ -256,10 +256,3 @@ class G1BuiltinVoiceInput(Module):
             self._human_transport.stop()
             self._human_transport = None
         super().stop()
-
-
-__all__ = [
-    "G1BuiltinVoiceInput",
-    "G1BuiltinVoiceInputConfig",
-    "parse_g1_asr_payload",
-]

@@ -25,6 +25,4 @@ RPCs). Unify after rebasing ``feat/spatial-memory-export`` and related
 branches.
 """
 
-from dimos.perception.experimental.spatial_perception import SpatialMemory
-
-__all__ = ["SpatialMemory"]
+from dimos.perception.experimental.spatial_perception import SpatialMemory  # noqa: F401

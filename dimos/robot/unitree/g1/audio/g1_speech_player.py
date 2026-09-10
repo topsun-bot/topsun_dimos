@@ -126,14 +126,3 @@ def play_float_audio_on_g1(
 ) -> float:
     pcm = float_audio_to_g1_pcm(audio, sample_rate)
     return play_pcm_on_g1(audio_client, pcm, stream_id=stream_id)
-
-
-__all__ = [
-    "G1_SPEECH_SAMPLE_RATE",
-    "amplify_pcm16",
-    "float_audio_to_g1_pcm",
-    "pcm_bytes_to_seconds",
-    "play_float_audio_on_g1",
-    "play_pcm_on_g1",
-    "stop_g1_playback",
-]

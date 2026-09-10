@@ -17,6 +17,8 @@ import threading
 import time
 from typing import Any
 
+import cv2
+
 # Import LCM messages
 from dimos_lcm.vision_msgs import (
     BoundingBox2D,

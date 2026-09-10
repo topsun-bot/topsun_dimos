@@ -41,5 +41,3 @@ unitree_go2_spatial = (
     )
     .global_config(n_workers=8)
 )
-
-__all__ = ["unitree_go2_spatial"]

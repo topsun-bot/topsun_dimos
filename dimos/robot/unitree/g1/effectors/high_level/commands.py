@@ -22,6 +22,9 @@ ARM_API_ID = 7106
 MODE_API_ID = 7101
 ARM_TOPIC = "rt/api/arm/request"
 MODE_TOPIC = "rt/api/sport/request"
+ARM_GET_ACTION_LIST_API_ID = 7107
+ARM_EXECUTE_CUSTOM_ACTION_API_ID = 7108
+ARM_STOP_CUSTOM_ACTION_API_ID = 7113
 
 # G1 Arm Actions — all use ``ARM_API_ID`` on ``ARM_TOPIC``.
 G1_ARM_CONTROLS: list[tuple[str, int, str]] = [

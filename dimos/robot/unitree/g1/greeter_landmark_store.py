@@ -158,6 +158,3 @@ class GreeterLandmarkStore:
     def __len__(self) -> int:
         with self._lock:
             return len(self._landmarks)
-
-
-__all__ = ["GreeterLandmarkStore", "Landmark", "normalize_landmark_text"]

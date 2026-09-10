@@ -45,5 +45,3 @@ unitree_g1_agentic_deepseek = autoconnect(
     SpeakSkill.blueprint(),
     UnitreeG1SkillContainer.blueprint(),
 )
-
-__all__ = ["unitree_g1_agentic_deepseek"]
