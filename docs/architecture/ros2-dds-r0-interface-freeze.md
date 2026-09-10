@@ -171,3 +171,5 @@ R0 cited paths were verified against current `main`. Follow the live tree; do no
 | `ZenohTransport` | **Present** as an empty stub. |
 
 Until the nav Fast-DDS image and relays are in this tree, Chain A domain/QoS rows are the **approved contract** for later R1+ work, not a claim that those values are currently applied by committed Docker or Python.
+
+<!-- R0: re-run required ci after docs-only strip -->
