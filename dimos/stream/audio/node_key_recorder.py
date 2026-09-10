@@ -120,7 +120,9 @@ class KeyRecorder(AbstractAudioTransform):
                     self._start_recording()
 
             self._ptt_unsubscribe = self._ptt_transport.subscribe(_on_ptt)
-            logger.info("按 Enter 开始录音,说完后再按 Enter 结束(每次录音建议 2~5 秒)")
+            logger.info(
+                "按 Enter 开始录音,说完后再按 Enter 结束(每次录音建议 2~5 秒)"
+            )
             return
 
         if self._input_thread is not None and self._input_thread.is_alive():
@@ -136,7 +138,9 @@ class KeyRecorder(AbstractAudioTransform):
         self._running = True
         self._input_thread = threading.Thread(target=self._input_monitor, daemon=True)
         self._input_thread.start()
-        logger.info("按 Enter 开始录音,说完后再按 Enter 结束(每次录音建议 2~5 秒)")
+        logger.info(
+            "按 Enter 开始录音,说完后再按 Enter 结束(每次录音建议 2~5 秒)"
+        )
 
     def emit_audio(self) -> Observable:  # type: ignore[type-arg]
         """
