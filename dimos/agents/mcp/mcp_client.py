@@ -29,6 +29,7 @@ from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
 # `allowed_objects` warning emitted when langchain.agents pulls in langgraph.checkpoint.
 warnings.filterwarnings("ignore", category=LangChainPendingDeprecationWarning)
 
+import httpx
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
@@ -37,7 +38,6 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from reactivex.disposable import Disposable
-import httpx
 import requests
 
 from dimos.agents.llm_trace import tracing_http_client

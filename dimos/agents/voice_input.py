@@ -30,8 +30,8 @@ from dataclasses import dataclass, field
 from queue import Empty, Full, Queue
 import select
 import sys
-from threading import Event, Lock, Thread, Timer
 import threading
+from threading import Event, Lock, Thread, Timer
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -105,9 +105,7 @@ class VoiceInput(Module):
         self.register_disposable(stt_node.emit_text().subscribe(self._publish_text))
 
         self._recorder = recorder
-        logger.info(
-            "VoiceInput 已启动 — 按 Enter 开始录音,对着麦克风说 2~5 秒,再按 Enter 发送"
-        )
+        logger.info("VoiceInput 已启动 — 按 Enter 开始录音,对着麦克风说 2~5 秒,再按 Enter 发送")
 
     def _publish_text(self, text: str) -> None:
         cleaned = text.strip()
