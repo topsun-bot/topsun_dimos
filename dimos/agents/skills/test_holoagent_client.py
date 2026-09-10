@@ -1,0 +1,125 @@
+# Copyright 2025-2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+import requests
+
+from dimos.agents.skills.holoagent_client import (
+    HoloAgentBridgeClient,
+    HoloAgentBridgeError,
+    format_relative_cmd,
+    format_semantic_cmd,
+)
+
+
+def test_format_semantic_cmd_uses_unknown_for_blanks() -> None:
+    assert format_semantic_cmd("", "", "coffee machine") == "unknown,unknown,coffee machine"
+    assert format_semantic_cmd("1F", "pantry", "coffee machine") == "1F,pantry,coffee machine"
+
+
+def test_format_relative_cmd() -> None:
+    assert format_relative_cmd(1.0, 0.0, 90.0) == "1.0,0.0,90.0"
+
+
+def test_semantic_nav_posts_cmd_contract() -> None:
+    session = MagicMock()
+    response = MagicMock()
+    response.content = b'{"success": true}'
+    response.json.return_value = {"success": True}
+    session.request.return_value = response
+
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=session)
+    result = client.semantic_nav("1F", "pantry", "coffee machine")
+
+    session.request.assert_called_once_with(
+        method="POST",
+        url="http://127.0.0.1:8000/api/semantic_nav",
+        json={"cmd": "1F,pantry,coffee machine"},
+        timeout=10.0,
+    )
+    assert result == {"success": True}
+
+
+def test_relative_nav_posts_cmd_contract() -> None:
+    session = MagicMock()
+    response = MagicMock()
+    response.content = b'{"success": true}'
+    response.json.return_value = {"success": True}
+    session.request.return_value = response
+
+    client = HoloAgentBridgeClient("http://bridge.local:8000/", session=session)
+    client.relative_nav(1.0, -0.2, 90.0)
+
+    session.request.assert_called_once_with(
+        method="POST",
+        url="http://bridge.local:8000/api/relative_nav",
+        json={"cmd": "1.0,-0.2,90.0"},
+        timeout=10.0,
+    )
+
+
+def test_path_endpoints() -> None:
+    session = MagicMock()
+    response = MagicMock()
+    response.content = b'{"success": true}'
+    response.json.return_value = {"success": True}
+    session.request.return_value = response
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=session)
+
+    client.health()
+    client.stop_navigation()
+    client.navigation_signal("one_point_1")
+    client.arm_skill("wave_above_head")
+
+    urls = [call.kwargs["url"] for call in session.request.call_args_list]
+    assert urls == [
+        "http://127.0.0.1:8000/health",
+        "http://127.0.0.1:8000/api/navigation/stop",
+        "http://127.0.0.1:8000/api/navigation/one_point_1",
+        "http://127.0.0.1:8000/api/arm/wave_above_head",
+    ]
+
+
+def test_empty_path_rejected() -> None:
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=MagicMock())
+    with pytest.raises(HoloAgentBridgeError, match="non-empty"):
+        client.arm_skill("  ")
+    with pytest.raises(HoloAgentBridgeError, match="non-empty"):
+        client.navigation_signal("")
+
+
+def test_http_error_is_wrapped() -> None:
+    session = MagicMock()
+    session.request.side_effect = requests.ConnectionError("down")
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=session)
+
+    with pytest.raises(HoloAgentBridgeError, match="GET http://127.0.0.1:8000/health failed"):
+        client.health()
+
+
+def test_non_json_body_is_wrapped() -> None:
+    session = MagicMock()
+    response = MagicMock()
+    response.content = b"ok"
+    response.text = "ok"
+    response.json.side_effect = ValueError("not json")
+    session.request.return_value = response
+
+    result: dict[str, Any] = HoloAgentBridgeClient(
+        "http://127.0.0.1:8000", session=session
+    ).stop_navigation()
+    assert result == {"success": True, "text": "ok"}

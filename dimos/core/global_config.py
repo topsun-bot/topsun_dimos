@@ -119,6 +119,18 @@ class GlobalConfig(BaseSettings):
         default="zenoh",
         validation_alias=AliasChoices("DIMOS_TRANSPORT", "transport"),
     )
+    holoagent_url: str = Field(
+        default="http://127.0.0.1:8000",
+        validation_alias=AliasChoices(
+            "holoagent_url",
+            "HOLOAGENT_URL",
+            "DIMOS_HOLOAGENT_URL",
+        ),
+        description=(
+            "Base URL of a running HorizonRobotics HoloAgent robot_bridge "
+            "(default host 127.0.0.1, port 8000)."
+        ),
+    )
     build_native: bool = DEFAULT_BUILD_NATIVE
     dtop: bool = False
     obstacle_avoidance: bool = True
