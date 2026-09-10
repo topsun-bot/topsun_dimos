@@ -14,4 +14,6 @@
 
 """Public Topsun object-tracking Spec (re-export after upstream experimental move)."""
 
-from dimos.perception.experimental.object_tracking_spec import ObjectTrackingSpec  # noqa: F401
+from dimos.perception.experimental.object_tracking_spec import (
+    ObjectTrackingSpec as ObjectTrackingSpec,
+)
