@@ -74,7 +74,7 @@ dimos mcp call holoagent_semantic_nav --arg object_name="coffee machine" --arg f
 
 Compose the same skill into an existing blueprint without a new file:
 
-```python
+```python skip
 from dimos.agents.skills.holoagent import HoloAgentSkillContainer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitree_go2_agentic
