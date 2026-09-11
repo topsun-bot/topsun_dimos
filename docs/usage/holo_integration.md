@@ -32,7 +32,7 @@ Language goal
 - `OPENAI_API_KEY` for the default GPT-4o agent
 - `--replay` for recorded Go2 data (first run may pull LFS)
 - `--simulation` for G1 MuJoCo
-- `--robot-ip 192.168.123.161` on real hardware (placeholder — use your robot)
+- `--robot-ip 192.168.123.161` on real hardware (placeholder - use your robot)
 
 ```sh skip
 uv venv --python "3.12"
@@ -106,7 +106,7 @@ HoloAgent expects ROS 2 Humble, `colcon`, and robot-side services. HoloMotion v1
 
 ## Related
 
-- [Agents](/docs/capabilities/agents/readme.md)
+- [Agents](/dimos/agents/mcp/README.md)
 - [Go2 getting started](/docs/platforms/quadruped/go2/index.md)
 - [G1](/docs/platforms/humanoid/g1/index.md)
 - [CLI](/docs/usage/cli.md)
