@@ -122,10 +122,7 @@ class HoloWorkspace:
             DemoCommand(
                 name="g1-agentic-sim",
                 command="dimos --simulation run unitree-g1-agentic-sim",
-                notes=(
-                    "G1 MuJoCo sim + gpt-5.6-luna (G1 prompt) + skills. "
-                    "Needs OPENAI_API_KEY."
-                ),
+                notes=("G1 MuJoCo sim + gpt-5.6-luna (G1 prompt) + skills. Needs OPENAI_API_KEY."),
             ),
             DemoCommand(
                 name="g1-agentic-hardware",
@@ -188,9 +185,7 @@ class HoloWorkspace:
         commands: list[str] = []
         for repo in selected:
             path = HoloWorkspace.resolve_repo_path(repo, dest)
-            commands.append(
-                f"git clone {shlex.quote(f'{repo.url}.git')} {shlex.quote(str(path))}"
-            )
+            commands.append(f"git clone {shlex.quote(f'{repo.url}.git')} {shlex.quote(str(path))}")
         return tuple(commands)
 
     @staticmethod
