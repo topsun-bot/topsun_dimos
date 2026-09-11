@@ -46,7 +46,7 @@ def _print_mic_enable_help() -> None:
         "     连接 G1 → 设备 → 数据 → 语音助手 → 唤醒对话模式 (Wake-up Conversation)\n"
         "  2. 部分 G1 固件即使用户开启，PC2/Orin 仍收不到有效麦数据 (宇树社区已知问题)\n"
         "  3. 实际部署建议: USB 麦克风 + orin_test_mic.sh scan\n"
-        '  4. 临时绕过: bash ~/topsun_dimos/scripts/orin_dimos.sh agent-send "你好"\n'
+        "  4. 临时绕过: bash ~/topsun_dimos/scripts/orin_dimos.sh agent-send \"你好\"\n"
     )
 
 
@@ -111,7 +111,7 @@ def _record_multicast(local_ip: str, seconds: float) -> np.ndarray:
             raise RuntimeError(f"{_MAX_WAIT_NO_DATA_S:.0f}s 内未收到任何组播包")
         try:
             data, _ = sock.recvfrom(4096)
-        except TimeoutError:
+        except socket.timeout:
             continue
         if not data:
             continue

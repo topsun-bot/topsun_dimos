@@ -17,8 +17,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from dimos.robot.unitree.g1.audio.g1_speech_player import (
-    _G1_PCM_CHUNK_BYTES,
     G1_SPEECH_SAMPLE_RATE,
+    _G1_PCM_CHUNK_BYTES,
     float_audio_to_g1_pcm,
     pcm_bytes_to_seconds,
     play_pcm_on_g1,
