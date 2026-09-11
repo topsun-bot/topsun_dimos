@@ -48,6 +48,7 @@ import typer
 
 from dimos.cli.cache import app as cache_app
 from dimos.cli.can import app as can_app
+from dimos.cli.embodiedgen import app as embodiedgen_app
 from dimos.cli.cloud import login as cloud_login, logout as cloud_logout, whoami as cloud_whoami
 from dimos.cli.commands.apriltag import apriltag
 from dimos.cli.commands.bake import bake
@@ -139,6 +140,7 @@ main.command(context_settings={"allow_extra_args": True, "ignore_unknown_options
 main.add_typer(topic_app, name="topic")
 main.add_typer(map_app, name="map")
 main.add_typer(landmarks_app, name="landmarks")
+main.add_typer(embodiedgen_app, name="embodiedgen")
 
 from dimos.navigation.nav_3d.evaluator.cli import app as nav_eval_app
 
