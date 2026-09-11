@@ -25,7 +25,7 @@ from cyclonedds.qos import Qos
 from cyclonedds.sub import DataReader as DDSDataReader
 from cyclonedds.topic import Topic as DDSTopic
 
-from dimos.protocol.pubsub.spec import PubSub
+from dimos.protocol.pubsub.spec import PubSub, SubscriptionGate
 from dimos.protocol.service.ddsservice import DDSService
 from dimos.utils.logging_config import setup_logger
 
@@ -57,18 +57,23 @@ class _DDSMessageListener(Listener):  # type: ignore[misc]
     def __init__(self, topic: Topic) -> None:
         super().__init__()  # type: ignore[no-untyped-call]
         self._topic = topic
-        self._callbacks: tuple[MessageCallback, ...] = ()
+        self._callbacks: tuple[SubscriptionGate, ...] = ()
         self._lock = threading.Lock()
 
-    def add_callback(self, callback: MessageCallback) -> None:
+    def add_callback(self, callback: MessageCallback) -> SubscriptionGate:
         """Add a callback to the listener."""
+        gate = SubscriptionGate(callback)
         with self._lock:
-            self._callbacks = (*self._callbacks, callback)
+            self._callbacks = (*self._callbacks, gate)
+        return gate
 
     def remove_callback(self, callback: MessageCallback) -> None:
         """Remove a callback from the listener."""
         with self._lock:
-            self._callbacks = tuple(cb for cb in self._callbacks if cb is not callback)
+            for gate in self._callbacks:
+                if gate.callback is callback:
+                    gate.kill()
+            self._callbacks = tuple(g for g in self._callbacks if g.callback is not callback)
 
     def on_data_available(self, reader: DDSDataReader[Any]) -> None:
         """Called when data is available on the reader."""
@@ -79,9 +84,9 @@ class _DDSMessageListener(Listener):  # type: ignore[misc]
             return
         for sample in samples:
             if sample is not None:
-                for callback in self._callbacks:
+                for gate in self._callbacks:
                     try:
-                        callback(sample, self._topic)
+                        gate.dispatch(sample, self._topic)
                     except Exception as e:
                         logger.error(f"Callback error on topic {self._topic}: {e}", exc_info=True)
 

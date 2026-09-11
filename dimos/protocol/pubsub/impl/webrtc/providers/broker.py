@@ -47,6 +47,7 @@ from dimos.protocol.pubsub.impl.webrtc.providers.spec import (
     ProviderConfig,
     wait_connected,
 )
+from dimos.protocol.pubsub.spec import SubscriptionGate
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -142,7 +143,7 @@ class BrokerProvider(AsyncProviderBase):
         # self._lock.
         self._dcs: dict[str, RTCDataChannel] = {}
         self._dc_ids: dict[str, int | None] = {}
-        self._callbacks: dict[str, list[Callable[[bytes, str], None]]] = defaultdict(list)
+        self._callbacks: dict[str, list[SubscriptionGate]] = defaultdict(list)
         self._dropped_publish_warned: set[str] = set()
         self._last_hb_error = ""
         # Built in _connect (on the loop thread, for cross-thread set_latest).
@@ -532,9 +533,9 @@ class BrokerProvider(AsyncProviderBase):
         payload = b'{"type": "operator_lost"}'
         with self._lock:
             callbacks = list(self._callbacks.get("state_reliable", ()))
-        for cb in callbacks:
+        for gate in callbacks:
             try:
-                cb(payload, "state_reliable")
+                gate.dispatch(payload, "state_reliable")
             except Exception:
                 logger.exception("operator_lost subscriber callback error")
 
@@ -560,9 +561,9 @@ class BrokerProvider(AsyncProviderBase):
                     self._maybe_answer_ping(payload)
                 with self._lock:
                     callbacks = list(self._callbacks.get(name, ()))
-                for cb in callbacks:
+                for gate in callbacks:
                     try:
-                        cb(payload, name)
+                        gate.dispatch(payload, name)
                     except Exception:
                         logger.exception("Broker subscriber callback error")
 
@@ -657,13 +658,15 @@ class BrokerProvider(AsyncProviderBase):
         their topic; the transport layer filters by LCM fingerprint."""
         if not self.is_connected:
             self.start()
+        gate = SubscriptionGate(callback)
         with self._lock:
-            self._callbacks[topic].append(callback)
+            self._callbacks[topic].append(gate)
 
         def _unsub() -> None:
+            gate.kill()
             with self._lock:
                 try:
-                    self._callbacks[topic].remove(callback)
+                    self._callbacks[topic].remove(gate)
                 except ValueError:
                     pass
 

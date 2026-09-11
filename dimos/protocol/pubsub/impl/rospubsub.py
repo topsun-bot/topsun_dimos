@@ -44,7 +44,7 @@ from dimos.protocol.pubsub.impl.rospubsub_conversion import (
     dimos_to_ros,
     ros_to_dimos,
 )
-from dimos.protocol.pubsub.spec import PubSub
+from dimos.protocol.pubsub.spec import PubSub, SubscriptionGate
 
 
 @runtime_checkable
@@ -221,8 +221,10 @@ class RawROS(PubSub[RawROSTopic, Any]):
 
         with self._lock:
 
+            gate = SubscriptionGate(callback)
+
             def ros_callback(msg: Any) -> None:
-                callback(msg, topic)
+                gate.dispatch(msg, topic)
 
             qos = topic.qos if topic.qos is not None else self._qos
             subscription = self._node.create_subscription(
@@ -234,6 +236,7 @@ class RawROS(PubSub[RawROSTopic, Any]):
             self._subscriptions[topic.topic].append((subscription, callback))
 
             def unsubscribe() -> None:
+                gate.kill()
                 with self._lock:
                     if topic.topic in self._subscriptions:
                         self._subscriptions[topic.topic] = [

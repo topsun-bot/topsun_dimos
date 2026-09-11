@@ -36,6 +36,7 @@ from dimos.protocol.pubsub.impl.webrtc.providers.spec import (
     ProviderConfig,
 )
 from dimos.protocol.pubsub.impl.webrtc.webrtcpubsub import WebRTCPubSub
+from dimos.protocol.pubsub.spec import SubscriptionGate
 
 # ─── Mock provider ───────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ class MockProvider:
 
     def __init__(self) -> None:
         self._started = False
-        self._subscribers: dict[str, list[Callable[[bytes, str], None]]] = {}
+        self._subscribers: dict[str, list[SubscriptionGate]] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -58,15 +59,16 @@ class MockProvider:
         self._started = False
 
     def publish(self, topic: str, data: bytes) -> None:
-        for cb in list(self._subscribers.get(topic, [])):
-            cb(data, topic)
+        SubscriptionGate.fanout(list(self._subscribers.get(topic, [])), data, topic)
 
     def subscribe(self, topic: str, callback: Callable[[bytes, str], None]) -> Callable[[], None]:
-        self._subscribers.setdefault(topic, []).append(callback)
+        gate = SubscriptionGate(callback)
+        self._subscribers.setdefault(topic, []).append(gate)
 
         def _unsub() -> None:
+            gate.kill()
             try:
-                self._subscribers[topic].remove(callback)
+                self._subscribers[topic].remove(gate)
             except (ValueError, KeyError):
                 pass
 

@@ -27,8 +27,19 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM, Topic
 from dimos.protocol.pubsub.impl.memory import Memory
 from dimos.protocol.pubsub.impl.zenohpubsub import PickleZenoh, Zenoh
+from dimos.protocol.pubsub.spec import SubscriptionGate
 from dimos.protocol.service.zenohservice import ZenohSessionPool
 from dimos.utils.testing.collector import CallbackCollector
+
+
+def test_subscription_gate_skips_dispatch_after_kill() -> None:
+    seen: list[str] = []
+    gate = SubscriptionGate(lambda msg, _topic: seen.append(msg))
+    gate.dispatch("a", "t")
+    gate.kill()
+    gate.kill()
+    gate.dispatch("b", "t")
+    assert seen == ["a"]
 
 
 @contextmanager

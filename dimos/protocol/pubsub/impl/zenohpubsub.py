@@ -25,7 +25,7 @@ import zenoh
 from dimos.msgs.helpers import resolve_msg_type
 from dimos.protocol.pubsub.encoders import LCMEncoderMixin, PickleEncoderMixin
 from dimos.protocol.pubsub.impl.lcmpubsub import Topic as LCMTopic
-from dimos.protocol.pubsub.spec import AllPubSub
+from dimos.protocol.pubsub.spec import AllPubSub, SubscriptionGate
 from dimos.protocol.service.zenohservice import ZenohService
 from dimos.utils.logging_config import setup_logger
 
@@ -198,6 +198,7 @@ class ZenohPubSubBase(ZenohService, AllPubSub[Topic, bytes]):
     ) -> Callable[[], None]:
         """Subscribe to a Zenoh key expression."""
         key_expr = _topic_to_key_expr(topic)
+        gate = SubscriptionGate(callback)
 
         def on_sample(sample: zenoh.Sample) -> None:
             try:
@@ -212,16 +213,18 @@ class ZenohPubSubBase(ZenohService, AllPubSub[Topic, bytes]):
                 recv_topic = topic
             else:
                 recv_topic = _key_expr_to_topic(sample_key, topic.lcm_type)
-            callback(data, recv_topic)
+            gate.dispatch(data, recv_topic)
 
         sub = self.session.declare_subscriber(key_expr, on_sample)
         with self._subscriber_lock:
             if self._stopped:
+                gate.kill()
                 sub.undeclare()
                 return lambda: None
             self._subscribers.append(sub)
 
         def unsubscribe() -> None:
+            gate.kill()
             with self._subscriber_lock:
                 if sub not in self._subscribers:
                     return  # Already removed by stop() or a concurrent unsubscribe

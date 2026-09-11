@@ -72,3 +72,56 @@ def test_fanout_callback_can_unsubscribe_and_resubscribe(
     publisher.publish(topic, b"second")
     assert second.wait(timeout=5.0), "resubscribe after self-unsubscribe never delivered"
     assert received == [b"first", b"second"]
+
+
+def test_fanout_does_not_start_sibling_after_unsubscribe(
+    shm_pair: tuple[SharedMemoryPubSubBase, SharedMemoryPubSubBase, str],
+) -> None:
+    """A callback already copied by the fanout loop must not start after unsub.
+
+    First subscriber kills the second; even if both were in ``list(st.subs)``
+    before the first callback ran, the second gate is dead at dispatch.
+    """
+    publisher, subscriber, topic = shm_pair
+    first_done = threading.Event()
+    second_ran = threading.Event()
+    unsub_second: list[object] = []
+
+    def first(_message: bytes, _topic: str) -> None:
+        unsub = unsub_second[0]
+        assert callable(unsub)
+        unsub()
+        first_done.set()
+
+    def second(_message: bytes, _topic: str) -> None:
+        second_ran.set()
+
+    subscriber.subscribe(topic, first)
+    unsub_second.append(subscriber.subscribe(topic, second))
+    publisher.publish(topic, b"x")
+    assert first_done.wait(timeout=5.0), "first callback never ran"
+    assert not second_ran.wait(timeout=0.2), "sibling callback started after unsubscribe"
+
+
+def test_local_publish_does_not_start_sibling_after_unsubscribe() -> None:
+    topic = f"/shm_local_unsub_{uuid.uuid4().hex}"
+    bus = SharedMemoryPubSubBase(prefer="cpu", default_capacity=4096)
+    bus.start()
+    try:
+        second_ran = threading.Event()
+        unsub_second: list[object] = []
+
+        def first(_message: bytes, _topic: str) -> None:
+            unsub = unsub_second[0]
+            assert callable(unsub)
+            unsub()
+
+        def second(_message: bytes, _topic: str) -> None:
+            second_ran.set()
+
+        bus.subscribe(topic, first)
+        unsub_second.append(bus.subscribe(topic, second))
+        bus.publish(topic, b"local")
+        assert not second_ran.is_set()
+    finally:
+        bus.stop()

@@ -24,7 +24,7 @@ from pydantic import Field
 import redis  # type: ignore[import-not-found]
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
-from dimos.protocol.pubsub.spec import PubSub
+from dimos.protocol.pubsub.spec import PubSub, SubscriptionGate
 from dimos.protocol.service.spec import BaseConfig, Service
 
 
@@ -48,7 +48,7 @@ class Redis(PubSub[str, Any], Service):
         self._pubsub = None
 
         # Subscription management
-        self._callbacks: dict[str, list[Callable[[Any, str], None]]] = defaultdict(list)
+        self._callbacks: dict[str, list[SubscriptionGate]] = defaultdict(list)
         self._listener_thread = None
         self._running = False
 
@@ -105,9 +105,9 @@ class Redis(PubSub[str, Any], Service):
                         pass
 
                     # Call all callbacks for this topic
-                    for callback in self._callbacks.get(topic, []):
+                    for gate in list(self._callbacks.get(topic, [])):
                         try:
-                            callback(data, topic)
+                            gate.dispatch(data, topic)
                         except Exception as e:
                             # Log error but continue processing other callbacks
                             print(f"Error in callback for topic {topic}: {e}")
@@ -140,7 +140,8 @@ class Redis(PubSub[str, Any], Service):
             self._pubsub.subscribe(topic)
 
         # Add callback to our list
-        self._callbacks[topic].append(callback)
+        gate = SubscriptionGate(callback)
+        self._callbacks[topic].append(gate)
 
         # Return unsubscribe function
         def unsubscribe() -> None:
@@ -152,7 +153,11 @@ class Redis(PubSub[str, Any], Service):
         """Unsubscribe a callback from a topic."""
         if topic in self._callbacks:
             try:
-                self._callbacks[topic].remove(callback)
+                gates = self._callbacks[topic]
+                for gate in list(gates):
+                    if gate.callback is callback:
+                        gate.kill()
+                        gates.remove(gate)
 
                 # If no more callbacks for this topic, unsubscribe from Redis channel
                 if not self._callbacks[topic]:

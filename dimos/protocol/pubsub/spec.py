@@ -14,7 +14,7 @@
 
 from abc import ABC, abstractmethod
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
@@ -23,6 +23,39 @@ MsgT = TypeVar("MsgT")
 TopicT = TypeVar("TopicT")
 MsgT_co = TypeVar("MsgT_co", covariant=True)
 TopicT_co = TypeVar("TopicT_co", covariant=True)
+
+
+class SubscriptionGate:
+    """Per-subscription liveness for the ``PubSub.unsubscribe`` contract.
+
+    ``kill()`` is re-entrant and never waits for an in-flight callback.
+    After it returns, ``dispatch()`` will not start the callback (a
+    callback already running may still complete). Backends check the
+    gate immediately before invoking user code so a callback copied from
+    a mutable collection cannot start after unsubscribe returns.
+    """
+
+    __slots__ = ("_alive", "callback")
+
+    def __init__(self, callback: Callable[..., Any]) -> None:
+        self._alive = True
+        self.callback = callback
+
+    def dispatch(self, *args: Any, **kwargs: Any) -> None:
+        if self._alive:
+            self.callback(*args, **kwargs)
+
+    @property
+    def alive(self) -> bool:
+        return self._alive
+
+    def kill(self) -> None:
+        self._alive = False
+
+    @staticmethod
+    def fanout(gates: Iterable["SubscriptionGate"], *args: Any) -> None:
+        for gate in gates:
+            gate.dispatch(*args)
 
 
 class PubSubBaseMixin(Generic[TopicT, MsgT]):
@@ -103,7 +136,8 @@ class PubSub(PubSubBaseMixin[TopicT, MsgT], ABC):
         callback (callers may hold an event loop the backend needs for
         progress), must be callable from within the callback itself, and once
         it returns no further deliveries start (a callback already executing
-        may still complete).
+        may still complete). Backends enforce the last clause with
+        ``SubscriptionGate`` checked immediately before user dispatch.
         """
         ...
 

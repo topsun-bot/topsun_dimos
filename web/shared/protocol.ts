@@ -277,9 +277,9 @@ const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: true });
 
 // Runtime field validation, mirrored by the pydantic models in protocol.py:
-// "string" is a JSON string, "number" any JSON number (booleans excluded by
-// typeof). Structured fields (nested objects/arrays) are checked by
-// MSG_VALIDATORS below.
+// "string" is a JSON string, "number" a finite JSON number (booleans
+// excluded by typeof; Infinity/NaN from overflowing literals rejected).
+// Structured fields (nested objects/arrays) are checked by MSG_VALIDATORS.
 const MSG_FIELDS: Record<string, Record<string, "string" | "number">> = {
   hello: { v: "number", role: "string" },
   welcome: { v: "number" },
@@ -322,7 +322,9 @@ function isRobotInfo(value: unknown): value is RobotInfo {
 // different: it spans all of JSON (null included), so only absence is
 // invalid. The manifest is only checked for record-ness here -- its
 // structure belongs to parseManifest (see RobotManifest above).
-const absentOrNumber = (v: unknown) => v === undefined || typeof v === "number";
+const isFiniteNumber = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v);
+const absentOrNumber = (v: unknown) => v === undefined || isFiniteNumber(v);
 const requestIdOk = (v: unknown) =>
   typeof v === "string" && v.length >= 1 && v.length <= MAX_REQUEST_ID_LEN;
 const MSG_VALIDATORS: Record<string, (value: Record<string, unknown>) => boolean> = {
@@ -348,8 +350,12 @@ export function msgFromUnknown(value: unknown): Msg | null {
   const fields = Object.hasOwn(MSG_FIELDS, value.t) ? MSG_FIELDS[value.t] : undefined;
   if (fields === undefined) return null;
   for (const [name, kind] of Object.entries(fields)) {
-    const actual = typeof value[name];
-    if (actual !== kind) return null;
+    const actual = value[name];
+    if (kind === "number") {
+      if (!isFiniteNumber(actual)) return null;
+    } else if (typeof actual !== kind) {
+      return null;
+    }
   }
   const structural = Object.hasOwn(MSG_VALIDATORS, value.t) ? MSG_VALIDATORS[value.t] : undefined;
   if (structural !== undefined && !structural(value)) return null;

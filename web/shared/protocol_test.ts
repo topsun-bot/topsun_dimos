@@ -232,6 +232,9 @@ Deno.test("msgFromUnknown validates shape and rejects unknown/malformed", () => 
   assertEquals(msgFromUnknown({ t: "ping", n: 1, ts: 2.5 }), { t: "ping", n: 1, ts: 2.5 });
   assertEquals(msgFromUnknown({ t: "bogus", n: 1 }), null); // unknown type
   assertEquals(msgFromUnknown({ t: "ping", n: "1", ts: 2.5 }), null); // n not a number
+  // JSON.parse("1e400") is Infinity; the Python mirror rejects it too.
+  assertEquals(msgFromUnknown({ t: "ping", n: Number.POSITIVE_INFINITY, ts: 2.5 }), null);
+  assertEquals(msgFromUnknown({ t: "ping", n: 1, ts: Number.NaN }), null);
   assertEquals(msgFromUnknown({ t: "ping", ts: 2.5 }), null); // missing n
   assertEquals(msgFromUnknown({ t: "hello", v: 1 }), null); // missing role
   assertEquals(msgFromUnknown(null), null);
@@ -291,6 +294,7 @@ Deno.test("msgFromUnknown validates nested session-message shapes", () => {
   assertEquals(msgFromUnknown({ ...twist, gen: 3 }) !== null, true);
   assertEquals(msgFromUnknown({ ...twist, gen: null }), null);
   assertEquals(msgFromUnknown({ ...twist, gen: "1" }), null);
+  assertEquals(msgFromUnknown({ ...twist, gen: Number.POSITIVE_INFINITY }), null);
   assertEquals(msgFromUnknown({ t: "teleop_start", gen: 3 }) !== null, true);
   assertEquals(msgFromUnknown({ t: "teleop_stop", gen: null }), null);
 });
@@ -312,8 +316,10 @@ Deno.test("msgFromUnknown validates publish-message shapes", () => {
   assertEquals(msgFromUnknown({ ...ok, clientTs: null }), null);
   assertEquals(msgFromUnknown({ ...ok, clientTs: "1" }), null);
   assertEquals(msgFromUnknown({ ...ok, clientTs: true }), null);
+  assertEquals(msgFromUnknown({ ...ok, clientTs: Number.POSITIVE_INFINITY }), null);
   const ack = { t: "pub_ack", id: "a", ch: "chat", relayTs: 1.5, bridgeTs: 2.5 };
   assertEquals(msgFromUnknown(ack) !== null, true);
+  assertEquals(msgFromUnknown({ ...ack, relayTs: Number.POSITIVE_INFINITY }), null);
   assertEquals(msgFromUnknown({ ...ack, id: "" }), null);
   assertEquals(msgFromUnknown({ t: "pub_nack", id: "p1", code: "c", message: "m" }) !== null, true);
   assertEquals(msgFromUnknown({ t: "pub_nack", id: longId, code: "c", message: "m" }), null);

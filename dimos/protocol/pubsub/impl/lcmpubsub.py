@@ -26,7 +26,7 @@ from dimos.protocol.pubsub.encoders import (
     PickleEncoderMixin,
 )
 from dimos.protocol.pubsub.patterns import Glob
-from dimos.protocol.pubsub.spec import AllPubSub
+from dimos.protocol.pubsub.spec import AllPubSub, SubscriptionGate
 from dimos.protocol.service.lcmservice import LCMService
 from dimos.utils.logging_config import setup_logger
 
@@ -108,14 +108,14 @@ class LCMPubSubBase(LCMService, AllPubSub[Topic, Any]):
         # The lcm-level detach is deferred to the loop thread (see
         # _defer_unsubscribe), but delivery must stop the moment unsubscribe()
         # returns — gate dispatch on a liveness flag.
-        alive = True
+        gate = SubscriptionGate(callback)
 
         if topic.is_pattern:
 
             def handler(channel: str, msg: bytes) -> None:
-                if not alive or channel == "LCM_SELF_TEST":
+                if channel == "LCM_SELF_TEST":
                     return
-                callback(msg, Topic.from_channel_str(channel, topic.lcm_type))
+                gate.dispatch(msg, Topic.from_channel_str(channel, topic.lcm_type))
 
             pattern_str = str(topic)
             if not pattern_str.endswith("*"):
@@ -126,8 +126,7 @@ class LCMPubSubBase(LCMService, AllPubSub[Topic, Any]):
             topic_str = str(topic)
 
             def plain_handler(_: str, msg: bytes) -> None:
-                if alive:
-                    callback(msg, topic)
+                gate.dispatch(msg, topic)
 
             lcm_subscription = self.l.subscribe(topic_str, plain_handler)
 
@@ -135,10 +134,9 @@ class LCMPubSubBase(LCMService, AllPubSub[Topic, Any]):
         lcm_subscription.set_queue_capacity(10000)
 
         def unsubscribe() -> None:
-            nonlocal alive
-            if not alive:
+            if not gate.alive:
                 return
-            alive = False
+            gate.kill()
             self._defer_unsubscribe(lcm_subscription)
 
         return unsubscribe

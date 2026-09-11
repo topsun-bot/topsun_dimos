@@ -43,6 +43,7 @@ from dimos.protocol.pubsub.impl.webrtc.providers.spec import (
     wait_connected,
     wait_open,
 )
+from dimos.protocol.pubsub.spec import SubscriptionGate
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -123,7 +124,7 @@ class CloudflareProvider(AsyncProviderBase):
         # Guarded by self._lock (from the base); never held across an await.
         self._pub_channels: dict[str, RTCDataChannel] = {}
         self._sub_channels: dict[str, RTCDataChannel] = {}
-        self._callbacks: dict[str, list[Callable[[bytes, str], None]]] = defaultdict(list)
+        self._callbacks: dict[str, list[SubscriptionGate]] = defaultdict(list)
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -279,9 +280,9 @@ class CloudflareProvider(AsyncProviderBase):
                     payload = payload.encode()
                 with self._lock:
                     callbacks = list(self._callbacks.get(topic, ()))
-                for cb in callbacks:
+                for gate in callbacks:
                     try:
-                        cb(payload, topic)
+                        gate.dispatch(payload, topic)
                     except Exception:
                         logger.exception("WebRTC subscriber callback error")
 
@@ -310,22 +311,25 @@ class CloudflareProvider(AsyncProviderBase):
     def subscribe(self, topic: str, callback: Callable[[bytes, str], None]) -> Callable[[], None]:
         if not self.is_connected:
             self.start()
+        gate = SubscriptionGate(callback)
         with self._lock:
-            self._callbacks[topic].append(callback)
+            self._callbacks[topic].append(gate)
         try:
             self._run_sync(self._ensure_sub(topic))
         except BaseException:
             # Failed subscribe returns no unsub handle — deregister, or the
             # callback would start firing once a later subscribe succeeds.
+            gate.kill()
             with self._lock:
-                if callback in self._callbacks[topic]:
-                    self._callbacks[topic].remove(callback)
+                if gate in self._callbacks[topic]:
+                    self._callbacks[topic].remove(gate)
             raise
 
         def _unsub() -> None:
+            gate.kill()
             with self._lock:
                 try:
-                    self._callbacks[topic].remove(callback)
+                    self._callbacks[topic].remove(gate)
                 except ValueError:
                     pass
 

@@ -33,7 +33,7 @@ import numpy.typing as npt
 from dimos.protocol.pubsub.encoders import LCMEncoderMixin, PickleEncoderMixin
 from dimos.protocol.pubsub.impl.lcmpubsub import Topic
 from dimos.protocol.pubsub.shm.ipc_factory import CpuShmChannel, FrameChannel
-from dimos.protocol.pubsub.spec import PubSub
+from dimos.protocol.pubsub.spec import PubSub, SubscriptionGate
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -137,7 +137,7 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             self.capacity = int(capacity)
             self.shape = (self.capacity + 20,)  # +20 for header: length(4) + uuid(16)
             self.dtype = np.uint8
-            self.subs: list[Callable[[bytes, str], None]] = []
+            self.subs: list[SubscriptionGate] = []
             self.stop = threading.Event()
             self.thread: threading.Thread | None = None
             self.fanout_generation = 0
@@ -215,9 +215,9 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
         st.suppress_counts[message_id] += 1
 
         # Synchronous local delivery first (zero extra copies)
-        for cb in list(st.subs):
+        for gate in list(st.subs):
             try:
-                cb(payload_bytes, topic)
+                gate.dispatch(payload_bytes, topic)
             except Exception:
                 logger.warn(f"Payload couldn't be pushed to topic: {topic}")
                 pass
@@ -241,12 +241,14 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
     def subscribe(self, topic: str, callback: Callable[[bytes, str], Any]) -> Callable[[], None]:
         """Subscribe a callback(message: bytes, topic). Returns unsubscribe."""
         st = self._ensure_topic(topic)
-        st.subs.append(callback)
+        gate = SubscriptionGate(callback)
+        st.subs.append(gate)
         ShmFanout.start(self._fanout_loop, topic, st)
 
         def _unsub() -> None:
+            gate.kill()
             try:
-                st.subs.remove(callback)
+                st.subs.remove(gate)
             except ValueError:
                 pass
             ShmFanout.stop_if_idle(st)
@@ -344,9 +346,9 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             except Exception:
                 continue
 
-            for cb in list(st.subs):
+            for gate in list(st.subs):
                 try:
-                    cb(payload, topic)
+                    gate.dispatch(payload, topic)
                 except Exception:
                     pass
 
