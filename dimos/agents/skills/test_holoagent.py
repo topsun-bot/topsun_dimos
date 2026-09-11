@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from dimos.agents.capabilities import CAP_MOVEMENT
 from dimos.agents.skills.holoagent import (
     HoloAgentNavSkillContainer,
     HoloAgentSkillContainer,
@@ -28,6 +29,14 @@ class _BareHoloAgentSkills(HoloAgentNavSkillContainer):
 
     def __init__(self, client: MagicMock) -> None:
         self._client = client
+        self.started_tools: list[str] = []
+        self.stopped_tools: list[str] = []
+
+    def start_tool(self, name: str) -> None:
+        self.started_tools.append(name)
+
+    def stop_tool(self, name: str) -> None:
+        self.stopped_tools.append(name)
 
 
 def _container() -> tuple[_BareHoloAgentSkills, MagicMock]:
@@ -47,6 +56,14 @@ def test_skills_are_annotated() -> None:
         method = getattr(HoloAgentNavSkillContainer, name)
         assert getattr(method, "__skill__", False), name
         assert method.__doc__, name
+    for name in (
+        "holoagent_semantic_nav",
+        "holoagent_relative_move",
+        "holoagent_navigation_signal",
+    ):
+        method = getattr(HoloAgentNavSkillContainer, name)
+        assert list(method.__skill_uses__) == [CAP_MOVEMENT], name
+        assert method.__skill_lifecycle__ == "background", name
     assert "holoagent_arm" not in HoloAgentNavSkillContainer.__dict__
     assert "holoagent_arm" not in HoloAgentSkillContainer.__dict__
 
@@ -60,6 +77,8 @@ def test_semantic_nav_success() -> None:
     client.semantic_nav.assert_called_once_with("1F", "pantry", "coffee machine")
     assert "semantic_nav(1F,pantry,coffee machine)" in result
     assert "published" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == []
 
 
 def test_relative_move_rejects_zero() -> None:
@@ -67,6 +86,8 @@ def test_relative_move_rejects_zero() -> None:
     result = skills.holoagent_relative_move(0.0, 0.0, 0.0)
     client.relative_nav.assert_not_called()
     assert "refused" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == ["holoagent_nav"]
 
 
 @pytest.mark.parametrize(
@@ -107,6 +128,8 @@ def test_relative_move_success() -> None:
     result = skills.holoagent_relative_move(0.5, 0.0, 15.0)
     client.relative_nav.assert_called_once_with(0.5, 0.0, 15.0)
     assert "published" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == []
 
 
 def test_navigation_signal_success() -> None:
@@ -115,6 +138,17 @@ def test_navigation_signal_success() -> None:
     result = skills.holoagent_navigation_signal("one_point_1")
     client.navigation_signal.assert_called_once_with("one_point_1")
     assert "published" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == []
+
+
+def test_navigation_signal_stop_releases_hold() -> None:
+    skills, client = _container()
+    client.navigation_signal.return_value = {"success": True}
+    result = skills.holoagent_navigation_signal("stop")
+    assert "published" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == ["holoagent_nav"]
 
 
 def test_bridge_errors_are_returned_as_strings() -> None:
@@ -129,6 +163,7 @@ def test_stop_nav_success() -> None:
     client.stop_navigation.return_value = {"success": True}
     assert "published" in skills.holoagent_stop_nav()
     client.stop_navigation.assert_called_once()
+    assert skills.stopped_tools == ["holoagent_nav"]
 
 
 def test_bridge_uses_module_config_url() -> None:

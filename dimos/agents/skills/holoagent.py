@@ -25,6 +25,7 @@ import json
 from typing import Any
 
 from dimos.agents.annotation import skill
+from dimos.agents.capabilities import CAP_MOVEMENT
 from dimos.agents.skills.holoagent_client import (
     HoloAgentBridgeClient,
     HoloAgentBridgeContract,
@@ -36,6 +37,10 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+# Shared tool-stream name so holoagent_stop_nav can release whichever
+# HoloAgent nav skill currently holds CAP_MOVEMENT.
+_HOLOAGENT_NAV_TOOL = "holoagent_nav"
+
 HOLOAGENT_SKILLS_PROMPT = """
 # HoloAgent robot_bridge (optional)
 Use these skills only when a HorizonRobotics HoloAgent ``robot_bridge`` is
@@ -43,8 +48,9 @@ running (default ``http://127.0.0.1:8000``) and the user wants that stack's
 floor/room/object scene-graph navigation.
 
 These calls publish to the bridge and return when HTTP is accepted. They do
-not wait for the robot to reach a goal. Do not start another movement skill
-until the user confirms arrival or you call `holoagent_stop_nav`.
+not wait for the robot to reach a goal. They hold the `movement` capability
+until `holoagent_stop_nav` (or `holoagent_navigation_signal` with name
+`stop`). Do not start another movement skill until then.
 
 - `holoagent_semantic_nav` — FSR-VLN / HMSG semantic goal via `/api/semantic_nav`
 - `holoagent_relative_move` — short relative pose via `/api/relative_nav`
@@ -79,6 +85,7 @@ class HoloAgentNavSkillContainer(Module):
 
     @rpc
     def stop(self) -> None:
+        self._release_nav_hold()
         self._client = None
         super().stop()
 
@@ -86,6 +93,12 @@ class HoloAgentNavSkillContainer(Module):
         if self._client is None:
             self._client = HoloAgentBridgeClient.from_global_config(self.config.g)
         return self._client
+
+    def _begin_nav_hold(self) -> None:
+        self.start_tool(_HOLOAGENT_NAV_TOOL)
+
+    def _release_nav_hold(self) -> None:
+        self.stop_tool(_HOLOAGENT_NAV_TOOL)
 
     @skill
     def holoagent_health(self) -> str:
@@ -105,7 +118,7 @@ class HoloAgentNavSkillContainer(Module):
             return f"HoloAgent robot_bridge not reachable: {exc}"
         return _format_bridge_result("health", result)
 
-    @skill
+    @skill(uses=[CAP_MOVEMENT], lifecycle="background")
     def holoagent_semantic_nav(
         self,
         object_name: str,
@@ -117,30 +130,36 @@ class HoloAgentNavSkillContainer(Module):
         Sends POST /api/semantic_nav with {"cmd": "floor,room,object"} as
         defined by HoloAgent robot_bridge and sem-nav-skill. The bridge
         publishes to ROS and returns immediately; this skill does not wait
-        for arrival. Do not start another movement skill until arrival is
-        confirmed or holoagent_stop_nav is called. For native DimOS spatial
-        memory, use navigate_with_text instead.
+        for arrival. Holds CAP_MOVEMENT until holoagent_stop_nav. For native
+        DimOS spatial memory, use navigate_with_text instead.
 
         Args:
             object_name: Target object, e.g. "coffee machine" or "charging station".
             floor: Floor label such as "1F", or "unknown" if not specified.
             room: Room name such as "pantry" or "meeting room", or "unknown".
         """
+        self._begin_nav_hold()
+        keep_hold = False
         try:
-            HoloAgentBridgeContract.format_semantic_cmd(floor, room, object_name)
-        except HoloAgentBridgeError as exc:
-            return f"HoloAgent semantic_nav refused: {exc}"
-        try:
-            result = self._bridge().semantic_nav(floor, room, object_name)
-        except HoloAgentBridgeError as exc:
-            logger.warning("HoloAgent semantic_nav failed: %s", exc)
-            return f"HoloAgent semantic_nav failed: {exc}"
-        return _format_bridge_result(
-            f"semantic_nav({floor},{room},{object_name})",
-            result,
-        )
+            try:
+                HoloAgentBridgeContract.format_semantic_cmd(floor, room, object_name)
+            except HoloAgentBridgeError as exc:
+                return f"HoloAgent semantic_nav refused: {exc}"
+            try:
+                result = self._bridge().semantic_nav(floor, room, object_name)
+            except HoloAgentBridgeError as exc:
+                logger.warning("HoloAgent semantic_nav failed: %s", exc)
+                return f"HoloAgent semantic_nav failed: {exc}"
+            keep_hold = True
+            return _format_bridge_result(
+                f"semantic_nav({floor},{room},{object_name})",
+                result,
+            )
+        finally:
+            if not keep_hold:
+                self._release_nav_hold()
 
-    @skill
+    @skill(uses=[CAP_MOVEMENT], lifecycle="background")
     def holoagent_relative_move(
         self,
         forward: float = 0.0,
@@ -151,9 +170,9 @@ class HoloAgentNavSkillContainer(Module):
 
         Sends POST /api/relative_nav with {"cmd": "forward,left,degrees"} as
         defined by HoloAgent rel-move-skill. The bridge publishes and
-        returns immediately; this skill does not wait for arrival. Use for
-        small adjustments on a running HoloAgent nav stack. For native
-        DimOS velocity control, use move instead.
+        returns immediately; this skill does not wait for arrival. Holds
+        CAP_MOVEMENT until holoagent_stop_nav. For native DimOS velocity
+        control, use move instead.
 
         Args:
             forward: Forward displacement in meters. Negative is backward.
@@ -164,50 +183,68 @@ class HoloAgentNavSkillContainer(Module):
                 Magnitude must be finite and at most
                 ``HoloAgentBridgeContract.MAX_RELATIVE_ROTATION_DEG`` (180).
         """
+        self._begin_nav_hold()
+        keep_hold = False
         try:
-            HoloAgentBridgeContract.check_relative_nav(forward, left, rotation)
-        except HoloAgentBridgeError as exc:
-            return f"HoloAgent relative_move refused: {exc}"
-        try:
-            result = self._bridge().relative_nav(forward, left, rotation)
-        except HoloAgentBridgeError as exc:
-            logger.warning("HoloAgent relative_nav failed: %s", exc)
-            return f"HoloAgent relative_move failed: {exc}"
-        return _format_bridge_result(
-            f"relative_nav({forward},{left},{rotation})",
-            result,
-        )
+            try:
+                HoloAgentBridgeContract.check_relative_nav(forward, left, rotation)
+            except HoloAgentBridgeError as exc:
+                return f"HoloAgent relative_move refused: {exc}"
+            try:
+                result = self._bridge().relative_nav(forward, left, rotation)
+            except HoloAgentBridgeError as exc:
+                logger.warning("HoloAgent relative_nav failed: %s", exc)
+                return f"HoloAgent relative_move failed: {exc}"
+            keep_hold = True
+            return _format_bridge_result(
+                f"relative_nav({forward},{left},{rotation})",
+                result,
+            )
+        finally:
+            if not keep_hold:
+                self._release_nav_hold()
 
     @skill
     def holoagent_stop_nav(self) -> str:
         """Stop the current HoloAgent navigation goal.
 
-        Sends POST /api/navigation/stop (robot_bridge → chat_signal_pub "stop").
-        Does not stop native DimOS navigation; use stop_all_motion for that.
+        Sends POST /api/navigation/stop (robot_bridge → chat_signal_pub "stop")
+        and releases the CAP_MOVEMENT hold. Does not stop native DimOS
+        navigation; use stop_all_motion for that.
         """
         try:
             result = self._bridge().stop_navigation()
         except HoloAgentBridgeError as exc:
             logger.warning("HoloAgent stop_nav failed: %s", exc)
             return f"HoloAgent stop_nav failed: {exc}"
+        self._release_nav_hold()
         return _format_bridge_result("stop_nav", result)
 
-    @skill
+    @skill(uses=[CAP_MOVEMENT], lifecycle="background")
     def holoagent_navigation_signal(self, name: str) -> str:
         """Trigger a named HoloAgent navigation signal.
 
         Sends POST /api/navigation/{name} (robot_bridge → chat_signal_pub).
         Examples from HoloAgent robot-service skill: one_point_1, stop.
+        Name ``stop`` releases the CAP_MOVEMENT hold; other names hold it
+        until holoagent_stop_nav.
 
         Args:
             name: Signal name such as "one_point_1" or "stop".
         """
+        self._begin_nav_hold()
+        keep_hold = False
         try:
-            result = self._bridge().navigation_signal(name)
-        except HoloAgentBridgeError as exc:
-            logger.warning("HoloAgent navigation signal failed: %s", exc)
-            return f"HoloAgent navigation signal failed: {exc}"
-        return _format_bridge_result(f"navigation_signal({name})", result)
+            try:
+                result = self._bridge().navigation_signal(name)
+            except HoloAgentBridgeError as exc:
+                logger.warning("HoloAgent navigation signal failed: %s", exc)
+                return f"HoloAgent navigation signal failed: {exc}"
+            keep_hold = name.strip() != "stop"
+            return _format_bridge_result(f"navigation_signal({name})", result)
+        finally:
+            if not keep_hold:
+                self._release_nav_hold()
 
 
 class HoloAgentSkillContainer(HoloAgentNavSkillContainer):

@@ -85,8 +85,10 @@ dimos mcp call holoagent_semantic_nav --arg object_name="coffee machine" --arg f
 handles (that HTTP path publishes `chat_signal_pub`).
 
 HoloAgent nav skills publish to ROS and return when the HTTP call is
-accepted. They do **not** wait for `waypoint_reached`. Do not start another
-movement skill until arrival is confirmed or `holoagent_stop_nav` runs.
+accepted. They do **not** wait for `waypoint_reached`. They hold
+`CAP_MOVEMENT` until `holoagent_stop_nav` (or `holoagent_navigation_signal`
+with name `stop`), so a later native or HoloAgent movement skill is refused
+until that stop.
 
 Relative moves are short adjustments: finite values, at least one non-zero
 axis, `|forward|`/`|left|` ≤ 3.0 m, `|rotation|` ≤ 180°. Longer goals should
