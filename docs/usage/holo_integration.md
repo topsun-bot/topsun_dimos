@@ -18,7 +18,7 @@ Agent-oriented CLI notes: [AGENTS.md](/AGENTS.md). Cheat-sheet: `uv run python s
 
 Print the same table from the helper: `uv run python scripts/holo_bridge.py taxonomy`.
 
-**Out of scope** (do not integrate): Sparse4D, GUMP (AV planner), CARLA / nuplan / leaderboard, OE-Skills chip toolchain, x2 bootprint demos. SocialRobot is legacy-only — no clone helper.
+**Out of scope** (do not integrate): Sparse4D, GUMP (AV planner), CARLA / nuplan / leaderboard, OE-Skills chip toolchain, x2 bootprint demos. SocialRobot is legacy-only (no clone helper).
 
 ## How the stacks relate
 
@@ -59,7 +59,7 @@ Language goal
 - `OPENAI_API_KEY` for the default GPT-4o agent
 - `--replay` for recorded Go2 data (first run may pull LFS)
 - `--simulation` for G1 MuJoCo
-- `--robot-ip 192.168.123.161` on real hardware (placeholder — use your robot)
+- `--robot-ip 192.168.123.161` on real hardware (placeholder, use your robot)
 
 ```sh skip
 uv venv --python "3.12"
@@ -138,7 +138,7 @@ These commands start **Horizon** stacks, not `dimos run`:
 | HoloMotion | [Real-world deployment](https://github.com/yixinzhangagent/HoloMotion/blob/master/docs/realworld_deployment.md) | On G1 Orin Docker: `holomotion check` (sends no robot action) |
 | GeoFlowSlam | [README](https://github.com/zhangyinxina-ui/GeoFlowSlam/blob/master/README.md) | `./build.sh` then `python script/run_orbslam/run_rgbd_vi_g1.py` |
 | BIP3D | [quick start](https://github.com/zhangyinxina-ui/BIP3D/blob/main/docs/quick_start.md) | Follow that file; prefer RoboOrchardLab `projects/bip3d_grounding` for new work |
-| RoboOrchardLab | [README](https://github.com/zhangyinxina-ui/RoboOrchardLab/blob/master/README.md) | Training lab — not a robot start |
+| RoboOrchardLab | [README](https://github.com/zhangyinxina-ui/RoboOrchardLab/blob/master/README.md) | Training lab (not a robot start) |
 | EmbodiedGen | [README](https://github.com/zhangyinxina-ui/EmbodiedGen/blob/master/README.md) | `./install.sh` then follow that README |
 | RoboTransfer | [README](https://github.com/zhangyinxina-ui/RoboTransfer/blob/main/README.md) | `uv run main.py` in that clone |
 
@@ -153,9 +153,9 @@ Do not mix Horizon ROS 2 / Docker / C++ environments into the DimOS `.venv`.
 
 ## Related
 
-- [Agents](/docs/capabilities/agents/readme.md)
+- [Agents](/docs/capabilities/agents/index.md)
 - [Go2 getting started](/docs/platforms/quadruped/go2/index.md)
 - [G1](/docs/platforms/humanoid/g1/index.md)
 - [CLI](/docs/usage/cli.md)
-- [Native Go2 nav](/docs/capabilities/navigation/native/index.md)
+- [Native Go2 nav](/docs/capabilities/navigation/index.md)
 - [examples/nav-go2](/examples/nav-go2/README.md)
