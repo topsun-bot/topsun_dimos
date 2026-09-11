@@ -35,6 +35,7 @@ from dimos.core.stream import In
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.perception.experimental.image_embedding import ImageEmbeddingProvider
+from dimos.perception.experimental.room_image_fifo import RoomImageFifo
 from dimos.perception.experimental.spatial_vector_db import SpatialVectorDB
 from dimos.perception.experimental.visual_memory import VisualMemory
 from dimos.types.robot_location import RobotLocation
@@ -222,6 +223,24 @@ class SpatialMemory(Module):
             self.room_collection = chromadb.Client().get_or_create_collection(
                 name=room_collection_name, metadata={"hnsw:space": "cosine"}
             )
+        self._rehydrate_room_image_fifo()
+
+    def _rehydrate_room_image_fifo(self) -> None:
+        """Rebuild FIFO from persisted room IDs and enforce ``max_room_images``."""
+
+        def _delete(evict_id: str) -> None:
+            try:
+                self.room_collection.delete(ids=[evict_id])
+            except Exception:
+                pass
+            if self._visual_memory is not None:
+                self._visual_memory.images.pop(evict_id, None)
+
+        self._room_image_ids = RoomImageFifo.evict_overflow(
+            RoomImageFifo.ids_from_collection(self.room_collection),
+            self.max_room_images,
+            delete=_delete,
+        )
 
     def _chroma_error_recoverable(self, exc: BaseException) -> bool:
         msg = str(exc).lower()

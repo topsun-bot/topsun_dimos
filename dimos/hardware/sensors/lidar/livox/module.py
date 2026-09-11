@@ -89,6 +89,7 @@ class Mid360Config(NativeModuleConfig):
 
 
 class Mid360(NativeModule, perception.Lidar, perception.IMU):
+    _lcm_only_native = True
     config: Mid360Config
 
     lidar: Out[PointCloud2]

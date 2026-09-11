@@ -336,6 +336,33 @@ def test_lcm_wired_native_exports_lcm_when_global_is_zenoh(monkeypatch) -> None:
         module.stop()
 
 
+class _LcmOnlyStub(NativeModule):
+    _lcm_only_native = True
+    config: StubNativeConfig
+    cmd_vel: In[Twist]
+
+
+def test_lcm_only_native_exports_lcm_when_unwired_and_global_is_zenoh(monkeypatch) -> None:
+    monkeypatch.setattr(native_module_mod.global_config, "transport", "zenoh")
+    module = _LcmOnlyStub(executable=_ECHO)
+    try:
+        assert NativeProcessTransport.env_name(module) == "lcm"
+        assert module._spawn_env()["DIMOS_TRANSPORT"] == "lcm"
+    finally:
+        module.stop()
+
+
+def test_lcm_only_native_pins_nav_stack_streams_to_lcm() -> None:
+    from dimos.core.coordination.module_coordinator import StreamTransportPins
+    from dimos.navigation.nav_stack.modules.pgo.pgo import PGO
+
+    pins = StreamTransportPins.collect(autoconnect(PGO.blueprint()))
+    assert pins["registered_scan"] is LCMTransport
+    assert pins["odometry"] is LCMTransport
+    assert pins["corrected_odometry"] is LCMTransport
+    assert pins["global_map"] is LCMTransport
+
+
 def test_the_launch_line_carries_the_session(monkeypatch) -> None:
     session = _launch(monkeypatch, "zenoh")["session"]
     assert session["mode"] == "peer"

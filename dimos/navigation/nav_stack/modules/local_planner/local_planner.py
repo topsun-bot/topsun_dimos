@@ -160,6 +160,7 @@ class LocalPlannerConfig(NativeModuleConfig):
 class LocalPlanner(NativeModule):
     """Local path planner with obstacle avoidance."""
 
+    _lcm_only_native = True
     config: LocalPlannerConfig
 
     @rpc

@@ -93,6 +93,7 @@ class VirtualMid360Config(NativeModuleConfig):
 
 
 class VirtualMid360(NativeModule):
+    _lcm_only_native = True
     config: VirtualMid360Config
 
     def _sudo(self, args: list[str], *, check: bool = True) -> None:

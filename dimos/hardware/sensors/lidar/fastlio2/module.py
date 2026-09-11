@@ -126,6 +126,7 @@ class FastLio2Config(NativeModuleConfig):
 
 
 class FastLio2(NativeModule, perception.Lidar, perception.Odometry):
+    _lcm_only_native = True
     config: FastLio2Config
 
     lidar: Out[PointCloud2]

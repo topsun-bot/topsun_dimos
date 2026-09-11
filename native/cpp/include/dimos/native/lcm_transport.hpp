@@ -45,7 +45,11 @@ public:
     LcmTransport& operator=(const LcmTransport&) = delete;
 
     void publish(const std::string& channel, std::vector<uint8_t> data) override {
-        int rc = lcm_.publish(channel, data.data(), static_cast<unsigned int>(data.size()));
+        int rc = 0;
+        {
+            std::lock_guard<std::recursive_mutex> lock(lcm_mu_);
+            rc = lcm_.publish(channel, data.data(), static_cast<unsigned int>(data.size()));
+        }
         if (rc != 0) {
             DIMOS_ERROR_THROTTLED(log::from_secs(1), "lcm publish failed",
                                   log::Field("channel", channel),
@@ -69,6 +73,7 @@ public:
         }
         // One LCM subscription per channel. Extra callbacks fan out in on_lcm_message.
         if (first_for_channel) {
+            std::lock_guard<std::recursive_mutex> lock(lcm_mu_);
             lcm_.subscribe(channel, &LcmTransport::on_lcm_message, this);
         }
         ensure_recv_thread();
@@ -96,7 +101,11 @@ private:
         if (running_.compare_exchange_strong(expected, true)) {
             recv_thread_ = std::thread([this] {
                 while (running_.load(std::memory_order_relaxed)) {
-                    int rc = lcm_.handleTimeout(kHandleTimeoutMs);
+                    int rc = 0;
+                    {
+                        std::lock_guard<std::recursive_mutex> lock(lcm_mu_);
+                        rc = lcm_.handleTimeout(kHandleTimeoutMs);
+                    }
                     if (rc < 0) {
                         DIMOS_ERROR_THROTTLED(log::from_secs(1), "lcm handleTimeout error",
                                               log::Field("rc", static_cast<std::int64_t>(rc)));
@@ -109,6 +118,7 @@ private:
     static constexpr int kHandleTimeoutMs = 100;
 
     lcm::LCM lcm_;
+    std::recursive_mutex lcm_mu_;
     std::mutex routes_mu_;
     std::unordered_map<std::string, std::shared_ptr<const std::vector<Dispatch>>> routes_;
     std::atomic<bool> running_{false};

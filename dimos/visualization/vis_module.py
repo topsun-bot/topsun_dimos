@@ -33,6 +33,11 @@ def vis_module(
     the ``WebsocketVisModule`` and ``RerunWebSocketServer`` so that the web
     dashboard and remote viewer connections work out of the box.
 
+    Command Center was removed; ``WebsocketVisModule`` no longer 503s on
+    ``/command-center``. Authored ``cockpit()`` (or a ``*-cockpit`` blueprint)
+    is the live UI — it is not composed here so stacks that already add
+    ``cockpit()`` do not start a second relay on the same port.
+
     Example usage::
 
         from dimos.core.global_config import global_config

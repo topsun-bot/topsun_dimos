@@ -74,6 +74,7 @@ class PathFollowerConfig(NativeModuleConfig):
 class PathFollower(NativeModule):
     """Pure pursuit path follower with PID yaw control."""
 
+    _lcm_only_native = True
     config: PathFollowerConfig
 
     @rpc

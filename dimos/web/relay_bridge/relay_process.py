@@ -257,14 +257,26 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
         proc.wait()
 
 
+class DistRotation:
+    """Atomic ``dist`` publish. A leftover ``.dist-old`` from an interrupted
+    swap must not make the next ``rename(dist, .dist-old)`` raise
+    ``FileExistsError``.
+    """
+
+    @staticmethod
+    def swap(package: Path, new_dist: Path) -> None:
+        dist = package / "dist"
+        old = package / ".dist-old"
+        shutil.rmtree(old, ignore_errors=True)
+        if dist.exists():
+            os.rename(dist, old)
+        os.rename(new_dist, dist)
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def _swap_dist(package: Path, new_dist: Path) -> None:
     """Publish atomically: renames, so readers never see a half-written dist."""
-    dist = package / "dist"
-    old = package / ".dist-old"
-    if dist.exists():
-        os.rename(dist, old)
-    os.rename(new_dist, dist)
-    shutil.rmtree(old, ignore_errors=True)
+    DistRotation.swap(package, new_dist)
 
 
 @dataclass

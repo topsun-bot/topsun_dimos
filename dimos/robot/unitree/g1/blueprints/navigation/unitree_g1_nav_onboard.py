@@ -42,6 +42,9 @@ unitree_g1_nav_onboard = (
         create_nav_stack(
             planner="simple",
             vehicle_height=G1.height_clearance,
+            # FastLio2 publishes in sensor_frame_id (mid360_link). PGO's
+            # default unregister_input=True would invert that cloud again.
+            pgo={"unregister_input": False},
             # Slower autonomy speed — more time for local obstacle avoidance.
             max_speed=0.4,
             far_planner={
@@ -95,5 +98,5 @@ unitree_g1_nav_onboard = (
             (MovementManager, "way_point", "_mgr_way_point_unused"),
         ]
     )
-    .global_config(n_workers=12, robot_model="unitree_g1")
+    .global_config(n_workers=12, robot_model="unitree_g1", transport="lcm")
 )

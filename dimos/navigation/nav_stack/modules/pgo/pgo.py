@@ -72,6 +72,7 @@ class PGOConfig(NativeModuleConfig):
 class PGO(NativeModule):
     """Pose graph optimization with loop closure using GTSAM iSAM2 + PCL ICP."""
 
+    _lcm_only_native = True
     config: PGOConfig
 
     registered_scan: In[PointCloud2]

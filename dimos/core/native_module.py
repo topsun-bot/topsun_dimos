@@ -187,6 +187,20 @@ class NativeModuleConfig(ModuleConfig):
 _NativeConfig = TypeVar("_NativeConfig", bound=NativeModuleConfig, default=NativeModuleConfig)
 
 
+class LcmOnlyNative:
+    """C++ native SDK implements LCM only (``require_supported_transport``).
+
+    Mark wrappers with ``_lcm_only_native = True``. The coordinator pins
+    every In/Out to ``LCMTransport``, and the child sees ``DIMOS_TRANSPORT=lcm``
+    even when ``GlobalConfig.transport`` is zenoh and streams are still unwired.
+    """
+
+    @staticmethod
+    def declared_on(module: type | object) -> bool:
+        cls = module if isinstance(module, type) else type(module)
+        return bool(getattr(cls, "_lcm_only_native", False))
+
+
 class NativeProcessTransport:
     """Choose ``DIMOS_TRANSPORT`` for a native child without rewriting LCM pins.
 
@@ -217,6 +231,8 @@ class NativeProcessTransport:
         extra = module.config.extra_env.get("DIMOS_TRANSPORT")
         if extra:
             return extra
+        if LcmOnlyNative.declared_on(module):
+            return "lcm"
         pinned = module.config.session
         if pinned is not None:
             return pinned.transport

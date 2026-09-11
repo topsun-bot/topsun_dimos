@@ -35,7 +35,7 @@ from dimos.web.relay_bridge.locate import (
     relay_run_cmd,
 )
 from dimos.web.relay_bridge.protocol import PROTOCOL_VERSION
-from dimos.web.relay_bridge.relay_process import RelayProcess, ensure_web_dist
+from dimos.web.relay_bridge.relay_process import DistRotation, RelayProcess, ensure_web_dist
 
 
 def _fetch(url: str) -> tuple[int, bytes]:
@@ -206,6 +206,25 @@ def fake_web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _dists(web_dir: Path) -> tuple[Path | None, Path | None]:
     return find_sdk_dist(web_dir), find_cockpit_dist(web_dir)
+
+
+def test_dist_rotation_removes_stale_backup_before_rename(tmp_path: Path) -> None:
+    package = tmp_path / "cockpit"
+    dist = package / "dist"
+    leftover = package / ".dist-old"
+    incoming = package / "dist-new"
+    dist.mkdir(parents=True)
+    leftover.mkdir()
+    incoming.mkdir()
+    (dist / "index.html").write_text("previous")
+    (leftover / "stale.txt").write_text("interrupted prior swap")
+    (incoming / "index.html").write_text("fresh")
+
+    DistRotation.swap(package, incoming)
+
+    assert (package / "dist" / "index.html").read_text() == "fresh"
+    assert not leftover.exists()
+    assert not incoming.exists()
 
 
 def test_ensure_web_dist_builds_both_when_missing(

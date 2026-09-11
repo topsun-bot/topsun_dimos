@@ -33,6 +33,20 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 
+class VlmJsonList:
+    """``query_detections`` / ``query_points`` iterate a JSON list of tuples.
+
+    ``query_json`` may return a dict; iterating that yields keys and silently
+    produces an empty ``ImageDetections2D``. Keep the list contract.
+    """
+
+    @staticmethod
+    def require(value: dict | list, *, what: str) -> list[Any]:  # type: ignore[type-arg]
+        if isinstance(value, list):
+            return value
+        raise TypeError(f"{what} expected a JSON list, got {type(value).__name__}")
+
+
 class Captioner(ABC):
     """Interface for models that can generate image captions."""
 
@@ -291,7 +305,9 @@ class VlModel(Captioner, Resource, Configurable):
         scaled_image, scale = self._prepare_image(image)
 
         try:
-            detection_tuples = self.query_json(scaled_image, full_query)
+            detection_tuples = VlmJsonList.require(
+                self.query_json(scaled_image, full_query), what="query_detections"
+            )
         except Exception:
             return image_detections
 
@@ -350,7 +366,9 @@ class VlModel(Captioner, Resource, Configurable):
         scaled_image, scale = self._prepare_image(image)
 
         try:
-            point_tuples = self.query_json(scaled_image, full_query)
+            point_tuples = VlmJsonList.require(
+                self.query_json(scaled_image, full_query), what="query_points"
+            )
         except Exception:
             return image_detections
 

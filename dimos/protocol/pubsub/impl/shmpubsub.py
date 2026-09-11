@@ -17,13 +17,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import os
 import struct
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 import uuid
 
 import numpy as np
@@ -35,9 +36,6 @@ from dimos.protocol.pubsub.shm.ipc_factory import CpuShmChannel, FrameChannel
 from dimos.protocol.pubsub.spec import PubSub
 from dimos.utils.logging_config import setup_logger
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
 logger = setup_logger()
 
 
@@ -46,6 +44,49 @@ class SharedMemoryConfig:
     prefer: str = "auto"  # "auto" | "cpu"  (DIMOS_IPC_BACKEND overrides), TODO: "cuda"
     default_capacity: int = 3686400  # payload bytes (excludes 4-byte header)
     close_channels_on_stop: bool = True
+
+
+class ShmFanout:
+    """Per-topic fanout-thread lifecycle.
+
+    ``PubSub.unsubscribe`` may run from the fanout callback (one-shot
+    receivers). Joining that thread from itself raises ``RuntimeError``;
+    a generation bump lets a later ``subscribe`` start a new loop while
+    the old one exits after the callback returns.
+    """
+
+    @staticmethod
+    def start(
+        loop: Callable[..., None], topic: str, st: SharedMemoryPubSubBase._TopicState
+    ) -> None:
+        if st.thread is not None and st.thread.is_alive():
+            return
+        st.stop.clear()
+        generation = st.fanout_generation
+        st.thread = threading.Thread(target=loop, args=(topic, st, generation), daemon=True)
+        st.thread.start()
+
+    @staticmethod
+    def running(st: SharedMemoryPubSubBase._TopicState, generation: int) -> bool:
+        return (not st.stop.is_set()) and st.fanout_generation == generation
+
+    @staticmethod
+    def shutdown(st: SharedMemoryPubSubBase._TopicState) -> None:
+        """Stop the current fanout loop. Safe from the fanout thread itself."""
+        thread = st.thread
+        if thread is None:
+            return
+        st.stop.set()
+        st.fanout_generation += 1
+        st.thread = None
+        if thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+
+    @staticmethod
+    def stop_if_idle(st: SharedMemoryPubSubBase._TopicState) -> None:
+        if st.subs:
+            return
+        ShmFanout.shutdown(st)
 
 
 class SharedMemoryPubSubBase(PubSub[str, Any]):
@@ -79,6 +120,7 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             "channel",
             "cp",
             "dtype",
+            "fanout_generation",
             "last_local_payload",
             "last_seq",
             "publish_buffer",
@@ -98,6 +140,7 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             self.subs: list[Callable[[bytes, str], None]] = []
             self.stop = threading.Event()
             self.thread: threading.Thread | None = None
+            self.fanout_generation = 0
             self.last_seq = 0  # start at 0 to avoid b"" on first poll
             # TODO: implement an initializer variable for is_cuda once CUDA IPC is in
             self.cp = cp_mod
@@ -138,10 +181,7 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             for _topic, st in list(self._topics.items()):
                 # stop fanout
                 try:
-                    if st.thread:
-                        st.stop.set()
-                        st.thread.join(timeout=0.5)
-                        st.thread = None
+                    ShmFanout.shutdown(st)
                 except Exception:
                     pass
                 # close/unlink channels if configured
@@ -202,20 +242,14 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
         """Subscribe a callback(message: bytes, topic). Returns unsubscribe."""
         st = self._ensure_topic(topic)
         st.subs.append(callback)
-        if st.thread is None:
-            st.thread = threading.Thread(target=self._fanout_loop, args=(topic, st), daemon=True)
-            st.thread.start()
+        ShmFanout.start(self._fanout_loop, topic, st)
 
         def _unsub() -> None:
             try:
                 st.subs.remove(callback)
             except ValueError:
                 pass
-            if not st.subs and st.thread:
-                st.stop.set()
-                st.thread.join(timeout=0.5)
-                st.thread = None
-                st.stop.clear()
+            ShmFanout.stop_if_idle(st)
 
         return _unsub
 
@@ -271,8 +305,8 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             self._topics[topic] = st
             return st
 
-    def _fanout_loop(self, topic: str, st: _TopicState) -> None:
-        while not st.stop.is_set():
+    def _fanout_loop(self, topic: str, st: _TopicState, generation: int = 0) -> None:
+        while ShmFanout.running(st, generation):
             seq, _ts_ns, view = st.channel.read(last_seq=st.last_seq, require_new=True)
             if view is None:
                 time.sleep(0.001)

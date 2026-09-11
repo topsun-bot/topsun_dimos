@@ -270,7 +270,11 @@ export class Registry {
       }
     }
     console.log(`[relay] robot ${id} disconnected`);
-    // Viewers keep watched/subs: a returning robot reattaches seamlessly.
+    // Drop queued/in-flight frames so a same-id reconnect cannot flush
+    // stale policy state. Viewers keep watched/subs: #syncSubs rebuilds.
+    for (const viewer of this.#viewers) {
+      if (viewer.watched === id) disposePolicies(viewer);
+    }
     this.#pushRobots();
   }
 

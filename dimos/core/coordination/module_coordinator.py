@@ -40,6 +40,7 @@ from dimos.core.module import ModuleBase, ModuleSpec, is_module_type
 from dimos.core.resource import Resource
 from dimos.core.stream import Transport
 from dimos.core.transport import (
+    LCMTransport,
     PubSubTransport,
     pLCMTransport,
     pZenohTransport,
@@ -728,7 +729,10 @@ class StreamTransportPins:
     def collect(blueprint: Blueprint) -> dict[str, type[PubSubTransport[Any]]]:
         collected: dict[str, type[PubSubTransport[Any]]] = {}
         for atom in blueprint.active_blueprints:
-            pins = StreamTransportPins.declared_on(atom.module)
+            pins = dict(StreamTransportPins.declared_on(atom.module))
+            if getattr(atom.module, "_lcm_only_native", False):
+                for stream in atom.streams:
+                    pins.setdefault(stream.name, LCMTransport)
             if not pins:
                 continue
             for stream in atom.streams:

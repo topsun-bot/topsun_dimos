@@ -87,6 +87,7 @@ class FarPlannerConfig(NativeModuleConfig):
 class FarPlanner(NativeModule):
     """Note: 2D planner, supposed to be really good at large maps"""
 
+    _lcm_only_native = True
     config: FarPlannerConfig
 
     @rpc

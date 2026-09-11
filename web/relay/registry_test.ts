@@ -370,6 +370,31 @@ Deno.test("frames route only to watching+subscribed viewers", async () => {
   assertEquals(noSub.sink.sent.length, 0);
 });
 
+Deno.test("robot close disposes watcher policies so reconnect cannot flush stale frames", async () => {
+  const reg = new Registry();
+  const first = new FakeRobot("r1", SPECS);
+  reg.registerRobot(first);
+  const watcher = attach(reg, "r1", ["odom"]);
+  watcher.sink.auto = false;
+  reg.onRobotFrame(first, frame("odom", 1));
+  reg.onRobotFrame(first, frame("odom", 2));
+  await tick(); // stream opened; frame 1 in flight, frame 2 queued
+  reg.robotClosed(first);
+  assertEquals(watcher.policies.size, 0);
+  assertEquals(watcher.subs.has("odom"), true);
+  assertEquals(watcher.watched, "r1");
+  watcher.sink.release();
+  await tick();
+  const sentAfterClose = watcher.sink.sent.length;
+
+  const second = new FakeRobot("r1", SPECS);
+  assertEquals(reg.registerRobot(second), true);
+  watcher.sink.auto = true;
+  reg.onRobotFrame(second, frame("odom", 3));
+  await tick();
+  assertEquals(watcher.sink.sent.length, sentAfterClose + 1);
+});
+
 Deno.test("watch switch disposes the old robot's policies", async () => {
   const reg = new Registry();
   const r1 = new FakeRobot("r1", SPECS);

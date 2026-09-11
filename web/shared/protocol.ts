@@ -366,7 +366,9 @@ export function frameHeaderFromUnknown(value: unknown): FrameHeader | null {
     // framesDropped at the relay).
     value.ch.length <= MAX_MANIFEST_ID_LEN &&
     typeof value.seq === "number" &&
+    Number.isFinite(value.seq) &&
     typeof value.ts === "number" &&
+    Number.isFinite(value.ts) &&
     (value.delivery === "latest" || value.delivery === "reliable") &&
     (value.meta === undefined || isRecord(value.meta))
   ) {

@@ -340,6 +340,11 @@ Deno.test("frameHeaderFromUnknown validates the header shape", () => {
   const atBound = { ...ok, ch: "c".repeat(64) };
   assertEquals(frameHeaderFromUnknown(atBound), atBound as FrameHeader);
   assertEquals(frameHeaderFromUnknown({ ...ok, ch: "c".repeat(65) }), null);
+  // JSON.parse("1e400") is Infinity; the Python mirror rejects it too.
+  assertEquals(frameHeaderFromUnknown({ ...ok, seq: Number.POSITIVE_INFINITY }), null);
+  assertEquals(frameHeaderFromUnknown({ ...ok, ts: Number.POSITIVE_INFINITY }), null);
+  assertEquals(frameHeaderFromUnknown({ ...ok, seq: Number.NaN }), null);
+  assertEquals(frameHeaderFromUnknown({ ...ok, ts: Number.NaN }), null);
 });
 
 Deno.test("decodeDataFrame throws on an invalid header", () => {

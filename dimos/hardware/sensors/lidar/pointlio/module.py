@@ -162,6 +162,7 @@ class PointLioConfig(NativeModuleConfig):
 
 
 class PointLio(NativeModule, perception.Lidar, perception.Odometry):
+    _lcm_only_native = True
     config: PointLioConfig
 
     lidar: Out[PointCloud2]
