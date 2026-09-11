@@ -50,7 +50,7 @@
 
 ### 3.1 蓝图 `unitree_g1_greeter_onboard.py`
 
-```python skip
+```python
 """G1 Orin 机载导览迎宾蓝图。
 
 在 unitree_g1_nav_onboard(FastLIO2 + nav_stack + MovementManager + G1HighLevelDdsSdk)
@@ -101,7 +101,7 @@ __all__ = ["unitree_g1_greeter_onboard"]
 
 ### 3.2 地标表 `greeter_landmark_store.py`（纯逻辑，可单测）
 
-```python skip
+```python
 """导览地标的持久化存储:名称 + 坐标 + 到站讲解词(intro_script)。纯逻辑 + JSON。"""
 
 from __future__ import annotations
@@ -226,7 +226,7 @@ class GreeterTourSkillContainer(Module):
 
 ### 3.4 Spec `greeter_tour_skill_spec.py`
 
-```python skip
+```python
 from typing import Protocol
 from dimos.spec.utils import Spec
 
