@@ -374,7 +374,9 @@ class GreeterIntentRouter(Module):
             return True
         elapsed = time.monotonic() - self._last_shortcut_time
         if self._last_shortcut_norm and elapsed < self.config.shortcut_cooldown_s:
-            if norm == self._last_shortcut_norm or asr_texts_similar(cleaned, self._last_shortcut_norm):
+            if norm == self._last_shortcut_norm or asr_texts_similar(
+                cleaned, self._last_shortcut_norm
+            ):
                 logger.info("GreeterIntentRouter 冷却中,忽略重复: %s", cleaned[:40])
                 return True
         return False
@@ -423,9 +425,7 @@ class GreeterIntentRouter(Module):
                 finally:
                     lock.release()
 
-            threading.Thread(
-                target=_run_faq, name="greeter-shortcut-faq", daemon=True
-            ).start()
+            threading.Thread(target=_run_faq, name="greeter-shortcut-faq", daemon=True).start()
             return
 
         # 已接入导览带路时,问路/带路交给地标表 + 导航处理(命中→带路/讲解,未命中→固定
