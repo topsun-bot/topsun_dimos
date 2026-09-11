@@ -354,7 +354,7 @@ export function msgFromUnknown(value: unknown): Msg | null {
     const actual = value[name];
     if (kind === "number") {
       if (!isFiniteNumber(actual)) return null;
-    } else if (typeof actual !== kind) {
+    } else if (typeof actual !== "string") {
       return null;
     }
   }
