@@ -45,6 +45,10 @@ dimos [GLOBAL OPTIONS] COMMAND [ARGS]
 | `--mujoco-global-map-from-pointcloud` | TEXT | `None` | Generate map from point cloud |
 | `--mujoco-start-pos` | TEXT | `-1.0, 1.0` | MuJoCo robot start position |
 | `--mujoco-steps-per-frame` | INT | `7` | MuJoCo simulation steps per frame |
+| `--embodiedgen-root` | TEXT | `None` | Optional EmbodiedGen install / checkout (not required) |
+| `--embodiedgen-export-dir` | TEXT | `None` | Directory of EmbodiedGen URDF/MJCF/USD exports |
+| `--embodiedgen-catalog-dir` | TEXT | `None` | Override DimOS EmbodiedGen catalog path |
+| `--mujoco-embodiedgen-assets` | TEXT | `None` | `name@x,y,z` tokens to attach in MuJoCo rooms |
 
 ### Configuration Precedence
 
@@ -445,6 +449,28 @@ List deployed modules and their skills.
 ```bash
 dimos mcp modules
 ```
+
+---
+
+### `dimos embodiedgen`
+
+Optional catalog for [EmbodiedGen](/docs/usage/embodiedgen.md) exports. EmbodiedGen is **not** a DimOS dependency — generate assets in a separate install, then register or point `--embodiedgen-export-dir` at the output tree.
+
+```bash
+dimos embodiedgen status
+dimos embodiedgen list [--export-dir PATH]
+dimos embodiedgen register PATH [--name NAME]
+dimos embodiedgen scene 'eg_box@0.5,0,0.3' [--engine mujoco|genesis] [-o scene.xml]
+dimos embodiedgen run-cli --cli img3d-cli -- --help   # only if EmbodiedGen is installed
+```
+
+Load a registered asset into an existing Unitree MuJoCo blueprint:
+
+```bash
+dimos --simulation --mujoco-embodiedgen-assets='eg_box@0.5,0,0.3' run unitree-go2
+```
+
+---
 
 ## Standalone Tools
 

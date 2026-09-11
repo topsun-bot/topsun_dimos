@@ -64,6 +64,7 @@ from dimos.cli.commands.mcp import agent_send_cmd, mcp_app
 from dimos.cli.commands.rerun_bridge import rerun_bridge_cmd
 from dimos.cli.commands.topic import topic_app
 from dimos.cli.commands.tuis import agentspy, humancli, lcmspy, spy, top
+from dimos.cli.embodiedgen import app as embodiedgen_app
 from dimos.cli.hardware_cli import app as hardware_app
 from dimos.cli.landmarks import app as landmarks_app
 from dimos.cli.shell import shell
@@ -139,6 +140,7 @@ main.command(context_settings={"allow_extra_args": True, "ignore_unknown_options
 main.add_typer(topic_app, name="topic")
 main.add_typer(map_app, name="map")
 main.add_typer(landmarks_app, name="landmarks")
+main.add_typer(embodiedgen_app, name="embodiedgen")
 
 from dimos.navigation.nav_3d.evaluator.cli import app as nav_eval_app
 

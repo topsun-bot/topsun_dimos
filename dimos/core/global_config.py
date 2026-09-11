@@ -140,6 +140,33 @@ class GlobalConfig(BaseSettings):
     # Topsun: CN vs global Unitree cloud for WebRTC auth.
     unitree_cloud_region: Literal["cn", "global"] = "global"
     unitree_webrtc_connect_timeout_sec: float = 30.0
+    # Optional EmbodiedGen bridge — never a hard dependency. Env aliases match
+    # the upstream EMBODIEDGEN_* names so a separate install can drop in.
+    embodiedgen_root: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "embodiedgen_root",
+            "EMBODIEDGEN_ROOT",
+            "DIMOS_EMBODIEDGEN_ROOT",
+        ),
+    )
+    embodiedgen_export_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "embodiedgen_export_dir",
+            "EMBODIEDGEN_EXPORT_DIR",
+            "DIMOS_EMBODIEDGEN_EXPORT_DIR",
+        ),
+    )
+    embodiedgen_catalog_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "embodiedgen_catalog_dir",
+            "EMBODIEDGEN_CATALOG_DIR",
+            "DIMOS_EMBODIEDGEN_CATALOG_DIR",
+        ),
+    )
+    mujoco_embodiedgen_assets: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
