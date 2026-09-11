@@ -16,7 +16,6 @@
 
 import cv2
 import numpy as np
-
 import pytest
 
 from dimos.mapping.occupancy.operations import overlay_occupied, smooth_occupied
