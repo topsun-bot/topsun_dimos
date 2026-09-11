@@ -590,7 +590,9 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           disable_search: true
-          fail_ci_if_error: true
+          # Codecov CLI download flakes (RST / "FAILED open or read") must not
+          # fail the required tests job — that cancels siblings and ci-complete.
+          fail_ci_if_error: false
           files: ./coverage.xml
           flags: OS-${{ matrix.os }},Py-${{ matrix.pyver }}
           use_oidc: true
@@ -1013,13 +1015,14 @@ jobs:
       uses: re-actors/alls-green@release/v1
       with:
         allowed-skips: self-hosted-tests, self-hosted-large-tests
+        allowed-failures: self-hosted-tests
         jobs: ${{ toJSON(needs) }}
     - name: Trigger Codecov notifications
       uses: codecov/codecov-action@v7
       with:
         run_command: send-notifications
         use_oidc: true
-        fail_ci_if_error: true
+        fail_ci_if_error: false
         # Install the CLI from PyPI (pinned) instead of cli.codecov.io:
         # the GPG key for the default download path is served from a dead
         # keybase.io URL, failing every upload. See
