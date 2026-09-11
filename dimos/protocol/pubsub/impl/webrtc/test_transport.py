@@ -445,7 +445,9 @@ def test_broker_heartbeat_terminal_notifies_operator_lost() -> None:
     provider._config = provider._config.model_copy(update={"heartbeat_hz": 1000.0})  # fast ticks
 
     got: list[bytes] = []
-    provider._callbacks["state_reliable"] = [lambda data, topic: got.append(data)]
+    provider._callbacks["state_reliable"] = [
+        SubscriptionGate(lambda data, topic: got.append(data)),
+    ]
 
     async def _always_401() -> int:
         return 401
@@ -489,7 +491,7 @@ def test_cloudflare_failed_subscribe_deregisters_callback() -> None:
 
     with pytest.raises(RuntimeError, match="ensure_sub boom"):
         provider.subscribe("some_topic", _cb)
-    assert _cb not in provider._callbacks["some_topic"]
+    assert provider._callbacks["some_topic"] == []
 
 
 # ─── subscribe_all dedup ─────────────────────────────────────────────
