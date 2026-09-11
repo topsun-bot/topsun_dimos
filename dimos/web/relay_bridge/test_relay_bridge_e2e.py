@@ -139,7 +139,6 @@ def _session_live(bridge: RelayBridgeModule) -> bool:
     return session is not None and not session.client.is_closed
 
 
-
 @pytest.fixture(scope="module")
 def bridge() -> Iterator[RelayBridgeModule]:
     with RelayE2E.local_bridge(ROBOT_ID) as module:
