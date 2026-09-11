@@ -65,9 +65,9 @@ def test_bridge_does_not_import_embodied_gen() -> None:
         name for name in sys.modules if name == "embodied_gen" or name.startswith("embodied_gen.")
     ]
     assert imported == []
-    import dimos.simulation.embodiedgen as bridge
+    from dimos.simulation.embodiedgen import discovery as discovery_mod
 
-    assert bridge.discover_assets is discover_assets
+    assert discovery_mod.discover_assets is discover_assets
     imported = [
         name for name in sys.modules if name == "embodied_gen" or name.startswith("embodied_gen.")
     ]
