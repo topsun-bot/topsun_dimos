@@ -294,9 +294,31 @@ Install the manipulation dependencies:
 uv sync --extra manipulation --inexact
 ```
 
-The `manipulation` extra includes RoboPlan via `roboplan` from PyPI.
-The `--inexact` flag preserves other extras already installed in your current
-environment.
+The `manipulation` extra bundles control, planning, perception (including
+EdgeTAM), agents/MCP, web interfaces, visualization, and MuJoCo simulation.
+It includes RoboPlan via `roboplan` from PyPI. No previously installed extras
+are needed.
+
+| Extra | Use it for |
+|-------|------------|
+| `control` | Coordinators, arm SDKs, Cartesian IK, and keyboard input |
+| `planning` | Control plus RoboPlan/Drake planning and Viser visualization |
+| `manipulation` | Planning plus perception, agents, web, and simulation |
+
+For a smaller installation, use `uv sync --extra planning --inexact` or
+`uv sync --extra control --inexact`. Add `--no-default-groups` to omit contributor test
+dependencies. Library installations use `pip install 'dimos[manipulation]'`.
+The `--inexact` flag preserves additional packages already installed in your
+environment. The bundle supplies its own dependencies without requiring `misc`.
+Embedding models and unrelated utilities remain available through `misc`.
+
+Python extras do not install native RealSense binaries, vendor SDK setup,
+system libraries, or robot/model assets. Follow the hardware-specific setup
+instructions. Agentic blueprints require provider credentials; the default
+EdgeTAM backend requires CUDA or MPS. The bundle includes CPU ONNX inference;
+specialized CUDA backends, GraspGenX, dataset export (`learning`), and DDS remain
+separate extras. Linux x86_64 is the primary supported bundle platform; backend
+and hardware wheel availability still limits macOS and ARM installations.
 
 Safety behavior for unsupported RoboPlan features:
 
@@ -436,7 +458,7 @@ warm-starts one bounded Pink update from live coordinator joint state on each
 tick; it does not require a planning world or expose planning groups to the
 coordinator.
 
-Cartesian IK accepts one absolute robot-frame target. Quest IK accepts one or
+Cartesian IK accepts one absolute robot-frame target. Teleoperation IK accepts one or
 two controller-to-frame bindings and owns engagement, reference capture,
 relative target mapping, and optional per-hand gripper commands. The
 coordinator only routes the distinct left/right pose streams by task name and
