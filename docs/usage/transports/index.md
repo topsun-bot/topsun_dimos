@@ -525,4 +525,4 @@ python -m pytest -sv -k "not bytes" dimos/protocol/pubsub/benchmark/tool_benchma
 | `Zenoh`        | Reliable network stream transport   | Yes           | Yes     | Recommended on macOS for heavy replay |
 | `Redis`        | Network pubsub via Redis server     | Yes           | Yes     | Central broker; adds hop             |
 | `ROS`          | ROS 2 topic communication           | Yes           | Yes     | Integrates with RViz/ROS tools       |
-| `DDS`          | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP                                  |
+| `DDS`          | Cyclone DDS without ROS (WIP)       | Yes           | Yes     | WIP. Dual-chain map + R0 freeze: [ros2-dds-r0-interface-freeze](/docs/architecture/ros2-dds-r0-interface-freeze.md) |

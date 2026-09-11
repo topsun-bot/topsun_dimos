@@ -52,3 +52,5 @@ To install all extras including DDS:
 ```bash
 CYCLONEDDS_HOME=/opt/cyclonedds uv sync --all-extras --all-groups
 ```
+
+See also: [ROS 2 / DDS R0 interface freeze](/docs/architecture/ros2-dds-r0-interface-freeze.md) (dual-chain map, frozen nav-path topics/QoS, LCM out of scope).
