@@ -4,11 +4,18 @@
 
 <h2>The Agentive Operating System for Physical Space</h2>
 
+<sub>
+This repository is <a href="https://github.com/topsun-bot/topsun_dimos"><code>topsun-bot/topsun_dimos</code></a>, a fork of <a href="https://github.com/dimensionalOS/dimos"><code>dimensionalOS/dimos</code></a>.
+</sub>
+
+<br />
+
 [![Discord](https://img.shields.io/discord/1341146487186391173?style=flat-square&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/dimos)
 [![Stars](https://img.shields.io/github/stars/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/stargazers)
 [![Forks](https://img.shields.io/github/forks/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/fork)
 [![Contributors](https://img.shields.io/github/contributors/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/graphs/contributors)
 [![Docs](https://img.shields.io/badge/Docs-docs.dimensionalos.com-1682a3?style=flat-square&logo=readthedocs&logoColor=white)](https://docs.dimensionalos.com)
+
 ![Nix](https://img.shields.io/badge/Nix-flakes-5277C3?style=flat-square&logo=NixOS&logoColor=white)
 ![NixOS](https://img.shields.io/badge/NixOS-supported-5277C3?style=flat-square&logo=NixOS&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-supported-76B900?style=flat-square&logo=nvidia&logoColor=white)
@@ -16,29 +23,32 @@
 
 <a href="https://trendshift.io/repositories/23169" target="_blank"><img src="https://trendshift.io/api/badge/repositories/23169" alt="dimensionalOS%2Fdimos | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
-<big><big>
-
-[Docs](https://docs.dimensionalos.com) •
-[Hardware](#hardware) •
-[Installation](#installation) •
-[Agent CLI & MCP](#agent-cli-and-mcp) •
-[Blueprints](#blueprints) •
-[dimTELE: Remote Teleop](#dimtele-remote-teleop) •
-[Development](#development)
+<p>
+<a href="https://docs.dimensionalos.com">Docs</a> ·
+<a href="#hardware">Hardware</a> ·
+<a href="#installation">Installation</a> ·
+<a href="#agent-cli-and-mcp">Agent CLI &amp; MCP</a> ·
+<a href="#blueprints">Blueprints</a> ·
+<a href="#dimtele-remote-teleop">dimTELE: Remote Teleop</a> ·
+<a href="#development">Development</a>
+</p>
 
 ⚠️ **Pre-Release Beta** ⚠️
 
-</big></big>
-
 </div>
 
-# About
+<div align="center">
+
+## About
 
 Dimensional is the modern operating system for generalist robotics. We are setting the next-generation SDK standard, integrating with the majority of robot manufacturers.
 
 With a simple install and no ROS required, build physical applications entirely in python that run on any humanoid, quadruped, or drone.
 
 Dimensional is agent native -- "vibecode" your robots in natural language and build (local & hosted) multi-agent systems that work seamlessly with your hardware. Agents run as native modules — subscribing to any embedded stream, from perception (lidar, camera) and spatial memory down to control loops and motor drivers.
+
+</div>
+
 <table>
   <tr>
     <td align="center" width="50%">
@@ -78,8 +88,11 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
   </tr>
 </table>
 
+<div align="center">
 
-# Hardware
+## Hardware
+
+</div>
 
 <table>
   <tr>
@@ -104,7 +117,6 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
       <img width="245" height="1" src="assets/readme/spacer.png">
     </td>
   </tr>
-
   <tr>
     <td align="center" width="20%">
       🟩 <a href="docs/platforms/quadruped/go2/index.md">Unitree Go2 pro/air</a><br>
@@ -126,18 +138,23 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
     </td>
   </tr>
 </table>
-<br>
-<div align="right">
-🟩 stable 🟨 beta 🟧 alpha 🟥 experimental
+
+<div align="center">
+
+🟩 stable &nbsp;&nbsp; 🟨 beta &nbsp;&nbsp; 🟧 alpha &nbsp;&nbsp; 🟥 experimental
 
 </div>
 
 > [!IMPORTANT]
 > 🤖 Direct your favorite Agent (OpenClaw, Claude Code, etc.) to [AGENTS.md](AGENTS.md) and our [CLI and MCP](#agent-cli-and-mcp) interfaces to start building powerful Dimensional applications.
 
-# Installation
+<div align="center">
 
-## Interactive Install
+## Installation
+
+### Interactive Install
+
+</div>
 
 ```sh skip
 curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/install.sh | bash
@@ -145,9 +162,13 @@ curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/in
 
 > See [`scripts/install.sh --help`](scripts/install.sh) for non-interactive and advanced options.
 
-## Manual System Install
+<div align="center">
+
+### Manual System Install
 
 To set up your system dependencies, follow one of these guides:
+
+</div>
 
 - 🟩 [Ubuntu 22.04 / 24.04](docs/installation/ubuntu.md)
 - 🟩 [NixOS / General Linux](docs/installation/nix.md)
@@ -155,9 +176,13 @@ To set up your system dependencies, follow one of these guides:
 
 > Full system requirements, tested configs, and dependency tiers: [docs/requirements.md](docs/requirements.md)
 
-## Python Install
+<div align="center">
 
-### Quickstart
+### Python Install
+
+#### Quickstart
+
+</div>
 
 ```bash
 uv venv --python "3.12"
@@ -186,7 +211,11 @@ export ROBOT_IP=<YOUR_ROBOT_IP>
 dimos run unitree-go2
 ```
 
-# Featured Runfiles
+<div align="center">
+
+## Featured Runfiles
+
+</div>
 
 | Run command | What it does |
 |-------------|-------------|
@@ -202,9 +231,13 @@ dimos run unitree-go2
 
 > Full blueprint docs: [docs/usage/blueprints.md](docs/usage/blueprints.md)
 
-# Agent CLI and MCP
+<div align="center">
+
+## Agent CLI and MCP
 
 The `dimos` CLI manages the full lifecycle — run blueprints, inspect state, interact with agents, and call skills via MCP.
+
+</div>
 
 ```bash
 dimos run unitree-go2-agentic --daemon   # Start in background
@@ -218,7 +251,11 @@ dimos stop                                # Shut down
 
 > Full CLI reference: [docs/usage/cli.md](docs/usage/cli.md)
 
-# dimTELE: Remote Teleop
+<div align="center">
+
+## dimTELE: Remote Teleop
+
+</div>
 
 **dimTELE** is hosted teleoperation for DimOS robots: operate them remotely from any browser or Quest headset over WebRTC. The robot dials out to a hosted broker, so you don't need to open any inbound ports on the robot's network. It works behind a home router, on Wi-Fi, wired LAN, or cellular.
 
@@ -240,11 +277,15 @@ dimos stop                                # Shut down
 
 > Full guide: [dimTELE](docs/capabilities/teleoperation/hosted.md) • [WebRTC internals](dimos/teleop/hosted/README.md)
 
-# Usage
+<div align="center">
 
-## Use DimOS as a Library
+## Usage
+
+### Use DimOS as a Library
 
 See below a simple robot connection module that sends streams of continuous `cmd_vel` to the robot and receives `color_image` to a simple `Listener` module. DimOS Modules are subsystems on a robot that communicate with other modules using standardized messages.
+
+</div>
 
 ```py skip
 import threading, time, numpy as np
@@ -287,14 +328,19 @@ if __name__ == "__main__":
     ).build().loop()
 ```
 
-## Blueprints
+<div align="center">
+
+### Blueprints
 
 Blueprints are instructions for how to construct and wire modules. We compose them with
 `autoconnect(...)`, which connects streams by `(name, type)` and returns a `Blueprint`.
 
 Blueprints can be composed, remapped, and have transports overridden if `autoconnect()` fails due to conflicting variable names or `In[]` and `Out[]` message types.
 
+</div>
+
 A blueprint example that connects the image stream from a robot to an MCP-backed LLM agent for reasoning and action execution.
+
 ```py skip
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.transport import LCMTransport
@@ -314,23 +360,33 @@ if __name__ == "__main__":
     blueprint.build().loop()
 ```
 
-## Library API
+<div align="center">
 
-- [Modules](docs/usage/modules.md)
-- [LCM](docs/usage/lcm.md)
-- [Blueprints](docs/usage/blueprints.md)
-- [Transports](docs/usage/transports/index.md) — LCM, SHM, DDS, Zenoh, ROS 2
-- [Data Streams](docs/usage/data_streams/index.md)
-- [Configuration](docs/usage/configuration.md)
-- [Visualization](docs/usage/visualization.md)
+### Library API
 
-## Demos
+[Modules](docs/usage/modules.md) ·
+[LCM](docs/usage/lcm.md) ·
+[Blueprints](docs/usage/blueprints.md) ·
+[Transports](docs/usage/transports/index.md) ·
+[Data Streams](docs/usage/data_streams/index.md) ·
+[Configuration](docs/usage/configuration.md) ·
+[Visualization](docs/usage/visualization.md)
+
+<sub>Transports: LCM, SHM, DDS, Zenoh, ROS 2</sub>
+
+### Demos
 
 <img src="assets/readme/dimos_demo.gif" alt="DimOS Demo" width="100%">
 
-# Development
+</div>
 
-## Develop on DimOS
+<div align="center">
+
+## Development
+
+### Develop on DimOS
+
+</div>
 
 ```sh skip
 export GIT_LFS_SKIP_SMUDGE=1
@@ -342,12 +398,14 @@ cd dimos
 uv run pytest --numprocesses=auto dimos
 ```
 
+<div align="center">
 
-## Multi Language Support
+### Multi Language Support
 
 Python is our glue and prototyping language, but we support many languages via LCM interop.
 
-Check our language interop examples:
-- [C++](examples/language-interop/cpp/)
-- [Lua](examples/language-interop/lua/)
-- [TypeScript](examples/language-interop/ts/)
+[C++](examples/language-interop/cpp/) ·
+[Lua](examples/language-interop/lua/) ·
+[TypeScript](examples/language-interop/ts/)
+
+</div>
