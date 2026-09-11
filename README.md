@@ -11,22 +11,22 @@ The Agentive Operating System for Physical Space
 <br/>
 
 <!-- 没有正式发布的入口保持灰标，不编造链接。有了之后把 badge 换成彩色并补 URL。 -->
-[![Website](https://img.shields.io/badge/📖-Website-lightgrey)](#-deliverables)
+[![Website](https://img.shields.io/badge/📖-Website-lightgrey)](#deliverables)
 [![Code](https://img.shields.io/badge/💻-Code-black?logo=github)](https://github.com/topsun-bot/topsun_dimos)
-[![Paper](https://img.shields.io/badge/📄-Paper-lightgrey)](#-publications--citation)
-[![Dataset](https://img.shields.io/badge/🤗-Dataset-lightgrey)](#-deliverables)
+[![Paper](https://img.shields.io/badge/📄-Paper-lightgrey)](#publications)
+[![Dataset](https://img.shields.io/badge/🤗-Dataset-lightgrey)](#deliverables)
 [![Docker](https://img.shields.io/badge/Docker-ghcr.io%2Ftopsun--bot-2496ED?logo=docker&logoColor=white)](https://github.com/orgs/topsun-bot/packages)
 
 <br/>
 
-[News](#-news) ·
-[Motivation](#-why-topsun-dimos) ·
-[Highlights](#-论文点与特色) ·
-[Plugins](#-plugins) ·
-[Plan](#-本月工作安排) ·
-[Deliverables](#-deliverables) ·
-[Demos](#-real-robot-demonstrations) ·
-[Start](#-getting-started)
+[News](#news) ·
+[Motivation](#why-topsun-dimos) ·
+[Highlights](#highlights) ·
+[Plugins](#plugins) ·
+[Plan](#plan) ·
+[Deliverables](#deliverables) ·
+[Demos](#demos) ·
+[Start](#getting-started)
 
 </div>
 
@@ -36,6 +36,7 @@ The Agentive Operating System for Physical Space
 
 ---
 
+<a id="news"></a>
 ## 🔥 News
 
 - **[2026.06]** G1 迎宾与 Orin 机载导览迎宾合入：原地接待、机身语音、标点带路、到站讲解。
@@ -45,6 +46,7 @@ The Agentive Operating System for Physical Space
 
 ---
 
+<a id="why-topsun-dimos"></a>
 ## 💡 Why TopSun DimOS
 
 对照 [HoloMotion](https://github.com/HorizonRobotics/HoloMotion) 的 Motivation：先把「为什么做、解决什么、怎么交付」摊开，再谈安装。
@@ -76,8 +78,8 @@ G1 迎宾默认模板短路、不让 LLM 现场编造位置事实。讲解词在
 | G1 仿真智能体 | `dimos --simulation run unitree-g1-agentic-sim` | `dimos[sim]` |
 | 大厅原地迎宾 | `dimos run unitree-g1-greeter` | 真机 G1，可不含导航 |
 | Orin 导览迎宾 | `unitree-g1-greeter-onboard` | 机载 Orin + Mid360 + 标点 |
-| 给 HoloAgent 接技能 | [Plugins](#-plugins) | 运行中的 DimOS MCP 或 skill 容器 |
-| 训练自己的策略 / 发论文 | [论文点](#-论文点与特色) | 数据与评测仍待发布 |
+| 给 HoloAgent 接技能 | [Plugins](#plugins) | 运行中的 DimOS MCP 或 skill 容器 |
+| 训练自己的策略 / 发论文 | [论文点](#highlights) | 数据与评测仍待发布 |
 
 ---
 
@@ -143,6 +145,7 @@ flowchart LR
 
 ---
 
+<a id="highlights"></a>
 ## 🌟 论文点与特色
 
 主论文尚未写成。下面是已经在代码里站得住、适合写成文章或技术报告的点。没有评测集的先空着，不报不存在的数字。
@@ -163,6 +166,7 @@ flowchart LR
 
 ---
 
+<a id="plugins"></a>
 ## 🔌 Plugins
 
 给 [HoloAgent](https://github.com/topsun-bot/HoloAgent) / 其他 AgentOS 量产集成用。机制对齐 DimOS `@skill` + MCP；不把 Horizon 的 ROS / FSR-VLN 树打进本仓库。
@@ -191,6 +195,7 @@ dimos agent-send "explore the room"
 
 ---
 
+<a id="plan"></a>
 ## 📅 本月工作安排
 
 时间窗：**2026.09–2026.10**。按当前仓库主人与未完成交付物排列。空着的网站 / 论文 / 数据集欢迎认领。
@@ -214,6 +219,7 @@ dimos agent-send "explore the room"
 
 ---
 
+<a id="deliverables"></a>
 ## 📦 Deliverables
 
 和 HoloMotion / HoloAgent 一样，按「能点开的交付」列。没有的格子留空。
@@ -222,7 +228,7 @@ dimos agent-send "explore the room"
 | --- | --- | --- |
 | **1. 网站** | 空 | — |
 | **2. 代码** | 已发布 | [github.com/topsun-bot/topsun_dimos](https://github.com/topsun-bot/topsun_dimos) |
-| **3. 论文** | 空 | 主文待写。相关工作见 [Publications](#-publications--citation) |
+| **3. 论文** | 空 | 主文待写。相关工作见 [Publications](#publications) |
 | **4. 数据集** | 空 | 计划：Landmark Pack、导览/巡检轨迹、语义导航评测。现有 replay 仅供本仓库跑通 |
 | **5. Docker** | 已发布 | [`ghcr.io/topsun-bot/`](https://github.com/orgs/topsun-bot/packages) |
 
@@ -243,6 +249,7 @@ docker run -it ghcr.io/topsun-bot/ros-dev:latest bash
 
 ---
 
+<a id="demos"></a>
 ## 🤖 Real-Robot Demonstrations
 
 压缩预览。完整流程见能力文档；项目页上线后再挂全分辨率视频。
@@ -337,6 +344,7 @@ docker run -it ghcr.io/topsun-bot/ros-dev:latest bash
 
 ---
 
+<a id="getting-started"></a>
 ## 🏗 Getting Started
 
 ### 安装
@@ -433,6 +441,7 @@ uv run pytest --numprocesses=auto dimos
 
 ---
 
+<a id="publications"></a>
 ## 📚 Publications & Citation
 
 **TopSun DimOS 主论文：空。** 有草稿或 arXiv 后再把顶栏 Paper 徽章换成正式链接。
