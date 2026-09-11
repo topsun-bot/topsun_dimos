@@ -16,17 +16,18 @@
 """G1 agentic stack plus HoloAgent robot_bridge skills.
 
 Requires a running HorizonRobotics HoloAgent ``robot_bridge`` for the
-``holoagent_*`` skills (default ``http://127.0.0.1:8000``). Native DimOS
-G1 move / arm / navigation skills remain available.
+``holoagent_*`` navigation skills (default ``http://127.0.0.1:8000``).
+Native DimOS G1 move / arm / navigation skills remain available.
+HoloAgent ``/api/arm`` is not wired: use native ``execute_arm_command``.
 """
 
-from dimos.agents.skills.holoagent import HoloAgentSkillContainer
+from dimos.agents.skills.holoagent import HoloAgentNavSkillContainer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic import unitree_g1_agentic
 
 unitree_g1_holoagent = autoconnect(
     unitree_g1_agentic,
-    HoloAgentSkillContainer.blueprint(),
+    HoloAgentNavSkillContainer.blueprint(),
 )
 
 __all__ = ["unitree_g1_holoagent"]

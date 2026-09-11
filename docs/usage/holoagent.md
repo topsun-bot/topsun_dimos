@@ -27,10 +27,10 @@ Sources used for this matrix (HoloAgent `main`):
 | --- | --- | --- | --- | --- |
 | Embodied AgentOS / OpenClaw skill registry | `agentic_robot/agentOS/holoagent_skills/` (`SKILL.md` + CRUD scripts) | `@skill` on `Module` (`dimos/agents/annotation.py`), MCP (`dimos/agents/mcp/`), blueprints (`dimos/core/coordination/blueprints.py`) | Different packaging (markdown skill dirs vs Python methods). HoloAgent is already DimOS-inspired. | **Reuse DimOS.** Do not import the markdown skill registry. |
 | Workflow / long-horizon policy | `holoagent_skills/skills/workflow/SKILL.md` | Agent system prompt + LangGraph agent (`dimos/agents/agent.py`, `dimos/agents/system_prompt.py`) | HoloAgent's workflow SKILL.md is a prompt policy, not executable code. | **Skip** as code. Prompt ideas can be copied later if needed. |
-| robot_bridge HTTP → ROS | `agentic_robot/services/src/robot_bridge/` port **8000**; `bridge_config.yaml` | DimOS LCM/RPC + MCP (`GlobalConfig.mcp_port` 9990). Deprecated REST skill: `dimos/skills/rest/rest.py` | No first-class client for HoloAgent's `/api/*` when that stack is colocated. | **Wrap as skill (this PR).** `HoloAgentBridgeClient` + `HoloAgentNavSkillContainer` (Go2) / `HoloAgentSkillContainer` (G1). |
+| robot_bridge HTTP → ROS | `agentic_robot/services/src/robot_bridge/` port **8000**; `bridge_config.yaml` | DimOS LCM/RPC + MCP (`GlobalConfig.mcp_port` 9990). Deprecated REST skill: `dimos/skills/rest/rest.py` | No first-class client for HoloAgent's `/api/*` when that stack is colocated. | **Wrap as skill (this PR).** `HoloAgentBridgeClient` + `HoloAgentNavSkillContainer` (Go2 and G1). `/api/arm` is not exposed. |
 | Semantic navigation skill | `holoagent_skills/skills/sem-nav-skill/` → `POST /api/semantic_nav` `{"cmd":"floor,room,object"}` | `NavigationSkillContainer.navigate_with_text` (`dimos/agents/skills/navigation.py`) + spatial memory | HoloAgent targets FSR-VLN/HMSG floor/room/object triples. DimOS uses CLIP/VLM/landmarks. | **Wrap as skill** `holoagent_semantic_nav`. Keep native `navigate_with_text` as default. |
 | Relative move skill | `holoagent_skills/skills/rel-move-skill/` → `POST /api/relative_nav` `{"cmd":"forward,left,degrees"}` | Go2 `UnitreeSkillContainer` / G1 `move` (`dimos/robot/unitree/g1/skill_container.py`) | HoloAgent relative nav is ROS `/relative_nav` on their stack. | **Wrap as skill** `holoagent_relative_move` for the HoloAgent path only. |
-| Arm skill | `holoagent_skills/skills/arm-skill/` + `robots/unitree/src/g1_arm/` (`POST /api/arm/{skill}`) | G1 `execute_arm_command` (`dimos/robot/unitree/g1/skill_container.py`) | HoloAgent uses ROS `arm_signal_pub` / FIFO names (`wave_above_head`, …). DimOS uses Unitree WebRTC api_id 7106. | **Wrap as skill** `holoagent_arm` when talking to their bridge. **Reuse DimOS** on native G1. |
+| Arm skill | `holoagent_skills/skills/arm-skill/` + `robots/unitree/src/g1_arm/` (`POST /api/arm/{skill}` → `arm_signal_pub`) | G1 `execute_arm_command` (`dimos/robot/unitree/g1/skill_container.py`) | `g1_arm` `getcmd.cpp` subscribes to `chat_signal_pub`, not `arm_signal_pub`. No consumer for the documented arm HTTP path. | **Skip exposing** `/api/arm`. **Reuse DimOS** `execute_arm_command`. FIFO names that `getcmd.cpp` knows can go via `holoagent_navigation_signal` (`chat_signal_pub`). |
 | FSR-VLN / HMSG / OVO mapping | `agentic_robot/fsr_vln/` (`FsrVlnClient.query` in `api.py`; Go2/G1 configs under `configs/Go2`, `configs/G1`) | Spatial memory (`dimos/perception/spatial_perception.py`), door/landmark memory, `memory2/` | Hierarchical floor→room→object scene graph + OVO instance mapping is not in DimOS. In-process `FsrVlnClient` needs their graph, CLIP, SAM, CUDA env. | **Skip vendoring.** Use `holoagent_semantic_nav` against a running HoloAgent mapper. Next files if we ever port query locally: `fsr_vln/api.py`, `memory/hmsg/graph/graph.py`. |
 | FAST-LIVO mapping / reloc | `agentic_robot/core/src/fast_livo` | DimOS native mapping/nav (`dimos/navigation/`, `dimos/mapping/`) | FAST-LIVO license mismatch (GPL vs BSD) per HoloAgent notices. | **Skip.** Do not vendor. |
 | Nav2 bringup / executors | `agentic_robot/core/src/nav_bringup`, `.../navigation` | DimOS planners (`dimos/navigation/replanning_a_star/`, frontier exploration) | ROS 2 Humble Nav2 vs DimOS-native. | **Reuse DimOS.** |
@@ -50,7 +50,7 @@ A **client + skill shim**, not a port of FSR-VLN or robot_bridge:
 | `dimos/agents/skills/holoagent_client.py` | HTTP client matching `bridge_config.yaml` |
 | `dimos/agents/skills/holoagent.py` | `@skill` methods for MCP / LLM |
 | `dimos/robot/unitree/go2/blueprints/agentic/unitree_go2_holoagent.py` | Go2 agentic + HoloAgent nav skills |
-| `dimos/robot/unitree/g1/blueprints/agentic/unitree_g1_holoagent.py` | G1 agentic + HoloAgent skills |
+| `dimos/robot/unitree/g1/blueprints/agentic/unitree_g1_holoagent.py` | G1 agentic + HoloAgent nav skills |
 | `GlobalConfig.holoagent_url` | `--holoagent-url` / `DIMOS_HOLOAGENT_URL` / `HOLOAGENT_URL` |
 
 Default blueprints (`unitree-go2-agentic`, `unitree-g1-agentic`) are unchanged.
@@ -77,8 +77,16 @@ dimos mcp call holoagent_health
 dimos mcp call holoagent_semantic_nav --arg object_name="coffee machine" --arg floor=unknown --arg room=unknown
 ```
 
-`holoagent_arm` is G1-only (HoloAgent `g1_arm`) and is registered only on
-`unitree-g1-holoagent`. Go2 uses `HoloAgentNavSkillContainer`.
+`holoagent_arm` is **not exposed**. HoloAgent `bridge_config.yaml` maps
+`POST /api/arm/{skill}` to `arm_signal_pub`, but
+`robots/unitree/src/g1_arm/src/getcmd.cpp` only subscribes to
+`chat_signal_pub`. Use native `execute_arm_command`, or
+`holoagent_navigation_signal` for FIFO names that `getcmd.cpp` actually
+handles (that HTTP path publishes `chat_signal_pub`).
+
+HoloAgent nav skills publish to ROS and return when the HTTP call is
+accepted. They do **not** wait for `waypoint_reached`. Do not start another
+movement skill until arrival is confirmed or `holoagent_stop_nav` runs.
 
 Relative moves are short adjustments: finite values, at least one non-zero
 axis, `|forward|`/`|left|` ≤ 3.0 m, `|rotation|` ≤ 180°. Longer goals should
@@ -94,7 +102,7 @@ from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitr
 my_stack = autoconnect(unitree_go2_agentic, HoloAgentNavSkillContainer.blueprint())
 ```
 
-For G1, use `HoloAgentSkillContainer` (adds `holoagent_arm`).
+G1 uses the same `HoloAgentNavSkillContainer`.
 
 ## Payload contract (do not invent)
 

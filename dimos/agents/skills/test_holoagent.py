@@ -23,7 +23,7 @@ from dimos.agents.skills.holoagent import (
 from dimos.agents.skills.holoagent_client import HoloAgentBridgeError
 
 
-class _BareHoloAgentSkills(HoloAgentSkillContainer):
+class _BareHoloAgentSkills(HoloAgentNavSkillContainer):
     """Skill container without Module/LCM setup, for unit tests."""
 
     def __init__(self, client: MagicMock) -> None:
@@ -47,8 +47,8 @@ def test_skills_are_annotated() -> None:
         method = getattr(HoloAgentNavSkillContainer, name)
         assert getattr(method, "__skill__", False), name
         assert method.__doc__, name
-    assert getattr(HoloAgentSkillContainer.holoagent_arm, "__skill__", False)
     assert "holoagent_arm" not in HoloAgentNavSkillContainer.__dict__
+    assert "holoagent_arm" not in HoloAgentSkillContainer.__dict__
 
 
 def test_semantic_nav_success() -> None:
@@ -59,7 +59,7 @@ def test_semantic_nav_success() -> None:
 
     client.semantic_nav.assert_called_once_with("1F", "pantry", "coffee machine")
     assert "semantic_nav(1F,pantry,coffee machine)" in result
-    assert "ok" in result
+    assert "published" in result
 
 
 def test_relative_move_rejects_zero() -> None:
@@ -94,12 +94,19 @@ def test_semantic_nav_rejects_blank_object() -> None:
     assert "refused" in result
 
 
+def test_semantic_nav_rejects_commas() -> None:
+    skills, client = _container()
+    result = skills.holoagent_semantic_nav("coffee, machine", floor="1,F")
+    client.semantic_nav.assert_not_called()
+    assert "refused" in result
+
+
 def test_relative_move_success() -> None:
     skills, client = _container()
     client.relative_nav.return_value = {"success": True}
     result = skills.holoagent_relative_move(0.5, 0.0, 15.0)
     client.relative_nav.assert_called_once_with(0.5, 0.0, 15.0)
-    assert "ok" in result
+    assert "published" in result
 
 
 def test_navigation_signal_success() -> None:
@@ -107,7 +114,7 @@ def test_navigation_signal_success() -> None:
     client.navigation_signal.return_value = {"success": True}
     result = skills.holoagent_navigation_signal("one_point_1")
     client.navigation_signal.assert_called_once_with("one_point_1")
-    assert "ok" in result
+    assert "published" in result
 
 
 def test_bridge_errors_are_returned_as_strings() -> None:
@@ -117,13 +124,10 @@ def test_bridge_errors_are_returned_as_strings() -> None:
     assert result.startswith("HoloAgent robot_bridge not reachable")
 
 
-def test_arm_and_stop() -> None:
+def test_stop_nav_success() -> None:
     skills, client = _container()
-    client.arm_skill.return_value = {"success": True}
     client.stop_navigation.return_value = {"success": True}
-    assert "ok" in skills.holoagent_arm("wave_above_head")
-    assert "ok" in skills.holoagent_stop_nav()
-    client.arm_skill.assert_called_once_with("wave_above_head")
+    assert "published" in skills.holoagent_stop_nav()
     client.stop_navigation.assert_called_once()
 
 
@@ -142,10 +146,12 @@ def test_bridge_uses_module_config_url() -> None:
     assert client.base_url == "http://10.1.2.3:8000"
 
 
-def test_holoagent_url_default() -> None:
+def test_holoagent_url_default(monkeypatch: pytest.MonkeyPatch) -> None:
     from dimos.core.global_config import GlobalConfig
 
-    assert GlobalConfig().holoagent_url == "http://127.0.0.1:8000"
+    for alias in ("DIMOS_HOLOAGENT_URL", "HOLOAGENT_URL", "holoagent_url"):
+        monkeypatch.delenv(alias, raising=False)
+    assert GlobalConfig(_env_file=None).holoagent_url == "http://127.0.0.1:8000"
 
 
 @pytest.mark.parametrize(
@@ -160,5 +166,7 @@ def test_holoagent_url_env_aliases(
 ) -> None:
     from dimos.core.global_config import GlobalConfig
 
+    for alias in ("DIMOS_HOLOAGENT_URL", "HOLOAGENT_URL", "holoagent_url"):
+        monkeypatch.delenv(alias, raising=False)
     monkeypatch.setenv(env_name, value)
-    assert GlobalConfig().holoagent_url == value
+    assert GlobalConfig(_env_file=None).holoagent_url == value

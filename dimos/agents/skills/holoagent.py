@@ -40,20 +40,31 @@ HOLOAGENT_SKILLS_PROMPT = """
 # HoloAgent robot_bridge (optional)
 Use these skills only when a HorizonRobotics HoloAgent ``robot_bridge`` is
 running (default ``http://127.0.0.1:8000``) and the user wants that stack's
-floor/room/object scene-graph navigation or HoloAgent arm FIFO skills.
+floor/room/object scene-graph navigation.
+
+These calls publish to the bridge and return when HTTP is accepted. They do
+not wait for the robot to reach a goal. Do not start another movement skill
+until the user confirms arrival or you call `holoagent_stop_nav`.
 
 - `holoagent_semantic_nav` — FSR-VLN / HMSG semantic goal via `/api/semantic_nav`
 - `holoagent_relative_move` — short relative pose via `/api/relative_nav`
 - `holoagent_stop_nav` — stop HoloAgent navigation
-- `holoagent_arm` — G1 arm gesture names from HoloAgent `g1_arm` (e.g. wave_above_head)
 - `holoagent_health` — check that robot_bridge is reachable
+
+HoloAgent `/api/arm/{skill}` is not exposed: it publishes `arm_signal_pub`,
+but `g1_arm` `getcmd.cpp` only subscribes to `chat_signal_pub`. Prefer native
+`execute_arm_command`. FIFO names such as `wave_above_head` can be sent with
+`holoagent_navigation_signal` (that path maps to `chat_signal_pub`).
 
 Otherwise use native DimOS `navigate_with_text`, `move`, and `execute_arm_command`.
 """
 
 
 def _format_bridge_result(action: str, result: dict[str, Any]) -> str:
-    return f"HoloAgent {action} ok: {json.dumps(result, ensure_ascii=False)}"
+    return (
+        f"HoloAgent {action} published (bridge accepted; not waiting for "
+        f"arrival): {json.dumps(result, ensure_ascii=False)}"
+    )
 
 
 class HoloAgentNavSkillContainer(Module):
@@ -104,9 +115,11 @@ class HoloAgentNavSkillContainer(Module):
         """Navigate via HoloAgent FSR-VLN / HMSG semantic map.
 
         Sends POST /api/semantic_nav with {"cmd": "floor,room,object"} as
-        defined by HoloAgent robot_bridge and sem-nav-skill. Use only when
-        that stack is running. For native DimOS spatial memory, use
-        navigate_with_text instead.
+        defined by HoloAgent robot_bridge and sem-nav-skill. The bridge
+        publishes to ROS and returns immediately; this skill does not wait
+        for arrival. Do not start another movement skill until arrival is
+        confirmed or holoagent_stop_nav is called. For native DimOS spatial
+        memory, use navigate_with_text instead.
 
         Args:
             object_name: Target object, e.g. "coffee machine" or "charging station".
@@ -137,9 +150,10 @@ class HoloAgentNavSkillContainer(Module):
         """Send a short relative move to HoloAgent robot_bridge.
 
         Sends POST /api/relative_nav with {"cmd": "forward,left,degrees"} as
-        defined by HoloAgent rel-move-skill. Use for small adjustments on a
-        running HoloAgent nav stack. For native DimOS velocity control, use
-        move instead.
+        defined by HoloAgent rel-move-skill. The bridge publishes and
+        returns immediately; this skill does not wait for arrival. Use for
+        small adjustments on a running HoloAgent nav stack. For native
+        DimOS velocity control, use move instead.
 
         Args:
             forward: Forward displacement in meters. Negative is backward.
@@ -197,23 +211,12 @@ class HoloAgentNavSkillContainer(Module):
 
 
 class HoloAgentSkillContainer(HoloAgentNavSkillContainer):
-    """Navigation skills plus G1 HoloAgent arm FIFO skills."""
+    """Same skills as ``HoloAgentNavSkillContainer``.
 
-    @skill
-    def holoagent_arm(self, skill_name: str) -> str:
-        """Trigger a HoloAgent G1 arm skill through robot_bridge.
-
-        Sends POST /api/arm/{skill_name}. Names come from HoloAgent
-        robots/unitree/src/g1_arm (e.g. wave_above_head, wave_under_head,
-        shake_hand, hug, high_five, release_arm). Prefer native
-        execute_arm_command when controlling G1 through DimOS WebRTC.
-
-        Args:
-            skill_name: HoloAgent arm skill path token, e.g. "wave_above_head".
-        """
-        try:
-            result = self._bridge().arm_skill(skill_name)
-        except HoloAgentBridgeError as exc:
-            logger.warning("HoloAgent arm skill failed: %s", exc)
-            return f"HoloAgent arm skill failed: {exc}"
-        return _format_bridge_result(f"arm({skill_name})", result)
+    ``holoagent_arm`` is not registered. HoloAgent
+    ``bridge_config.yaml`` maps ``POST /api/arm/{skill}`` to
+    ``arm_signal_pub``, but ``robots/unitree/src/g1_arm/src/getcmd.cpp``
+    only subscribes to ``chat_signal_pub`` (plus ``waypoint_reached`` and
+    ``motion_tracking``). There is no ``arm_signal_pub`` consumer, so the
+    HTTP call can return success without writing ``/tmp/arm_fifo``.
+    """

@@ -41,6 +41,13 @@ def test_format_semantic_cmd_rejects_blank_object() -> None:
         HoloAgentBridgeContract.format_semantic_cmd("1F", "pantry", "  ")
 
 
+def test_format_semantic_cmd_rejects_commas() -> None:
+    with pytest.raises(HoloAgentBridgeError, match="commas"):
+        HoloAgentBridgeContract.format_semantic_cmd("1F", "pantry", "coffee, machine")
+    with pytest.raises(HoloAgentBridgeError, match="commas"):
+        HoloAgentBridgeContract.format_semantic_cmd("1,F", "pantry", "coffee")
+
+
 def test_format_relative_cmd() -> None:
     assert HoloAgentBridgeContract.format_relative_cmd(1.0, 0.0, 90.0) == "1.0,0.0,90.0"
 
@@ -135,6 +142,24 @@ def test_unsafe_path_token_rejected(bad: str) -> None:
 def test_http_error_is_wrapped() -> None:
     session = MagicMock()
     session.request.side_effect = requests.ConnectionError("down")
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=session)
+
+    with pytest.raises(HoloAgentBridgeError, match="GET http://127.0.0.1:8000/health failed"):
+        client.health()
+
+
+class _ChunkedBodyResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    @property
+    def content(self) -> bytes:
+        raise requests.exceptions.ChunkedEncodingError("closed")
+
+
+def test_body_read_error_is_wrapped() -> None:
+    session = MagicMock()
+    session.request.return_value = _ChunkedBodyResponse()
     client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=session)
 
     with pytest.raises(HoloAgentBridgeError, match="GET http://127.0.0.1:8000/health failed"):

@@ -66,13 +66,13 @@ class HoloAgentBridgeContract:
         examples such as ``unknown,unknown,coffee machine``. ``object_name``
         must be non-empty.
         """
-        target = object_name.strip()
+        target = HoloAgentBridgeContract._semantic_field(object_name, "object_name")
         if not target:
             raise HoloAgentBridgeError("semantic_nav object_name must be non-empty")
         return ",".join(
             (
-                HoloAgentBridgeContract._token(floor),
-                HoloAgentBridgeContract._token(room),
+                HoloAgentBridgeContract._token(floor, "floor"),
+                HoloAgentBridgeContract._token(room, "room"),
                 target,
             )
         )
@@ -121,8 +121,17 @@ class HoloAgentBridgeContract:
         return token
 
     @staticmethod
-    def _token(value: str) -> str:
+    def _semantic_field(value: str, field: str) -> str:
         stripped = value.strip()
+        if "," in stripped:
+            raise HoloAgentBridgeError(
+                f"semantic_nav {field} must not contain commas (bridge uses ',' as the field separator)"
+            )
+        return stripped
+
+    @staticmethod
+    def _token(value: str, field: str) -> str:
+        stripped = HoloAgentBridgeContract._semantic_field(value, field)
         return stripped if stripped else HoloAgentBridgeContract.UNKNOWN
 
 
@@ -175,6 +184,12 @@ class HoloAgentBridgeClient:
         return self._request("POST", f"/api/navigation/{token}")
 
     def arm_skill(self, skill_name: str) -> dict[str, Any]:
+        """POST /api/arm/{skill} as in bridge_config.yaml.
+
+        HoloAgent ``g1_arm`` ``getcmd.cpp`` subscribes to ``chat_signal_pub``,
+        not ``arm_signal_pub``. This method is kept for the documented HTTP
+        contract and is not exposed as an LLM ``@skill``.
+        """
         token = HoloAgentBridgeContract.safe_path_token(skill_name, "arm skill")
         return self._request("POST", f"/api/arm/{token}")
 
@@ -193,14 +208,15 @@ class HoloAgentBridgeClient:
                 timeout=self.timeout_sec,
             )
             response.raise_for_status()
+            content = response.content
+            if not content:
+                return {"success": True}
+            try:
+                parsed: Any = response.json()
+            except ValueError:
+                return {"success": True, "text": response.text}
         except requests.RequestException as exc:
             raise HoloAgentBridgeError(f"{method} {url} failed: {exc}") from exc
-        if not response.content:
-            return {"success": True}
-        try:
-            parsed: Any = response.json()
-        except ValueError:
-            return {"success": True, "text": response.text}
         if isinstance(parsed, dict):
             return parsed
         return {"success": True, "data": parsed}
