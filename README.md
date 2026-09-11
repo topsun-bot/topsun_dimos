@@ -5,7 +5,7 @@
 <h2>The Agentive Operating System for Physical Space</h2>
 
 <sub>
-This repository is <a href="https://github.com/topsun-bot/topsun_dimos"><code>topsun-bot/topsun_dimos</code></a>, a fork of <a href="https://github.com/dimensionalOS/dimos"><code>dimensionalOS/dimos</code></a>.
+This repository is <a href="https://github.com/topsun-bot/topsun_dimos"><code>topsun-bot/topsun_dimos</code></a>, a downstream clone based on <a href="https://github.com/dimensionalOS/dimos"><code>dimensionalOS/dimos</code></a>.
 </sub>
 
 <br />
