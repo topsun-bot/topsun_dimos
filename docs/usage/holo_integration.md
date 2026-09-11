@@ -29,7 +29,7 @@ Language goal
 
 - `uv` and Python 3.12
 - `uv sync --extra all` (or `uv pip install 'dimos[base,unitree]'`; add `sim` for MuJoCo)
-- `OPENAI_API_KEY` for the default GPT-4o agent
+- `OPENAI_API_KEY` for the default `gpt-5.6-luna` agent
 - `--replay` for recorded Go2 data (first run may pull LFS)
 - `--simulation` for G1 MuJoCo
 - `--robot-ip 192.168.123.161` on real hardware (placeholder - use your robot)

@@ -19,7 +19,12 @@ from pathlib import Path
 import pytest
 
 from dimos.robot.all_blueprints import all_blueprints
-from dimos.robot.unitree.holo_workspace import DemoCommand, HoloWorkspace
+from dimos.robot.unitree.holo_workspace import HoloWorkspace
+
+
+def _clear_holo_path_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ("HOLO_WORKSPACE", "HOLOAGENT_ROOT", "HOLOMOTION_ROOT"):
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_agentic_blueprints_are_registered() -> None:
@@ -47,7 +52,8 @@ def test_dimos_demo_commands_cover_go2_and_g1() -> None:
     assert not demos["go2-agentic-replay"].requires_hardware
 
 
-def test_fork_urls_point_at_team_clones() -> None:
+def test_fork_urls_point_at_team_clones(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_holo_path_env(monkeypatch)
     assert HoloWorkspace.HOLOAGENT.url == "https://github.com/yixinzhangagent/HoloAgent"
     assert HoloWorkspace.HOLOMOTION.url == "https://github.com/yixinzhangagent/HoloMotion"
     dest = Path("/tmp/holo-dest")
@@ -58,7 +64,17 @@ def test_fork_urls_point_at_team_clones() -> None:
     )
 
 
+def test_clone_commands_shell_quote_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_holo_path_env(monkeypatch)
+    dest = Path("/tmp/holo dest")
+    commands = HoloWorkspace.clone_commands(dest, repos=(HoloWorkspace.HOLOAGENT,))
+    assert commands == (
+        "git clone https://github.com/yixinzhangagent/HoloAgent.git '/tmp/holo dest/HoloAgent'",
+    )
+
+
 def test_status_missing_and_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_holo_path_env(monkeypatch)
     dest = tmp_path / "workspace"
     dest.mkdir()
     missing = HoloWorkspace.status(dest)
@@ -94,7 +110,10 @@ def test_cli_help_and_list_demos(capsys: pytest.CaptureFixture[str]) -> None:
     assert "dimos list" in out
 
 
-def test_cli_status_and_clone(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_status_and_clone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _clear_holo_path_env(monkeypatch)
     dest = tmp_path / "ext"
     dest.mkdir()
     assert HoloWorkspace.run(["--dest", str(dest), "status"]) == 0
@@ -114,13 +133,47 @@ def test_cli_status_and_clone(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 
 
 def test_default_dest_is_not_filesystem_root(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HOLO_WORKSPACE", raising=False)
+    _clear_holo_path_env(monkeypatch)
     dest = HoloWorkspace.default_dest()
     assert dest != Path("/")
     assert dest.is_absolute()
 
 
-def test_demo_command_type() -> None:
-    demo = DemoCommand(name="x", command="dimos list", notes="dry")
-    assert demo.command == "dimos list"
-    assert not demo.requires_hardware
+def test_default_dest_under_home_is_sibling_not_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkout at ~/topsun_dimos must clone beside it (~/HoloAgent), not into itself."""
+    _clear_holo_path_env(monkeypatch)
+    home = tmp_path / "home"
+    checkout = home / "topsun_dimos"
+    checkout.mkdir(parents=True)
+    monkeypatch.setattr("dimos.robot.unitree.holo_workspace.DIMOS_PROJECT_ROOT", checkout)
+    dest = HoloWorkspace.default_dest()
+    assert dest == home.resolve()
+    assert dest != checkout.resolve()
+
+
+def test_next_steps_clones_only_missing_fork(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _clear_holo_path_env(monkeypatch)
+    dest = tmp_path / "ext"
+    dest.mkdir()
+    agent = dest / "HoloAgent"
+    agent.mkdir()
+    (agent / "README.md").write_text("# HoloAgent\n")
+
+    assert HoloWorkspace.run(["--dest", str(dest), "next-steps"]) == 0
+    out = capsys.readouterr().out
+    agent_cmd = HoloWorkspace.clone_commands(dest, repos=(HoloWorkspace.HOLOAGENT,))[0]
+    motion_cmd = HoloWorkspace.clone_commands(dest, repos=(HoloWorkspace.HOLOMOTION,))[0]
+    assert motion_cmd in out
+    assert agent_cmd not in out
+
+
+def test_g1_sim_demo_notes_match_default_mcp_model() -> None:
+    demos = {demo.name: demo for demo in HoloWorkspace.dimos_demo_commands()}
+    notes = demos["g1-agentic-sim"].notes
+    assert "gpt-5.6-luna" in notes
+    assert "GPT-4o" not in notes
+    assert HoloWorkspace.format_list_demos().count("gpt-5.6-luna") >= 1

@@ -193,7 +193,7 @@ dimos run unitree-go2
 
 Usable agent → robot path on this fork. Reuse the shipped blueprints; do not start from a parallel stack.
 
-**Prerequisites:** `uv` + Python 3.12, `uv sync --extra all` (add the `sim` extra for MuJoCo), `OPENAI_API_KEY` for the default GPT-4o agent. Replay uses `--replay`. Simulation uses `--simulation`. Hardware uses `--robot-ip` (placeholder `192.168.123.161` — replace it). Full agent CLI: [AGENTS.md](AGENTS.md).
+**Prerequisites:** `uv` + Python 3.12, `uv sync --extra all` (includes `sim` for MuJoCo), `OPENAI_API_KEY` for the default `gpt-5.6-luna` agent. Replay uses `--replay`. Simulation uses `--simulation`. Hardware uses `--robot-ip` (placeholder `192.168.123.161` — replace it). Full agent CLI: [AGENTS.md](AGENTS.md).
 
 ```bash
 # List runnable blueprints
@@ -230,7 +230,7 @@ uv run python scripts/holo_bridge.py list-demos
 
 | Blueprint | Robot | Mode | Notes |
 |-----------|-------|------|-------|
-| `unitree-go2-agentic` | Go2 | `--replay` or `--robot-ip` | GPT-4o + `@skill` + MCP (`McpServer` / `McpClient`) |
+| `unitree-go2-agentic` | Go2 | `--replay` or `--robot-ip` | `gpt-5.6-luna` + `@skill` + MCP (`McpServer` / `McpClient`) |
 | `unitree-g1-agentic-sim` | G1 | `--simulation` | MuJoCo + G1 system prompt |
 | `unitree-g1-agentic` | G1 | `--robot-ip` | Same skills on hardware |
 
@@ -255,7 +255,7 @@ How the stacks fit together, plus Holo build/run pointers: [docs/usage/holo_inte
 | `dimos run unitree-go2-agentic --robot-ip 192.168.123.161` | Same Go2 agent on hardware (replace IP) |
 | `dimos --replay --replay-db go2_bigoffice run unitree-go2-memory` | Quadruped temporal memory replay |
 | `dimos --simulation run unitree-go2-agentic` | Quadruped agentic + MCP server in simulation |
-| `dimos --simulation run unitree-g1-agentic-sim` | G1 humanoid + GPT-4o agent + skills in MuJoCo |
+| `dimos --simulation run unitree-g1-agentic-sim` | G1 humanoid + `gpt-5.6-luna` agent + skills in MuJoCo |
 | `dimos run unitree-g1-agentic --robot-ip 192.168.123.161` | G1 agent on hardware (replace IP) |
 | `dimos --simulation run unitree-g1-sim` | Humanoid in MuJoCo simulation |
 | `dimos --replay run drone-basic` | Drone video + telemetry replay |

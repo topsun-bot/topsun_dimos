@@ -26,6 +26,7 @@ import argparse
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import shlex
 import sys
 
 from dimos.constants import DIMOS_PROJECT_ROOT
@@ -85,16 +86,18 @@ class HoloWorkspace:
 
     @staticmethod
     def default_dest() -> Path:
-        """Sibling of this checkout, or the repo root if the parent is ``/``.
+        """Parent of this checkout (sibling clone dest), unless that parent is ``/``.
 
         Override with ``HOLO_WORKSPACE``. Cloud / container checkouts often live
-        at ``/workspace``; cloning into ``/`` is never useful.
+        at ``/workspace``; cloning into ``/`` is never useful. A checkout
+        directly under ``$HOME`` still uses home as the sibling dest
+        (``~/HoloAgent``, ``~/HoloMotion``).
         """
         override = os.environ.get("HOLO_WORKSPACE")
         if override:
             return Path(override).expanduser().resolve()
         parent = DIMOS_PROJECT_ROOT.parent.resolve()
-        if parent in {Path("/"), Path.home()}:
+        if parent == Path("/"):
             return DIMOS_PROJECT_ROOT.resolve()
         return parent
 
@@ -119,7 +122,10 @@ class HoloWorkspace:
             DemoCommand(
                 name="g1-agentic-sim",
                 command="dimos --simulation run unitree-g1-agentic-sim",
-                notes="G1 MuJoCo sim + GPT-4o (G1 prompt) + skills. Needs OPENAI_API_KEY.",
+                notes=(
+                    "G1 MuJoCo sim + gpt-5.6-luna (G1 prompt) + skills. "
+                    "Needs OPENAI_API_KEY."
+                ),
             ),
             DemoCommand(
                 name="g1-agentic-hardware",
@@ -175,11 +181,16 @@ class HoloWorkspace:
         return tuple(rows)
 
     @staticmethod
-    def clone_commands(dest: Path) -> tuple[str, ...]:
+    def clone_commands(
+        dest: Path, repos: tuple[ExternalRepo, ...] | None = None
+    ) -> tuple[str, ...]:
+        selected = HoloWorkspace.REPOS if repos is None else repos
         commands: list[str] = []
-        for repo in HoloWorkspace.REPOS:
+        for repo in selected:
             path = HoloWorkspace.resolve_repo_path(repo, dest)
-            commands.append(f"git clone {repo.url}.git {path}")
+            commands.append(
+                f"git clone {shlex.quote(f'{repo.url}.git')} {shlex.quote(str(path))}"
+            )
         return tuple(commands)
 
     @staticmethod
@@ -243,7 +254,12 @@ class HoloWorkspace:
         ]
         if missing:
             lines.append("3. Clone the missing forks:")
-            lines.extend(f"   {cmd}" for cmd in HoloWorkspace.clone_commands(dest))
+            lines.extend(
+                f"   {cmd}"
+                for cmd in HoloWorkspace.clone_commands(
+                    dest, repos=tuple(row.repo for row in missing)
+                )
+            )
         else:
             lines.append("3. Both forks are present. Next:")
         lines.extend(
