@@ -515,6 +515,32 @@ Deno.test("a robot that declared no manifest accepts any sub", () => {
   assertEquals(viewer.replies.filter((m) => m.t === "error"), []);
 });
 
+Deno.test("an explicitly empty manifest rejects every undeclared sub", () => {
+  // Zero advertised channels is still an allowlist: not the same as
+  // manifest-less (transport tests). Mystery subs must not enter viewer
+  // state or the robot's active-channel snapshot.
+  const reg = new Registry();
+  const robot = new FakeRobot("r1", [], { version: 1, channels: [] });
+  reg.registerRobot(robot);
+  const viewer = attach(reg, "r1", ["mystery"]);
+  assertEquals((viewer.replies.at(-1) as { code: string }).code, "unknown_channel");
+  assertEquals(viewer.subs.size, 0);
+  assertEquals(robot.lastSubs().chs, []);
+});
+
+Deno.test("an explicitly empty manifest drops surviving viewer subs from snapshots", () => {
+  const reg = new Registry();
+  const first = new FakeRobot("r1", SPECS, { version: 1, channels: ["odom"] });
+  reg.registerRobot(first);
+  attach(reg, "r1", ["odom"]);
+  assertEquals(first.lastSubs().chs, ["odom"]);
+
+  const empty = new FakeRobot("r1", [], { version: 1, channels: [] });
+  reg.robotClosed(first);
+  reg.registerRobot(empty);
+  assertEquals(empty.lastSubs().chs, []);
+});
+
 Deno.test("sub to a reserved @-channel is rejected even without a manifest", () => {
   // @-ids are protocol control; they must never enter subs or snapshots.
   const reg = new Registry();

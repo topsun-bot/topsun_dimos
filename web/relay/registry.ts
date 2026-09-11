@@ -94,6 +94,19 @@ function disposePolicies(viewer: ViewerPeer): void {
   viewer.policies.clear();
 }
 
+/** Viewer-sub allowlist: an explicit manifest (even with zero channels) or a
+ * non-empty spec map. Only a missing manifest with no specs is manifest-less
+ * and accepts any sub (transport tests). */
+class ChannelAllowlist {
+  static enforced(peer: RobotPeer, specs: Map<string, ChannelSpec>): boolean {
+    return peer.manifest !== null || specs.size > 0;
+  }
+
+  static allows(peer: RobotPeer, specs: Map<string, ChannelSpec>, ch: string): boolean {
+    return !ChannelAllowlist.enforced(peer, specs) || specs.has(ch);
+  }
+}
+
 interface ChannelInStats {
   delivery: Delivery;
   framesIn: number;
@@ -380,7 +393,7 @@ export class Registry {
             reply({ t: "error", code: "unknown_robot", message: `no robot ${viewer.watched}` });
             break;
           }
-          if (entry.specs.size > 0 && !entry.specs.has(msg.ch)) {
+          if (!ChannelAllowlist.allows(entry.peer, entry.specs, msg.ch)) {
             reply({
               t: "error",
               code: "unknown_channel",
@@ -794,14 +807,14 @@ export class Registry {
   }
 
   /** Sorted union of the subs of every viewer watching `robotId`, kept to
-   * the current manifest when one was declared (a reconnect can shrink the
+   * the current allowlist when one was declared (a reconnect can shrink the
    * manifest under surviving subs). */
-  #activeChs(robotId: string, specs: Map<string, ChannelSpec>): string[] {
+  #activeChs(robotId: string, entry: RobotEntry): string[] {
     const chs = new Set<string>();
     for (const viewer of this.#viewers) {
       if (viewer.watched !== robotId) continue;
       for (const ch of viewer.subs) {
-        if (specs.size === 0 || specs.has(ch)) chs.add(ch);
+        if (ChannelAllowlist.allows(entry.peer, entry.specs, ch)) chs.add(ch);
       }
     }
     return [...chs].sort();
@@ -815,7 +828,7 @@ export class Registry {
   #syncSubs(robotId: string, force = false): void {
     const entry = this.#robots.get(robotId);
     if (entry === undefined) return;
-    const chs = this.#activeChs(robotId, entry.specs);
+    const chs = this.#activeChs(robotId, entry);
     if (!force && chs.join("\n") === entry.lastChs.join("\n")) return;
     entry.lastChs = chs;
     entry.peer.sendControl({ t: "subs", chs, n: ++entry.n });
