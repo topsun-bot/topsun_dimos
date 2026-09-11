@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from dimos.agents.skills.navigation import NavigationSkillContainer
+from dimos.agents.skills.observe_skill import ObserveSkill
 from dimos.agents.skills.orbit_object import OrbitObjectSkillContainer
 from dimos.agents.skills.person_follow import PersonFollowSkillContainer
 from dimos.agents.skills.speak_skill import SpeakSkill
@@ -24,11 +25,10 @@ from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 
 _common_agentic = autoconnect(
     NavigationSkillContainer.blueprint(),
+    ObserveSkill.blueprint(),
     PersonFollowSkillContainer.blueprint(camera_info=GO2Connection.camera_info_static),
     UnitreeSkillContainer.blueprint(),
     OrbitObjectSkillContainer.blueprint(),
     WebInput.blueprint(),
     SpeakSkill.blueprint(),
 )
-
-__all__ = ["_common_agentic"]

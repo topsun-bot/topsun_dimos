@@ -20,7 +20,7 @@ from dimos_lcm.std_msgs import Bool as LcmBool  # type: ignore[import-untyped]
 
 from dimos.core.core import rpc
 from dimos.core.stream import In
-from dimos.memory2.module import Recorder, RecorderConfig
+from dimos.memory.module import Recorder, RecorderConfig
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Odometry import Odometry

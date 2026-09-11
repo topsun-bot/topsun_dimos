@@ -65,9 +65,7 @@ def amplify_pcm16(pcm: bytes, gain: float) -> bytes:
     return scaled.astype(np.int16).tobytes()
 
 
-def float_audio_to_g1_pcm(
-    audio: np.ndarray, sample_rate: int, *, pcm_gain: float = 1.0
-) -> bytes:
+def float_audio_to_g1_pcm(audio: np.ndarray, sample_rate: int, *, pcm_gain: float = 1.0) -> bytes:
     """Convert float32 mono audio to 16 kHz mono PCM16 bytes for ``PlayStream``."""
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
@@ -128,14 +126,3 @@ def play_float_audio_on_g1(
 ) -> float:
     pcm = float_audio_to_g1_pcm(audio, sample_rate)
     return play_pcm_on_g1(audio_client, pcm, stream_id=stream_id)
-
-
-__all__ = [
-    "G1_SPEECH_SAMPLE_RATE",
-    "amplify_pcm16",
-    "float_audio_to_g1_pcm",
-    "pcm_bytes_to_seconds",
-    "play_float_audio_on_g1",
-    "play_pcm_on_g1",
-    "stop_g1_playback",
-]

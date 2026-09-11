@@ -24,8 +24,6 @@ from typing import Any
 
 from dimos_lcm.std_msgs import Bool  # type: ignore[import-untyped]
 import numpy as np
-import open3d as o3d  # type: ignore[import-untyped]
-import open3d.core as o3c  # type: ignore[import-untyped]
 from reactivex.disposable import Disposable
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
@@ -36,6 +34,7 @@ from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.navigation.nav_stack.frames import FRAME_BODY, FRAME_MAP, FRAME_SENSOR
 from dimos.utils.logging_config import setup_logger
 
@@ -326,6 +325,7 @@ class SimplePlanner(Module):
     terrain_map: In[PointCloud2]
     goal: In[PointStamped]
     stop_movement: In[Bool]
+    tf: In[TFMessage]
     way_point: Out[PointStamped]
     goal_path: Out[Path]
     costmap_cloud: Out[PointCloud2]
@@ -373,6 +373,9 @@ class SimplePlanner(Module):
     @rpc
     def start(self) -> None:
         super().start()
+        # Subscribe the buffer before the first pose query so cold-start misses
+        # do not arm a full TF warning flood.
+        self.tfbuffer  # noqa: B018
         self.register_disposable(Disposable(self.goal.subscribe(self._on_goal)))
         self.register_disposable(Disposable(self.stop_movement.subscribe(self._on_stop_movement)))
         self.register_disposable(
@@ -416,12 +419,14 @@ class SimplePlanner(Module):
 
         Returns True if a pose was obtained from any chain.
         """
-        tf = resolve_tf_chain(self.tf, list(self._tf_pose_queries))
+        tf = resolve_tf_chain(self.tfbuffer, list(self._tf_pose_queries))
         if tf is None:
             now = time.monotonic()
             if now - self._last_tf_warn > _TF_WARN_THROTTLE:
                 self._last_tf_warn = now
-                buffers = list(self.tf.buffers.keys()) if hasattr(self.tf, "buffers") else []
+                buffers = (
+                    list(self.tfbuffer.buffers.keys()) if hasattr(self.tfbuffer, "buffers") else []
+                )
                 logger.warning(
                     "TF lookup failed — no robot pose available",
                     tried=[(p, c) for p, c in self._tf_pose_queries],
@@ -632,6 +637,9 @@ class SimplePlanner(Module):
         Per-point colors: red for true obstacles (cells whose recorded height
         clears ``obstacle_height``), orange for inflation padding around them.
         """
+        import open3d as o3d  # type: ignore[import-untyped]
+        import open3d.core as o3c  # type: ignore[import-untyped]
+
         if now - self._last_costmap_pub < _COSTMAP_PUBLISH_PERIOD:
             return
         self._last_costmap_pub = now

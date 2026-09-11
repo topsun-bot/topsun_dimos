@@ -12,14 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterator
 import time
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from langchain_core.messages import HumanMessage
 import numpy as np
 import pytest
 
+from dimos.agents.skills import navigation as navigation_module
 from dimos.agents.skills.navigation import MemoryBlindspotVisitState, NavigationSkillContainer
 from dimos.core.core import rpc
 from dimos.core.module import Module
@@ -224,10 +227,24 @@ class MockedSemanticNavSkill(NavigationSkillContainer):
         return f"Successfuly arrived at '{query}'"
 
 
+_open_nav_containers: list[NavigationSkillContainer] = []
+
+
 def _nav_container() -> NavigationSkillContainer:
-    nav = object.__new__(NavigationSkillContainer)
+    with patch.object(navigation_module, "_create_vl_model", return_value=SimpleNamespace()):
+        nav = NavigationSkillContainer()
     nav._skill_started = True
+    _open_nav_containers.append(nav)
     return nav
+
+
+@pytest.fixture(autouse=True)
+def _close_nav_containers() -> Iterator[None]:
+    try:
+        yield
+    finally:
+        while _open_nav_containers:
+            _open_nav_containers.pop()._close_module()
 
 
 class _FakeNavigation:
@@ -340,7 +357,7 @@ def test_explore_memory_blindspot_sends_goal_from_costmap() -> None:
     nav._latest_odom = _pose(5.0, 5.0)
     nav._latest_global_costmap = _free_costmap()
     nav._navigation = _FakeNavigation()
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
 
     result = nav.explore_memory_blindspot(search_radius_m=2.0, coverage_radius_m=0.75)
 
@@ -373,7 +390,7 @@ def test_patrol_memory_blindspots_stops_after_max_goals(monkeypatch: pytest.Monk
     nav._latest_odom = _pose(5.0, 5.0)
     nav._latest_global_costmap = _free_costmap()
     nav._navigation = _FakeNavigation()
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
     nav._memory_blindspot_patrol_stop = False
     monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
 
@@ -403,7 +420,7 @@ def test_patrol_memory_blindspots_caps_goal_wait_to_remaining_duration(
     nav._latest_odom = _pose(0.0, 0.0)
     nav._latest_global_costmap = _free_costmap()
     nav._navigation = _FakeNavigation()
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
     nav._memory_blindspot_patrol_stop = False
     captured_timeouts: list[float] = []
 
@@ -474,7 +491,7 @@ def test_patrol_memory_blindspots_blacklists_rejected_goal(
     }
     nav._latest_odom = _pose(0.0, 0.0)
     nav._latest_global_costmap = _free_costmap()
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
     nav._memory_blindspot_patrol_stop = False
     monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
 
@@ -522,7 +539,7 @@ def test_patrol_memory_blindspots_blacklists_stuck_goal(
     nav._latest_odom = _pose(0.0, 0.0)
     nav._latest_global_costmap = _free_costmap()
     nav._navigation = _FakeNavigation()
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
     nav._memory_blindspot_patrol_stop = False
     monkeypatch.setattr("dimos.agents.skills.navigation.time.sleep", lambda seconds: None)
     wait_statuses = ["stuck", "reached", "reached"]
@@ -561,7 +578,7 @@ def test_blindspot_goal_rejects_occupied_cells() -> None:
     grid[9:12, 9:12] = CostValues.OCCUPIED
     nav._latest_odom = _pose(5.0, 5.0)
     nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
 
     target = nav._find_nearest_memory_blindspot(search_radius_m=2.0, coverage_radius_m=0.5)
 
@@ -576,7 +593,7 @@ def test_blindspot_region_prefers_deep_corridor_goal() -> None:
     grid[2:5, 1:20] = CostValues.FREE
     nav._latest_odom = _pose(1.0, 1.5)
     nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
 
     target = nav._find_nearest_memory_blindspot(
         search_radius_m=6.0,
@@ -627,7 +644,7 @@ def test_region_failure_penalty_matches_stable_fingerprint() -> None:
     grid = np.zeros((11, 11), dtype=np.int8)
     nav._latest_odom = _pose(0.0, 0.0)
     nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
 
     first = nav._find_nearest_memory_blindspot(search_radius_m=3.0, coverage_radius_m=0.5)
     assert first is not None
@@ -661,7 +678,7 @@ def test_region_failure_attempt_limit_skips_cooldown_region() -> None:
     grid = np.zeros((11, 11), dtype=np.int8)
     nav._latest_odom = _pose(0.0, 0.0)
     nav._latest_global_costmap = OccupancyGrid(grid=grid, resolution=0.5, frame_id="map")
-    nav._spatial_memory = SimpleNamespace(get_memory_locations=lambda: [])
+    nav._spatial_memory = SimpleNamespace(get_memory_locations=list)
 
     first = nav._find_nearest_memory_blindspot(search_radius_m=3.0, coverage_radius_m=0.5)
     assert first is not None

@@ -1,8 +1,8 @@
 > （opus开发）
 
-# G1 Orin 导览迎宾 — 开发记录与代码清单
+# G1 Orin 导览迎宾 - 开发记录与代码清单
 
-本文件记录依据 [`greeter_onboard.md`](./greeter_onboard.md) 完成的「G1 Orin 导览迎宾」（任务 4，阶段 A–E）的全部实现内容、新增/修改的代码，以及离线自测结果与真机待验证项。**未提交 git**。
+本文件记录依据 [`greeter_onboard.md`](/docs/platforms/humanoid/g1/greeter_onboard.md) 完成的「G1 Orin 导览迎宾」（任务 4，阶段 A–E）的全部实现内容、新增/修改的代码，以及离线自测结果与真机待验证项。**未提交 git**。
 
 ---
 
@@ -177,7 +177,7 @@ class GreeterLandmarkStore:
 
 纯函数（可单测）：
 
-```python
+```python skip
 def parse_synonyms(raw: str) -> tuple[str, ...]: ...          # 逗号/顿号/空格分隔去重
 def is_guide_request(text: str, guide_keywords: tuple[str, ...]) -> bool: ...  # 带路 vs 问路
 def distance_2d(ax, ay, bx, by) -> float: ...
@@ -186,7 +186,7 @@ def within_arrival(px, py, landmark, threshold_m) -> bool: ...  # 平面到站�
 
 `GreeterTourSkillContainer(Module)`：
 
-```python
+```python skip
 class GreeterTourSkillConfig(ModuleConfig):
     store_path: str = ""                 # 空 → ~/.local/state/dimos/greeter_landmarks.json
     arrival_threshold_m: float = 0.8
@@ -242,11 +242,11 @@ class TourGuideSpec(Spec, Protocol):
 
 ## 4. 修改代码
 
-### 4.1 `dds_sdk.py` — DDS 手势/全身舞（阶段 B）
+### 4.1 `dds_sdk.py` - DDS 手势/全身舞（阶段 B）
 
 `G1HighLevelDdsSdk.publish_request` 原先只支持 loco 的 7101/7105，手臂命令（7106）落到 `unsupported_api`。改为：`start()` 初始化 `G1ArmActionClient`，`publish_request` 在 `topic == rt/api/arm/request` 时分派到 arm 服务。
 
-```python
+```python skip
 # import
 from unitree_sdk2py.g1.arm.g1_arm_action_client import G1ArmActionClient  # type: ignore[import-not-found]
 
@@ -286,11 +286,11 @@ def _handle_arm_request(self, api_id, parameter):
 
 `G1ArmActionClient.action_map` 的动作 ID 与仓库 `ARM_COMMANDS` 完全一致（HighWave=26、Clap=17、ArmHeart=20…），故 `greet_guest` / `execute_arm_command` / `perform_dance` 在 DDS 下直接可用。
 
-### 4.2 `greeter_intent_router.py` — 可选导览转发（阶段 C/D）
+### 4.2 `greeter_intent_router.py` - 可选导览转发（阶段 C/D）
 
 新增可选 `_tour` 注入与一个分支；`_tour=None`（笔记本三蓝图）时行为完全不变。
 
-```python
+```python skip
 from dimos.robot.unitree.g1.greeter_tour_skill_spec import TourGuideSpec
 
 class GreeterIntentRouter(Module):
@@ -328,9 +328,9 @@ class GreeterIntentRouter(Module):
         threading.Thread(target=_run, name="greeter-tour-query", daemon=True).start()
 ```
 
-### 4.3 `_greeter_stack.py` — 类型注解收紧
+### 4.3 `_greeter_stack.py` - 类型注解收紧
 
-```python
+```python skip
 from dimos.core.module import ModuleBase
 from dimos.spec.utils import Spec
 
@@ -416,16 +416,16 @@ GREETER_REMAPPINGS: list[
 
 ## 9. deepseek 审查
 
-> 审查时间：2026-06-12  
+> 审查时间：2026-06-12
 > 审查范围：全部新增/修改的 20+ 文件（见 git status），包括 4 个新增蓝图、greeter 模块链、TTS 缓存、VAD/PTT 语音输入、DDS 手臂控制、tell CLI 修复、SOCKS 代理处理。
 
-### 9.1 🔴 严重 — `speak_skill.py:_play_cached_audio()` 缓存播放阻塞失效
+### 9.1 🔴 严重 - `speak_skill.py:_play_cached_audio()` 缓存播放阻塞失效
 
 **文件:** `dimos/agents/skills/speak_skill.py:175-179`
 
 **问题:** 缓存 TTS 播放使用 `sd.play()` + `time.sleep(0.3)` 作为"阻塞等待"，但 `sd.play()` 默认非阻塞，`time.sleep(0.3)` 远短于任意语音（最短问候语也在 1~2 秒）。
 
-```python
+```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
@@ -441,7 +441,7 @@ def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
 - `_run_greeting_shortcut()` → `greet_guest(welcome_template)` 内部 `_speak_skill.speak(text, blocking=True)` 提前返回 → 挥手在欢迎词没说完时启动。
 
 **修复建议:**
-```python
+```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
@@ -454,21 +454,21 @@ def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
 
 ---
 
-### 9.2 🟡 中等 — `_audio_lock` 在缓存路径下锁覆盖不足，可能音频重叠
+### 9.2 🟡 中等 - `_audio_lock` 在缓存路径下锁覆盖不足，可能音频重叠
 
 **文件:** `dimos/agents/skills/speak_skill.py`
 
-`_speak_blocking()` 持有 `self._audio_lock`，但缓存路径 `_play_cached_audio()` 在 0.3s 后释放锁返回。此时第二个 `speak()` 调用可能获取锁并开始播放新音频——而第一个 `sd.play()` 的音频仍在硬件上播放。两个音频流**重叠输出**，客人听到混杂语音。
+`_speak_blocking()` 持有 `self._audio_lock`，但缓存路径 `_play_cached_audio()` 在 0.3s 后释放锁返回。此时第二个 `speak()` 调用可能获取锁并开始播放新音频 -  - 而第一个 `sd.play()` 的音频仍在硬件上播放。两个音频流**重叠输出**，客人听到混杂语音。
 
 **根因:** `_audio_lock` 的保护范围与 `sd.play()` 异步播放生命周期不匹配。修完 9.1 后此问题自然消失（因锁持有时间 = 实际播放时长）。
 
 ---
 
-### 9.3 🟡 中等 — 手臂 API 常量在 `greeter_skill.py` 与 `dds_sdk.py` 重复定义
+### 9.3 🟡 中等 - 手臂 API 常量在 `greeter_skill.py` 与 `dds_sdk.py` 重复定义
 
 **文件:** `dimos/robot/unitree/g1/greeter_skill.py:44-46` 与 `dimos/robot/unitree/g1/effectors/high_level/dds_sdk.py:68-70`
 
-```python
+```python skip
 # greeter_skill.py (WebRTC 路径)
 _ARM_GET_ACTION_LIST_API_ID = 7107
 _ARM_EXECUTE_CUSTOM_ACTION_API_ID = 7108
@@ -486,7 +486,7 @@ _ARM_STOP_CUSTOM_ACTION_API_ID = 7113
 
 ---
 
-### 9.4 🟡 中等 — `node_key_recorder.py` 输入监听启动时机变更，其他调用方可能受影响
+### 9.4 🟡 中等 - `node_key_recorder.py` 输入监听启动时机变更，其他调用方可能受影响
 
 **文件:** `dimos/stream/audio/node_key_recorder.py`
 
@@ -498,11 +498,11 @@ _ARM_STOP_CUSTOM_ACTION_API_ID = 7113
 
 ---
 
-### 9.5 🟢 低 — 非 PTT 模式下 stdin 不可读时静默失败
+### 9.5 🟢 低 - 非 PTT 模式下 stdin 不可读时静默失败
 
 **文件:** `dimos/stream/audio/node_key_recorder.py:109-115`
 
-```python
+```python skip
 if not sys.stdin.isatty():
     logger.error(
         "KeyRecorder 无法读取终端键盘(模块在 worker 子进程运行)。"
@@ -517,7 +517,7 @@ if not sys.stdin.isatty():
 
 ---
 
-### 9.6 🟢 低 — `greeter_tour_skill.py:tag_location()` 不检查机器人是否静止
+### 9.6 🟢 低 - `greeter_tour_skill.py:tag_location()` 不检查机器人是否静止
 
 **文件:** `dimos/robot/unitree/g1/greeter_tour_skill.py:172-206`
 
@@ -527,36 +527,36 @@ if not sys.stdin.isatty():
 
 ---
 
-### 9.7 🟢 低 — PGO 回环跳变可能跳过到站阈值
+### 9.7 🟢 低 - PGO 回环跳变可能跳过到站阈值
 
 **文件:** `dimos/robot/unitree/g1/greeter_tour_skill.py:143-153`
 
-`_on_odom()` 每帧检查 `within_arrival(current_pose, pending, threshold_m)`。如果 PGO 回环修正导致里程计位姿跳变（例如从距目标 0.5m 瞬间跳到 10m），`_pending` 已被清为 None（已在某帧锁定），arrival 事件永远不会触发——机器人继续走向旧的 goal，永不播讲解词。
+`_on_odom()` 每帧检查 `within_arrival(current_pose, pending, threshold_m)`。如果 PGO 回环修正导致里程计位姿跳变（例如从距目标 0.5m 瞬间跳到 10m），`_pending` 已被清为 None（已在某帧锁定），arrival 事件永远不会触发 -  - 机器人继续走向旧的 goal，永不播讲解词。
 
 **已在文档 §7 列为已知待验证项**，但代码层面可加防御：超时机制（超过 N 秒未到站则强制播报）、或对 PGO 跳变幅度做限幅滤波。
 
 ---
 
-### 9.8 🟢 低 — LLM 开启后 system prompt 与 onboard 蓝图能力不一致
+### 9.8 🟢 低 - LLM 开启后 system prompt 与 onboard 蓝图能力不一致
 
 **文件:** `dimos/robot/unitree/g1/greeter_system_prompt.py:26`
 
-```python
+```python skip
 # 最高优先级:不可移动
 你处于"原地迎宾"模式,无法行走、转身或导航,也没有任何移动/导航技能...
 ```
 
-该 prompt 由 `_greeter_stack.py:MCP_CLIENT_KWARGS` 注入所有 4 个 greeter 蓝图。当前 `llm_enabled=False` 不实际发送给 LLM，但一旦恢复 `llm_enabled=True`，**onboard 蓝图**（有完整导航能力）的 LLM 会被告知"不可移动"——LLM 将拒绝一切导航请求，与蓝图实际能力矛盾。
+该 prompt 由 `_greeter_stack.py:MCP_CLIENT_KWARGS` 注入所有 4 个 greeter 蓝图。当前 `llm_enabled=False` 不实际发送给 LLM，但一旦恢复 `llm_enabled=True`，**onboard 蓝图**（有完整导航能力）的 LLM 会被告知"不可移动" -  - LLM 将拒绝一切导航请求，与蓝图实际能力矛盾。
 
 **建议:** 拆分为两个 prompt 变量（`GREETER_SYSTEM_PROMPT_STATIONARY` / `GREETER_SYSTEM_PROMPT_MOBILE`），或在 blueprint 层按蓝图名选择 prompt。
 
 ---
 
-### 9.9 🟢 低 — ruff I001（import 排序）在 2 个文件
+### 9.9 🟢 低 - ruff I001（import 排序）在 2 个文件
 
 **文件:**
-- `dimos/agents/voice_input.py:39` — 第三方 import `sounddevice` 插在 dimos 导入中间
-- `dimos/stream/audio/node_key_recorder.py:16` — 标准库/第三方/dimos 导入顺序混乱
+- `dimos/agents/voice_input.py:39` - 第三方 import `sounddevice` 插在 dimos 导入中间
+- `dimos/stream/audio/node_key_recorder.py:16` - 标准库/第三方/dimos 导入顺序混乱
 
 **修复:** `uv run ruff check --fix <file>` 即可自动修复。两个文件都有 `# type: ignore[import-untyped]` 注释，需确认自动修复后注释仍在正确行。
 
@@ -568,7 +568,7 @@ if not sys.stdin.isatty():
 
 | 项目 | 结论 |
 |------|------|
-| `test_greeter_prompt.py` — 手势名同步守卫测试 | ✅ 自动化保障 prompt 与 ARM_COMMANDS 一致性，设计好 |
+| `test_greeter_prompt.py` - 手势名同步守卫测试 | ✅ 自动化保障 prompt 与 ARM_COMMANDS 一致性，设计好 |
 | `tell.py` idle/busy 状态机修复（清队列+saw_busy） | ✅ 解决了 `dimos tell` 提前返回的竞态条件 |
 | `mcp_client.py` 异常处理（空消息丢弃、process 错误兜底） | ✅ 防御性编程到位 |
 | `VadVoiceInput` agent_idle gating + cooldown timer | ✅ 防止自问自答的逻辑正确，timer 取消也正确 |
@@ -597,7 +597,7 @@ if not sys.stdin.isatty():
 
 ## 10. （opus开发）针对审查的处理
 
-> 处理时间：2026-06-12  
+> 处理时间：2026-06-12
 > 逐条核对 §9 的审查项，**确定有问题的已修复并验证**；**存疑/不修的记录原因**。
 
 ### 10.1 已修复（确定问题）
@@ -626,7 +626,7 @@ shared arm const import 校验                                        → 7107/7
 | **9.5 🟢 非 PTT stdin 不可读静默失败** | **暂不修** | 已有 `logger.error(...)` 明确提示「用 ptt_topic 蓝图或 hands-free」。Orin 版用 `VadVoiceInput`（免提，不走 KeyRecorder PTT），不触及该路径；再加二次告警价值有限。 |
 | **9.6 🟢 tag_location 不检查机器人静止** | **暂不修（记为真机增强）** | 属精度增强而非缺陷。标点是工作人员手动、低频操作，通常机器人已停稳。「最近 N 帧方差判静止」需真机数据调参，留待真机阶段评估。 |
 | **9.7 🟢 PGO 回环跳变可能跳过到站阈值** | **暂不修（已列真机待验证）** | 已在文档 §7 列为已知项。代码层防御（超时强制播报）在无真机时无法验证阈值，且"强制播报"可能在错误位置播讲解词，反而更糟；倾向真机实测后再决定加超时/限幅。 |
-| **9.8 🟢 LLM prompt 与 onboard 能力不一致** | **暂不修（当前不触发）** | onboard 蓝图 `llm_enabled=False`，prompt 不发给 LLM；且文档 §11「禁止事项」明确要求 onboard **不得**启用 LLM。仅当未来违规启用时才需拆分 `_STATIONARY`/`_MOBILE` 两个 prompt——届时再做。已在此记录为前置条件。 |
+| **9.8 🟢 LLM prompt 与 onboard 能力不一致** | **暂不修（当前不触发）** | onboard 蓝图 `llm_enabled=False`，prompt 不发给 LLM；且文档 §11「禁止事项」明确要求 onboard **不得**启用 LLM。仅当未来违规启用时才需拆分 `_STATIONARY`/`_MOBILE` 两个 prompt -  - 届时再做。已在此记录为前置条件。 |
 
 ### 10.3 小结
 
@@ -638,20 +638,20 @@ shared arm const import 校验                                        → 7107/7
 
 ## 11. deepseek 二次审查（修复后验证）
 
-> 审查时间：2026-06-12  
+> 审查时间：2026-06-12
 > 范围：§10 中 4 项代码修复的逐条验证 + 全量回归。
 
 ### 11.1 修复验证
 
-#### 9.1 🔴 `_play_cached_audio()` — `time.sleep(0.3)` → `sd.wait()`
+#### 9.1 🔴 `_play_cached_audio()` - `time.sleep(0.3)` → `sd.wait()`
 
 **验证文件:** `dimos/agents/skills/speak_skill.py:181-190`
 
-```python
+```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd  # type: ignore[import-untyped]
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
-    # Block until playback actually finishes — sd.play() is non-blocking, so a
+    # Block until playback actually finishes - sd.play() is non-blocking, so a
     # fixed sleep would return mid-utterance and let a follow-up gesture/speak
     # overlap the audio (and breaks the _audio_lock's serialization guarantee).
     sd.wait()
@@ -674,7 +674,7 @@ def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
 
 **验证文件:** `dimos/robot/unitree/g1/effectors/high_level/commands.py:26-31`
 
-```python
+```python skip
 # G1 arm action service api_ids (see unitree_sdk2 g1_arm_action_api.hpp).
 # Defined here so the WebRTC (greeter_skill.py) and DDS (dds_sdk.py) paths share
 # a single source of truth.
@@ -693,8 +693,8 @@ ARM_STOP_CUSTOM_ACTION_API_ID = 7113
 #### 9.9 🟢 ruff I001 import 排序
 
 **验证文件:**
-- `dimos/agents/voice_input.py:27-50` — 顺序：`__future__` → stdlib → TYPE_CHECKING → reactivex → sounddevice → dimos ✅
-- `dimos/stream/audio/node_key_recorder.py:16-29` — 顺序：stdlib → numpy → reactivex → dimos ✅
+- `dimos/agents/voice_input.py:27-50` - 顺序：`__future__` → stdlib → TYPE_CHECKING → reactivex → sounddevice → dimos ✅
+- `dimos/stream/audio/node_key_recorder.py:16-29` - 顺序：stdlib → numpy → reactivex → dimos ✅
 
 ruff check 全量：`All checks passed!` ✅
 

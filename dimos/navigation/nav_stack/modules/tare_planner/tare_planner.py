@@ -40,6 +40,7 @@ class TarePlannerConfig(NativeModuleConfig):
 class TarePlanner(NativeModule):
     """TARE planner: frontier-based autonomous exploration with sensor coverage planning."""
 
+    _lcm_only_native = True
     config: TarePlannerConfig
 
     @rpc

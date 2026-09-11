@@ -35,13 +35,16 @@ unitree_g1_nav_onboard = (
         FastLio2.blueprint(
             host_ip=os.getenv("LIDAR_HOST_IP", "192.168.123.164"),
             lidar_ip=os.getenv("LIDAR_IP", "192.168.123.120"),
-            mount=G1.internal_odom_offsets["mid360_link"],
-            map_freq=1.0,
-            config="default.yaml",
+            # Upstream FastLio2 dropped yaml `config` / `mount` / `map_freq`.
+            # Sensor height remains documented on G1.internal_odom_offsets["mid360_link"].
+            sensor_frame_id="mid360_link",
         ),
         create_nav_stack(
             planner="simple",
             vehicle_height=G1.height_clearance,
+            # FastLio2 publishes in sensor_frame_id (mid360_link). PGO's
+            # default unregister_input=True would invert that cloud again.
+            pgo={"unregister_input": False},
             # Slower autonomy speed — more time for local obstacle avoidance.
             max_speed=0.4,
             far_planner={
@@ -55,7 +58,8 @@ unitree_g1_nav_onboard = (
                 "sensor_range": 40,  # meters
             },
             local_planner={
-                "paths_dir": str(G1_LOCAL_PLANNER_PRECOMPUTED_PATHS),
+                # Keep the LfsPath object — str() would pull LFS at import time.
+                "paths_dir": G1_LOCAL_PLANNER_PRECOMPUTED_PATHS,
                 "publish_free_paths": False,
                 "vehicle_width": G1.width_clearance,
                 "vehicle_length": G1.width_clearance,
@@ -94,8 +98,5 @@ unitree_g1_nav_onboard = (
             (MovementManager, "way_point", "_mgr_way_point_unused"),
         ]
     )
-    .global_config(n_workers=12, robot_model="unitree_g1")
+    .global_config(n_workers=12, robot_model="unitree_g1", transport="lcm")
 )
-
-
-__all__ = ["unitree_g1_nav_onboard"]

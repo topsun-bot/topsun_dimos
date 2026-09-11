@@ -1836,6 +1836,3 @@ class FollowMeSkillContainer(Module):
     def _stop_following_internal(self) -> None:
         if self._should_stop is not None:
             self._should_stop.set()
-
-
-__all__ = ["FollowMeConfig", "FollowMeSkillContainer"]

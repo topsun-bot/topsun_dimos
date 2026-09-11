@@ -17,13 +17,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import os
 import struct
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 import uuid
 
 import numpy as np
@@ -31,12 +32,9 @@ import numpy.typing as npt
 
 from dimos.protocol.pubsub.encoders import LCMEncoderMixin, PickleEncoderMixin
 from dimos.protocol.pubsub.impl.lcmpubsub import Topic
-from dimos.protocol.pubsub.shm.ipc_factory import CpuShmChannel
-from dimos.protocol.pubsub.spec import PubSub
+from dimos.protocol.pubsub.shm.ipc_factory import CpuShmChannel, FrameChannel
+from dimos.protocol.pubsub.spec import PubSub, SubscriptionGate
 from dimos.utils.logging_config import setup_logger
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 logger = setup_logger()
 
@@ -46,6 +44,49 @@ class SharedMemoryConfig:
     prefer: str = "auto"  # "auto" | "cpu"  (DIMOS_IPC_BACKEND overrides), TODO: "cuda"
     default_capacity: int = 3686400  # payload bytes (excludes 4-byte header)
     close_channels_on_stop: bool = True
+
+
+class ShmFanout:
+    """Per-topic fanout-thread lifecycle.
+
+    ``PubSub.unsubscribe`` may run from the fanout callback (one-shot
+    receivers). Joining that thread from itself raises ``RuntimeError``;
+    a generation bump lets a later ``subscribe`` start a new loop while
+    the old one exits after the callback returns.
+    """
+
+    @staticmethod
+    def start(
+        loop: Callable[..., None], topic: str, st: SharedMemoryPubSubBase._TopicState
+    ) -> None:
+        if st.thread is not None and st.thread.is_alive():
+            return
+        st.stop.clear()
+        generation = st.fanout_generation
+        st.thread = threading.Thread(target=loop, args=(topic, st, generation), daemon=True)
+        st.thread.start()
+
+    @staticmethod
+    def running(st: SharedMemoryPubSubBase._TopicState, generation: int) -> bool:
+        return (not st.stop.is_set()) and st.fanout_generation == generation
+
+    @staticmethod
+    def shutdown(st: SharedMemoryPubSubBase._TopicState) -> None:
+        """Stop the current fanout loop. Safe from the fanout thread itself."""
+        thread = st.thread
+        if thread is None:
+            return
+        st.stop.set()
+        st.fanout_generation += 1
+        st.thread = None
+        if thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+
+    @staticmethod
+    def stop_if_idle(st: SharedMemoryPubSubBase._TopicState) -> None:
+        if st.subs:
+            return
+        ShmFanout.shutdown(st)
 
 
 class SharedMemoryPubSubBase(PubSub[str, Any]):
@@ -61,6 +102,16 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
       - drop initial empty frame; synchronous local delivery; echo suppression
     """
 
+    # Frame-channel implementation backing each topic. Streaming keeps the
+    # default double-buffered CpuShmChannel (latest-wins); subclasses that need
+    # every message delivered (e.g. ShmRPC) override this with CpuShmQueue.
+    _channel_class: type[FrameChannel] = CpuShmChannel
+
+    # Extra keyword args passed to _channel_class(...) at construction (empty for
+    # the streaming channel; ShmRPC sets e.g. {"slots": N}). Folded into the
+    # segment name so distinct layouts never mmap over one another.
+    _channel_kwargs: dict[str, Any] = {}
+
     # Per-topic state
     # TODO: implement "is_cuda" below capacity, above cp
     class _TopicState:
@@ -69,6 +120,7 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             "channel",
             "cp",
             "dtype",
+            "fanout_generation",
             "last_local_payload",
             "last_seq",
             "publish_buffer",
@@ -85,9 +137,10 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             self.capacity = int(capacity)
             self.shape = (self.capacity + 20,)  # +20 for header: length(4) + uuid(16)
             self.dtype = np.uint8
-            self.subs: list[Callable[[bytes, str], None]] = []
+            self.subs: list[SubscriptionGate] = []
             self.stop = threading.Event()
             self.thread: threading.Thread | None = None
+            self.fanout_generation = 0
             self.last_seq = 0  # start at 0 to avoid b"" on first poll
             # TODO: implement an initializer variable for is_cuda once CUDA IPC is in
             self.cp = cp_mod
@@ -128,10 +181,7 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             for _topic, st in list(self._topics.items()):
                 # stop fanout
                 try:
-                    if st.thread:
-                        st.stop.set()
-                        st.thread.join(timeout=0.5)
-                        st.thread = None
+                    ShmFanout.shutdown(st)
                 except Exception:
                     pass
                 # close/unlink channels if configured
@@ -165,9 +215,9 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
         st.suppress_counts[message_id] += 1
 
         # Synchronous local delivery first (zero extra copies)
-        for cb in list(st.subs):
+        for gate in list(st.subs):
             try:
-                cb(payload_bytes, topic)
+                gate.dispatch(payload_bytes, topic)
             except Exception:
                 logger.warn(f"Payload couldn't be pushed to topic: {topic}")
                 pass
@@ -191,21 +241,17 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
     def subscribe(self, topic: str, callback: Callable[[bytes, str], Any]) -> Callable[[], None]:
         """Subscribe a callback(message: bytes, topic). Returns unsubscribe."""
         st = self._ensure_topic(topic)
-        st.subs.append(callback)
-        if st.thread is None:
-            st.thread = threading.Thread(target=self._fanout_loop, args=(topic, st), daemon=True)
-            st.thread.start()
+        gate = SubscriptionGate(callback)
+        st.subs.append(gate)
+        ShmFanout.start(self._fanout_loop, topic, st)
 
         def _unsub() -> None:
+            gate.kill()
             try:
-                st.subs.remove(callback)
+                st.subs.remove(gate)
             except ValueError:
                 pass
-            if not st.subs and st.thread:
-                st.stop.set()
-                st.thread.join(timeout=0.5)
-                st.thread = None
-                st.stop.clear()
+            ShmFanout.stop_if_idle(st)
 
         return _unsub
 
@@ -236,19 +282,33 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             cap = int(self.config.default_capacity)
 
             def _names_for_topic(topic: str, capacity: int) -> tuple[str, str]:
-                # Python's SharedMemory requires names without a leading '/'
-                # Use shorter digest to avoid macOS shared memory name length limits
-                h = hashlib.blake2b(f"{topic}:{capacity}".encode(), digest_size=8).hexdigest()
+                # Python's SharedMemory requires names without a leading '/'.
+                # Fold the channel class name AND its layout kwargs (e.g. slots)
+                # into the hash so two pubsubs using different layouts (streaming
+                # CpuShmChannel vs RPC CpuShmQueue, or two ring sizes) on the same
+                # topic get distinct segments rather than mmapping incompatible
+                # layouts over each other.
+                # Use a short digest to avoid macOS shared memory name length limits.
+                layout = f"{self._channel_class.__name__}:{sorted(self._channel_kwargs.items())}"
+                h = hashlib.blake2b(
+                    f"{topic}:{capacity}:{layout}".encode(), digest_size=8
+                ).hexdigest()
                 return f"psm_{h}_data", f"psm_{h}_ctrl"
 
             data_name, ctrl_name = _names_for_topic(topic, cap)
-            ch = CpuShmChannel((cap + 20,), np.uint8, data_name=data_name, ctrl_name=ctrl_name)
+            ch = self._channel_class(
+                (cap + 20,),
+                np.uint8,
+                data_name=data_name,
+                ctrl_name=ctrl_name,
+                **self._channel_kwargs,
+            )
             st = SharedMemoryPubSubBase._TopicState(ch, cap, None)
             self._topics[topic] = st
             return st
 
-    def _fanout_loop(self, topic: str, st: _TopicState) -> None:
-        while not st.stop.is_set():
+    def _fanout_loop(self, topic: str, st: _TopicState, generation: int = 0) -> None:
+        while ShmFanout.running(st, generation):
             seq, _ts_ns, view = st.channel.read(last_seq=st.last_seq, require_new=True)
             if view is None:
                 time.sleep(0.001)
@@ -286,9 +346,9 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             except Exception:
                 continue
 
-            for cb in list(st.subs):
+            for gate in list(st.subs):
                 try:
-                    cb(payload, topic)
+                    gate.dispatch(payload, topic)
                 except Exception:
                     pass
 

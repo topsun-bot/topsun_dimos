@@ -32,18 +32,13 @@ from dimos_lcm.std_msgs import Bool
 from reactivex.disposable import Disposable
 import socketio  # type: ignore[import-untyped]
 from starlette.applications import Starlette
-from starlette.responses import FileResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.routing import Route
 import uvicorn
 
-from dimos.utils.data import get_data
-
-# Path to the frontend HTML templates and command-center build
+# Path to the frontend HTML templates
 _TEMPLATES_DIR = FilePath(__file__).parent.parent / "templates"
 _DASHBOARD_HTML = _TEMPLATES_DIR / "rerun_dashboard.html"
-_COMMAND_CENTER_DIR = (
-    FilePath(__file__).parent.parent / "command-center-extension" / "dist-standalone"
-)
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
@@ -62,6 +57,7 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.utils.logging_config import setup_logger
 
 from .optimized_costmap import OptimizedCostmapEncoder
+from .vis_frontend import VisFrontend
 
 logger = setup_logger()
 
@@ -242,16 +238,11 @@ class WebsocketVisModule(Module):
             return FileResponse(_DASHBOARD_HTML, media_type="text/html")
 
         async def serve_command_center(request):  # type: ignore[no-untyped-def]
-            """Serve the command center 2D visualization (built React app)."""
-            index_file = get_data("command_center.html")
-            if index_file.exists():
-                return FileResponse(index_file, media_type="text/html")
-            else:
-                return Response(
-                    content="Command center not built. Run: cd dimos/web/command-center-extension && npm install && npm run build:standalone",
-                    status_code=503,
-                    media_type="text/plain",
-                )
+            """Serve the legacy command-center page, or a Cockpit pointer."""
+            status, html, path = VisFrontend.command_center_page()
+            if path is not None:
+                return FileResponse(path, media_type="text/html")
+            return HTMLResponse(html or VisFrontend.REPLACEMENT_HTML, status_code=status)
 
         routes = [
             Route("/", serve_index),

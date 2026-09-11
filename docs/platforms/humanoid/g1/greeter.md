@@ -9,7 +9,7 @@
 ## 1. 功能概述
 
 - **对话**:LLM 智能体(默认 `gpt-4o`)接收文字或语音提问,理解后用语音回答。
-- **语音输出(TTS)**:通过 `SpeakSkill` 把回答说出来,声音从运行 DimOS 的机器发出
+- **语音输出(TTS)**:通过 `SpeakSkill` 把回答说出来,声音从运行 dimOS 的机器发出
   (开发期是笔记本音箱;上机后指向 G1 喇叭即可)。
 - **手臂手势**:迎宾挥手、告别挥手,以及握手/比心/鼓掌等 14 种单独手势,全部经 WebRTC 下发。
 - **两种输入方式**:
@@ -182,7 +182,7 @@ OPENAI_BASE_URL=https://api.deepseek.com
   启动后不会自动喊欢迎。需要固定欢迎语或自动迎宾可再加。
 - **语音是按键触发**:目前为 push-to-talk(按 Enter)。免提需接入 VAD/音量门控。
 - **手势在仿真中不动作**:MuJoCo 仿真连接的 `publish_request` 为空操作,手势只在真机生效。
-- **无移动/感知**:带路、人脸/人体检测、建图等不在本功能范围,属于后续"导览"阶段(需 Orin + 雷达/相机)。见 [greeter_onboard.md](./greeter_onboard.md)。
+- **无移动/感知**:带路、人脸/人体检测、建图等不在本功能范围,属于后续"导览"阶段(需 Orin + 雷达/相机)。见 [greeter_onboard.md](/docs/platforms/humanoid/g1/greeter_onboard.md)。
 
 ---
 

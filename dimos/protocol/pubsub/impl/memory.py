@@ -18,23 +18,24 @@ from typing import Any
 
 from dimos.protocol.encode import encoder as encode
 from dimos.protocol.pubsub.encoders import PubSubEncoderMixin
-from dimos.protocol.pubsub.spec import PubSub
+from dimos.protocol.pubsub.spec import PubSub, SubscriptionGate
 
 
 class Memory(PubSub[str, Any]):
     def __init__(self) -> None:
-        self._map: defaultdict[str, list[Callable[[Any, str], None]]] = defaultdict(list)
+        self._map: defaultdict[str, list[SubscriptionGate]] = defaultdict(list)
 
     def publish(self, topic: str, message: Any) -> None:
-        for cb in self._map[topic]:
-            cb(message, topic)
+        SubscriptionGate.fanout(list(self._map[topic]), message, topic)
 
     def subscribe(self, topic: str, callback: Callable[[Any, str], None]) -> Callable[[], None]:
-        self._map[topic].append(callback)
+        gate = SubscriptionGate(callback)
+        self._map[topic].append(gate)
 
         def unsubscribe() -> None:
+            gate.kill()
             try:
-                self._map[topic].remove(callback)
+                self._map[topic].remove(gate)
                 if not self._map[topic]:
                     del self._map[topic]
             except (KeyError, ValueError):
@@ -44,11 +45,15 @@ class Memory(PubSub[str, Any]):
 
     def unsubscribe(self, topic: str, callback: Callable[[Any, str], None]) -> None:
         try:
-            self._map[topic].remove(callback)
-            if not self._map[topic]:
-                del self._map[topic]
-        except (KeyError, ValueError):
-            pass
+            gates = self._map[topic]
+        except KeyError:
+            return
+        for gate in list(gates):
+            if gate.callback is callback:
+                gate.kill()
+                gates.remove(gate)
+        if not gates:
+            del self._map[topic]
 
 
 class MemoryWithJSONEncoder(PubSubEncoderMixin, Memory):  # type: ignore[type-arg]

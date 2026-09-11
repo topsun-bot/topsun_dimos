@@ -159,6 +159,3 @@ class VadRecorder(AbstractAudioConsumer):
             return None
         logger.info("VAD: 一句话结束 (%.2fs), 送去识别", speech_duration)
         return _combine_audio_events(buffer)
-
-
-__all__ = ["VadRecorder"]

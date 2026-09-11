@@ -44,9 +44,9 @@ def _print_mic_enable_help() -> None:
         "\n机身麦 UDP 组播没有数据。常见原因:\n"
         "  1. 宇树 App 未开启「唤醒对话模式」:\n"
         "     连接 G1 → 设备 → 数据 → 语音助手 → 唤醒对话模式 (Wake-up Conversation)\n"
-        "  2. 部分 G1 固件即使用户开启，PC2/Orin 仍收不到有效麦数据 (宇树社区已知问题)\n"
+        "  2. 部分 G1 固件即使用户开启,PC2/Orin 仍收不到有效麦数据 (宇树社区已知问题)\n"
         "  3. 实际部署建议: USB 麦克风 + orin_test_mic.sh scan\n"
-        "  4. 临时绕过: bash ~/topsun_dimos/scripts/orin_dimos.sh agent-send \"你好\"\n"
+        '  4. 临时绕过: bash ~/topsun_dimos/scripts/orin_dimos.sh agent-send "你好"\n'
     )
 
 
@@ -103,7 +103,7 @@ def _record_multicast(local_ip: str, seconds: float) -> np.ndarray:
     chunks: list[bytes] = []
     total = 0
     no_data_since = time.monotonic()
-    print(f"监听 {_G1_MIC_GROUP}:{_G1_MIC_PORT} via {local_ip}，请对着 G1 说话 …")
+    print(f"监听 {_G1_MIC_GROUP}:{_G1_MIC_PORT} via {local_ip},请对着 G1 说话 …")
     while total < target_bytes:
         if time.monotonic() - no_data_since > _MAX_WAIT_NO_DATA_S:
             sock.close()
@@ -111,12 +111,12 @@ def _record_multicast(local_ip: str, seconds: float) -> np.ndarray:
             raise RuntimeError(f"{_MAX_WAIT_NO_DATA_S:.0f}s 内未收到任何组播包")
         try:
             data, _ = sock.recvfrom(4096)
-        except socket.timeout:
+        except TimeoutError:
             continue
         if not data:
             continue
         if total == 0:
-            print("  收到组播数据，录音中…")
+            print("  收到组播数据,录音中…")
         no_data_since = time.monotonic()
         chunks.append(data)
         total += len(data)

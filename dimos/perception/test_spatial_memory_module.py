@@ -25,13 +25,14 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
 from dimos.core.transport import LCMTransport
-from dimos.memory.timeseries.legacy import LegacyPickleStore
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.perception.spatial_perception import SpatialMemory
 from dimos.robot.unitree.type.odometry import Odometry
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.testing.legacy_pickle import LegacyPickleStore
 
 logger = setup_logger()
 
@@ -78,6 +79,8 @@ class VideoReplayModule(Module):
 class OdometryReplayModule(Module):
     """Module that replays odometry data and publishes to the tf system."""
 
+    tf: Out[TFMessage]
+
     def __init__(self, odom_path: str, **kwargs: Any) -> None:
         super().__init__()
         self.odom_path = odom_path
@@ -85,7 +88,7 @@ class OdometryReplayModule(Module):
 
     def _publish_tf(self, odom: Odometry) -> None:
         """Convert odometry to TF transforms and publish."""
-        self.tf.publish(Transform.from_pose("base_link", odom))
+        self.tf.publish(TFMessage(Transform.from_pose("base_link", odom)))
 
     @rpc
     def start(self) -> None:

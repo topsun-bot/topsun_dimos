@@ -60,8 +60,8 @@ def _print_input_devices() -> None:
         mark = " *" if idx == sd.default.device[0] else ""
         print(f"  [{idx:2d}] {name}  (in={ch}, sr={sr}){mark}")
     print("  (* = sounddevice 默认输入)")
-    print("  设备 0-3 是 HDMI 输出，不能录音。")
-    print("  tegra APE [4-23] 在部分 Orin 上会卡住，优先用 scan (pulse/default)。")
+    print("  设备 0-3 是 HDMI 输出,不能录音。")
+    print("  tegra APE [4-23] 在部分 Orin 上会卡住,优先用 scan (pulse/default)。")
     print()
 
 
@@ -87,9 +87,7 @@ def _resolve_device(arg: str | None) -> tuple[int | None, dict]:
 
 def _record_unsafe(device: int | None, seconds: float) -> tuple[np.ndarray, int, float]:
     info = (
-        sd.query_devices(device, "input")
-        if device is not None
-        else sd.query_devices(kind="input")
+        sd.query_devices(device, "input") if device is not None else sd.query_devices(kind="input")
     )
     sample_rate = int(info.get("default_samplerate", 16000) or 16000)
     audio = sd.rec(
@@ -129,7 +127,7 @@ def _record(
             pass
         thread.join(1.0)
         label = device if device is not None else "default"
-        raise TimeoutError(f"设备 {label} 录音超时 ({timeout_s:.0f}s)，已跳过")
+        raise TimeoutError(f"设备 {label} 录音超时 ({timeout_s:.0f}s),已跳过")
 
     if "exc" in error_box:
         raise error_box["exc"] from None
@@ -181,7 +179,7 @@ def _scan_inputs(*, include_ape: bool) -> int | None:
     scan_seconds = 1.0 if include_ape else 2.0
     timeout_s = 2.5 if include_ape else 6.0
     mode = "pulse/default + tegra APE" if include_ape else "pulse/default"
-    print(f"扫描模式: {mode}，{len(indices)} 个设备，每个约 {scan_seconds}s …")
+    print(f"扫描模式: {mode},{len(indices)} 个设备,每个约 {scan_seconds}s …")
     print("请对着麦克风大声说话 …\n")
 
     results: list[tuple[int, str, float]] = []
@@ -201,11 +199,11 @@ def _scan_inputs(*, include_ape: bool) -> int | None:
     print()
     if not results or results[0][2] < _MIN_SIGNAL_RMS:
         print("未找到有效麦克风信号 (ALSA/pulse)。")
-        print("G1 机身麦不走 ALSA，请试:")
+        print("G1 机身麦不走 ALSA,请试:")
         print("  bash ~/topsun_dimos/scripts/orin_test_body_mic.sh eth0")
         if not include_ape:
             print("或: bash ~/topsun_dimos/scripts/orin_test_mic.sh scan-ape")
-        print("建议接 USB 麦克风后重试 scan，或用 agent-send 文字输入。")
+        print("建议接 USB 麦克风后重试 scan,或用 agent-send 文字输入。")
         return None
 
     best_idx, best_name, best_rms = results[0]
@@ -224,7 +222,7 @@ def _whisper_check(audio: np.ndarray, sample_rate: int) -> None:
         text = "".join(s.text for s in segments).strip()
         print(f"识别结果: {text!r}")
         if not text:
-            print("Whisper 未识别出文字，请更清晰、更慢地说，句末停顿 1 秒。")
+            print("Whisper 未识别出文字,请更清晰、更慢地说,句末停顿 1 秒。")
     except Exception as exc:
         print(f"(跳过 Whisper 测试: {exc})")
 
@@ -269,7 +267,7 @@ def main() -> None:
         audio, sample_rate, peak = _record(device, 5.0)
     except TimeoutError as exc:
         print(f"录音超时: {exc}")
-        print("tegra APE 设备常会卡住，请试: orin_test_mic.sh scan 或 index 27")
+        print("tegra APE 设备常会卡住,请试: orin_test_mic.sh scan 或 index 27")
         sys.exit(1)
 
     print(f"录音完成: 5s @ {sample_rate}Hz, RMS={peak:.6f}")
@@ -282,9 +280,9 @@ def main() -> None:
         )
         sys.exit(1)
     if peak < _VAD_THRESHOLD:
-        print(f"声音偏弱 (RMS < {_VAD_THRESHOLD})，VadVoiceInput 可能触发不了。")
+        print(f"声音偏弱 (RMS < {_VAD_THRESHOLD}),VadVoiceInput 可能触发不了。")
     else:
-        print(f"麦克风有信号，VAD 阈值 {_VAD_THRESHOLD} 应能触发。")
+        print(f"麦克风有信号,VAD 阈值 {_VAD_THRESHOLD} 应能触发。")
         if device is not None:
             print(f"  export DIMOS_MIC_DEVICE_INDEX={device}")
 

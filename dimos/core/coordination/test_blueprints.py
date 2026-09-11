@@ -14,9 +14,9 @@
 
 
 import pickle
-from typing import Protocol, get_type_hints
+from types import MappingProxyType
+from typing import Protocol
 
-from pydantic import ValidationError
 import pytest
 
 from dimos.core._test_future_annotations_helper import (
@@ -24,6 +24,8 @@ from dimos.core._test_future_annotations_helper import (
     FutureModuleIn,
     FutureModuleOut,
 )
+from dimos.core.coordination.blueprint_config.errors import BlueprintConfigError
+from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.core.coordination.blueprints import (
     Blueprint,
     BlueprintAtom,
@@ -35,7 +37,7 @@ from dimos.core.coordination.blueprints import (
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
-from dimos.core.transport import LCMTransport, PubSubTransport, pLCMTransport, pSHMTransport
+from dimos.core.transport import LCMTransport
 from dimos.spec.utils import Spec
 
 
@@ -125,15 +127,14 @@ def test_autoconnect() -> None:
     )
 
 
-def test_config() -> None:
+def test_config_rejects_unknown_fields_and_sections() -> None:
     blueprint = autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
-    config = blueprint.config()
-    assert config.model_fields.keys() == {"modulea", "moduleb", "g"}
-    assert config.model_fields["modulea"].annotation == get_type_hints(ModuleA)["config"] | None
-    assert config.model_fields["moduleb"].annotation == get_type_hints(ModuleB)["config"] | None
+    parser = BlueprintConfigParser(blueprint)
 
-    with pytest.raises(ValidationError, match="invalid_key"):
-        config(module_a={"invalid_key": 5})
+    with pytest.raises(BlueprintConfigError, match="invalid_key"):
+        parser.parse(environ={}, overrides={"modulea": {"invalid_key": 5}})
+    with pytest.raises(BlueprintConfigError, match="Unknown configuration section"):
+        parser.parse(environ={}, overrides={"nosuchmodule": {"x": 1}})
 
 
 def test_transports() -> None:
@@ -226,6 +227,24 @@ def test_disabled_module_proxy_pickle_roundtrip() -> None:
     assert restored.any_method(1, 2, 3) is None
 
 
+def test_blueprint_pickle_roundtrip() -> None:
+    blueprint = (
+        autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
+        .global_config(option1=True, option2=42)
+        .remappings([(ModuleA, "module_a", ModuleB)])
+    )
+
+    restored = pickle.loads(pickle.dumps(blueprint))
+
+    assert restored == blueprint
+    for name in ("transport_map", "global_config_overrides", "remapping_map"):
+        assert isinstance(getattr(restored, name), MappingProxyType)
+    assert dict(restored.global_config_overrides) == {"option1": True, "option2": 42}
+    assert restored.remapping_map[(ModuleA.name, "module_a")] is ModuleB
+    with pytest.raises(TypeError):
+        restored.global_config_overrides["x"] = 1
+
+
 def test_active_blueprints_filters_disabled() -> None:
     blueprint = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).disabled_modules(ModuleA)
 
@@ -234,153 +253,106 @@ def test_active_blueprints_filters_disabled() -> None:
     assert ModuleB in active_modules
 
 
-def test_transport_factory_sets_field() -> None:
-    def my_factory(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
-        return pSHMTransport(topic)
+def test_namespace_prefixes_names_streams_and_frames() -> None:
+    blueprint = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).namespace("robot0")
 
-    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).transport_factory(my_factory)
-    assert bp._transport_factory is my_factory
-
-
-def test_transport_factory_merged_via_autoconnect() -> None:
-    """autoconnect takes the last non-None factory."""
-
-    def factory_a(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
-        return pSHMTransport(topic)
-
-    def factory_b(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
-        return pLCMTransport(topic)
-
-    bp_with_factory = ModuleA.blueprint().transport_factory(factory_a)
-    bp_plain = ModuleB.blueprint()
-    bp_with_factory_b = Blueprint.create(ModuleA).transport_factory(factory_b)
-
-    merged = autoconnect(bp_with_factory, bp_plain)
-    assert merged._transport_factory is factory_a
-
-    merged2 = autoconnect(bp_with_factory, bp_with_factory_b)
-    assert merged2._transport_factory is factory_b
+    atom_a = next(a for a in blueprint.blueprints if a.module is ModuleA)
+    assert atom_a.name == "robot0/modulea"
+    assert atom_a.kwargs["instance_name"] == "robot0/modulea"
+    assert atom_a.kwargs["frame_id_prefix"] == "robot0"
+    # Every stream is remapped under the prefix.
+    assert blueprint.remapping_map[("robot0/modulea", "data1")] == "robot0/data1"
+    assert blueprint.remapping_map[("robot0/moduleb", "data3")] == "robot0/data3"
 
 
-def test_transport_factory_priority_over_global_config() -> None:
-    """Blueprint-level factory takes precedence over GlobalConfig default_transport."""
-    from unittest.mock import patch
+def test_namespace_expose_keeps_names_global() -> None:
+    blueprint = ModuleA.blueprint().namespace("robot0", expose={"data1"})
 
-    from dimos.core.coordination.module_coordinator import _get_transport_for
-
-    def custom_factory(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
-        return pSHMTransport(topic)
-
-    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).transport_factory(custom_factory)
-
-    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
-        mock_gc.default_transport = "lcm"
-        transport = _get_transport_for(bp, "data1", Data1)
-
-    assert isinstance(transport, pSHMTransport)
+    assert ("robot0/modulea", "data1") not in blueprint.remapping_map
+    assert blueprint.remapping_map[("robot0/modulea", "data2")] == "robot0/data2"
 
 
-def test_explicit_transport_highest_priority() -> None:
-    """Explicit .transports() overrides both factory and global config."""
-    from dimos.core.coordination.module_coordinator import _get_transport_for
+def test_namespace_expose_typo_raises() -> None:
+    with pytest.raises(ValueError, match="data_typo"):
+        ModuleA.blueprint().namespace("robot0", expose={"data_typo"})
 
-    explicit_transport = LCMTransport("/explicit", Data1)
 
-    def custom_factory(topic: str, stream_type: type) -> PubSubTransport:  # type: ignore[type-arg]
-        return pSHMTransport(topic)
+def test_namespace_invalid_prefix_raises() -> None:
+    with pytest.raises(ValueError, match="Invalid namespace prefix"):
+        ModuleA.blueprint().namespace("a/b")
 
-    bp = (
+
+def test_namespace_nesting_composes() -> None:
+    blueprint = ModuleA.blueprint().namespace("robot0").namespace("fleet")
+
+    atom = blueprint.blueprints[0]
+    assert atom.name == "fleet/robot0/modulea"
+    assert atom.kwargs["frame_id_prefix"] == "fleet/robot0"
+    assert blueprint.remapping_map[("fleet/robot0/modulea", "data1")] == "fleet/robot0/data1"
+
+
+def test_namespace_keeps_user_frame_id_prefix() -> None:
+    blueprint = ModuleA.blueprint(frame_id_prefix="custom").namespace("robot0")
+
+    assert blueprint.blueprints[0].kwargs["frame_id_prefix"] == "custom"
+
+
+def test_namespace_allows_duplicate_module_classes() -> None:
+    blueprint = autoconnect(
+        ModuleA.blueprint(key1="a").namespace("robot0"),
+        ModuleA.blueprint(key1="b").namespace("robot1"),
+    )
+
+    atoms = [a for a in blueprint.blueprints if a.module is ModuleA]
+    assert {a.name for a in atoms} == {"robot0/modulea", "robot1/modulea"}
+    # Later-wins dedup still applies per instance name.
+    merged = autoconnect(blueprint, ModuleA.blueprint(key1="c").namespace("robot1"))
+    robot1 = next(a for a in merged.blueprints if a.name == "robot1/modulea")
+    assert robot1.kwargs["key1"] == "c"
+
+
+def test_namespace_config_keys_escaped() -> None:
+    blueprint = autoconnect(
+        ModuleA.blueprint().namespace("robot0"),
+        ModuleA.blueprint().namespace("robot1"),
+    )
+    parser = BlueprintConfigParser(blueprint)
+    parser.parse(environ={}, overrides={"robot0_modulea": {}, "robot1_modulea": {}})
+    with pytest.raises(BlueprintConfigError, match="Unknown configuration section"):
+        parser.parse(environ={}, overrides={"robot2_modulea": {}})
+
+
+def test_explicit_instance_name_sets_blueprint_identity() -> None:
+    blueprint = ModuleA.blueprint(instance_name="custom/modulea")
+
+    atom = blueprint.blueprints[0]
+    assert atom.name == "custom/modulea"
+    assert atom.instance_name == "custom/modulea"
+
+
+def test_namespace_prefixes_pinned_transports() -> None:
+    blueprint = (
         autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
-        .transports({("data1", Data1): explicit_transport})
-        .transport_factory(custom_factory)
+        .transports({("data1", Data1): LCMTransport("/custom_topic", Data1)})
+        .namespace("robot0")
     )
 
-    transport = _get_transport_for(bp, "data1", Data1)
-    assert transport is explicit_transport
+    transport = blueprint.transport_map[("robot0/data1", Data1)]
+    assert transport.topic.pattern == "/robot0/custom_topic"
+    assert ("data1", Data1) not in blueprint.transport_map
 
 
-def test_global_config_default_transport_shm() -> None:
-    """GlobalConfig default_transport=shm produces pSHMTransport."""
-    from unittest.mock import patch
+def test_namespace_remappings_by_instance_name() -> None:
+    # A remapping added after namespacing can target an instance by name.
+    blueprint = autoconnect(
+        ModuleA.blueprint().namespace("robot0"),
+        ModuleA.blueprint().namespace("robot1"),
+    ).remappings([("robot0/modulea", "data1", "special_data")])
 
-    from dimos.core.coordination.module_coordinator import _get_transport_for
-
-    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
-
-    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
-        mock_gc.default_transport = "shm"
-        transport = _get_transport_for(bp, "data1", Data1)
-
-    assert isinstance(transport, pSHMTransport)
-
-
-def test_global_config_default_transport_lcm() -> None:
-    """GlobalConfig default_transport=lcm produces LCM-based transport."""
-    from unittest.mock import patch
-
-    from dimos.core.coordination.module_coordinator import _get_transport_for
-
-    bp = autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
-
-    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
-        mock_gc.default_transport = "lcm"
-        transport = _get_transport_for(bp, "data1", Data1)
-
-    assert isinstance(transport, pLCMTransport)
-
-
-class PinnedModule(Module):
-    """Module that declares transport pins for its streams."""
-
-    data1: In[Data1]
-    data2: Out[Data2]
-
-    _stream_transport_pins = {
-        "data1": pLCMTransport,
-    }
-
-
-def test_stream_transport_pins_override_global_shm() -> None:
-    """Module-level _stream_transport_pins force LCM even under shm mode."""
-    from unittest.mock import patch
-
-    from dimos.core.coordination.module_coordinator import _get_transport_for
-
-    bp = autoconnect(PinnedModule.blueprint(), ModuleA.blueprint())
-
-    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
-        mock_gc.default_transport = "shm"
-        t_pinned = _get_transport_for(bp, "data1", Data1)
-        t_unpinned = _get_transport_for(bp, "data2", Data2)
-
-    assert isinstance(t_pinned, pLCMTransport)
-    assert isinstance(t_unpinned, pSHMTransport)
-
-
-def test_shm_factory_uses_large_capacity_for_image() -> None:
-    """SHM factory allocates proper capacity for Image streams."""
-    from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
-    from dimos.core.coordination.module_coordinator import _shm_factory
-    from dimos.msgs.sensor_msgs.Image import Image
-
-    transport = _shm_factory("/color_image", Image)
-
-    assert isinstance(transport, pSHMTransport)
-    assert transport.shm.config.default_capacity == DEFAULT_CAPACITY_COLOR_IMAGE
-
-
-def test_stream_transport_pins_survive_remapping() -> None:
-    """Pinned streams remain pinned even after .remappings() renames them."""
-    from unittest.mock import patch
-
-    from dimos.core.coordination.module_coordinator import _get_transport_for
-
-    bp = autoconnect(PinnedModule.blueprint(), ModuleA.blueprint()).remappings(
-        [(PinnedModule, "data1", "renamed_data1")]
-    )
-
-    with patch("dimos.core.coordination.module_coordinator.global_config") as mock_gc:
-        mock_gc.default_transport = "shm"
-        t_renamed_pinned = _get_transport_for(bp, "renamed_data1", Data1)
-
-    assert isinstance(t_renamed_pinned, pLCMTransport)
+    assert blueprint.remapping_map[("robot0/modulea", "data1")] == "special_data"
+    # Targeting the class is ambiguous with two instances.
+    with pytest.raises(ValueError, match="multiple instances"):
+        autoconnect(
+            ModuleA.blueprint().namespace("robot0"),
+            ModuleA.blueprint().namespace("robot1"),
+        ).remappings([(ModuleA, "data1", "other")])

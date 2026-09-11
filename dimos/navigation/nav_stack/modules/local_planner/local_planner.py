@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
 from dimos_lcm.geometry_msgs import PolygonStamped
 from dimos_lcm.std_msgs import Float32
@@ -35,7 +35,7 @@ from dimos.msgs.std_msgs.Int8 import Int8
 
 
 class LocalPlannerConfig(NativeModuleConfig):
-    cwd: str | None = str(Path(__file__).resolve().parent)
+    cwd: str | None = None
     executable: str = "result/bin/local_planner"
     build_command: str | None = (
         "nix build github:dimensionalOS/dimos-module-local-planner/v0.6.0 --no-write-lock-file"
@@ -93,7 +93,9 @@ class LocalPlannerConfig(NativeModuleConfig):
         "max_momentum_penalty": "maxMomentumPenalty",
     }
 
-    paths_dir: str = ""
+    # ``str``, ``Path``, or lazy ``LfsPath``. Typed ``Any`` so pydantic does
+    # not coerce via ``str(LfsPath)`` (that would pull LFS at import).
+    paths_dir: Any = None
 
     vehicle_length: float = 0.5  # m
     vehicle_width: float = 0.5  # m
@@ -158,6 +160,7 @@ class LocalPlannerConfig(NativeModuleConfig):
 class LocalPlanner(NativeModule):
     """Local path planner with obstacle avoidance."""
 
+    _lcm_only_native = True
     config: LocalPlannerConfig
 
     @rpc

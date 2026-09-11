@@ -42,5 +42,3 @@ unitree_go2_agentic_deepseek = autoconnect(
     ),
     _common_agentic,
 )
-
-__all__ = ["unitree_go2_agentic_deepseek"]

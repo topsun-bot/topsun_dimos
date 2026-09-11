@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Literal
 
 from dimos_lcm.std_msgs import Float32
@@ -31,7 +30,7 @@ from dimos.msgs.std_msgs.Int8 import Int8
 
 
 class PathFollowerConfig(NativeModuleConfig):
-    cwd: str | None = str(Path(__file__).resolve().parent)
+    cwd: str | None = None
     executable: str = "result/bin/path_follower"
     build_command: str | None = (
         "nix build github:dimensionalOS/dimos-module-path-follower/v0.2.0 --no-write-lock-file"
@@ -75,6 +74,7 @@ class PathFollowerConfig(NativeModuleConfig):
 class PathFollower(NativeModule):
     """Pure pursuit path follower with PID yaw control."""
 
+    _lcm_only_native = True
     config: PathFollowerConfig
 
     @rpc

@@ -22,11 +22,16 @@ from openai import OpenAI
 from dimos.models.vl.base import VlModel, VlModelConfig
 from dimos.msgs.sensor_msgs.Image import Image
 
+# Must be a model that returns ABSOLUTE pixel coordinates. The qwen3-vl-* models return
+# normalized 0-1000 coordinates and ignore prompts asking for pixels, which silently breaks
+# query_detections, query_points and get_bbox_from_qwen_frame.
+DEFAULT_QWEN_VL_MODEL = "qwen-vl-max"
+
 
 class QwenVlModelConfig(VlModelConfig):
     """Configuration for Qwen VL model."""
 
-    model_name: str = "qwen2.5-vl-72b-instruct"
+    model_name: str = DEFAULT_QWEN_VL_MODEL
     api_key: str | None = None
 
 
@@ -71,7 +76,7 @@ class QwenVlModel(VlModel):
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_base64}"},
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
                         },
                         {"type": "text", "text": query},
                     ],
@@ -96,7 +101,7 @@ class QwenVlModel(VlModel):
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/png;base64,{self._prepare_image(img)[0].to_base64()}"
+                    "url": f"data:image/jpeg;base64,{self._prepare_image(img)[0].to_base64()}"
                 },
             }
             for img in images

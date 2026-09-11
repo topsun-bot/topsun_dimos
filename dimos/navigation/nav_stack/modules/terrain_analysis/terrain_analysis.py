@@ -99,6 +99,7 @@ class TerrainAnalysisConfig(NativeModuleConfig):
 
 
 class TerrainAnalysis(NativeModule):
+    _lcm_only_native = True
     config: TerrainAnalysisConfig
 
     @rpc

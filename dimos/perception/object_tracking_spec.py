@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Protocol
+"""Public Topsun object-tracking Spec (re-export after upstream experimental move)."""
 
-from dimos.spec.utils import Spec
-
-
-class ObjectTrackingSpec(Spec, Protocol):
-    def track(self, bbox: list[float]) -> dict: ...  # type: ignore[type-arg]
-    def stop_track(self) -> bool: ...
-    def is_tracking(self) -> bool: ...
+from dimos.perception.experimental.object_tracking_spec import (
+    ObjectTrackingSpec as ObjectTrackingSpec,
+)

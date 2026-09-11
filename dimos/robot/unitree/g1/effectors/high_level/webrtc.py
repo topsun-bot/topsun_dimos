@@ -45,9 +45,8 @@ logger = setup_logger()
 class G1HighLevelWebRtcConfig(ModuleConfig):
     ip: str | None = None
     connection_mode: str = "ai"
-    # Per-device AES-128 key for firmware using the data2=3 WebRTC handshake.
-    # If unset here, UnitreeWebRTCConnection falls back to UNITREE_AES_128_KEY.
-    aes_128_key: str | None = Field(default_factory=lambda m: m["g"].unitree_webrtc_aes_key)
+    # Per-device AES-128 key (G1 fw >=1.5.1); defaults from GlobalConfig.
+    aes_128_key: str | None = Field(default_factory=lambda m: m["g"].unitree_aes_128_key)
 
 
 class G1HighLevelWebRtc(Module, HighLevelG1Spec):
@@ -164,6 +163,3 @@ class G1HighLevelWebRtc(Module, HighLevelG1Spec):
 
         {MODE_COMMANDS_DOC}
         """
-
-
-__all__ = ["G1HighLevelWebRtc", "G1HighLevelWebRtcConfig"]

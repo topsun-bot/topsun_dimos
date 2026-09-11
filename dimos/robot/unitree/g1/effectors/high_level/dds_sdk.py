@@ -22,19 +22,6 @@ import time
 from typing import Any
 
 from reactivex.disposable import Disposable
-from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type: ignore[import-not-found]
-    MotionSwitcherClient,
-)
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # type: ignore[import-not-found]
-from unitree_sdk2py.g1.arm.g1_arm_action_client import (  # type: ignore[import-not-found]
-    G1ArmActionClient,
-)
-from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
-    ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
-    ROBOT_API_ID_LOCO_GET_FSM_ID,
-    ROBOT_API_ID_LOCO_GET_FSM_MODE,
-)
-from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore[import-not-found]
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc
@@ -67,11 +54,9 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-_LOCO_API_IDS = {
-    "GET_FSM_ID": ROBOT_API_ID_LOCO_GET_FSM_ID,
-    "GET_FSM_MODE": ROBOT_API_ID_LOCO_GET_FSM_MODE,
-    "GET_BALANCE_MODE": ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
-}
+# Populated on start() so importing this module (blueprints, md-babel) does
+# not require the Unitree SDK wheel.
+_LOCO_API_IDS: dict[str, int] = {}
 
 
 def _env_int(name: str, default: int, *, min_v: int, max_v: int) -> int:
@@ -109,6 +94,17 @@ class G1HighLevelDdsSdkConfig(ModuleConfig):
     # G1 body speaker: ``SetVolume`` 0–100; PCM gain scales CosyVoice before PlayStream.
     speaker_volume: int = 100
     speaker_pcm_gain: float = 1.5
+    # deadzone compensation
+    min_effective_linear_velocity: float = 0.05  # m/s
+    min_effective_angular_velocity: float = 0.2  # radians/s
+
+
+def _boost_above_deadzone(value: float, min_effective_magnitude: float) -> float:
+    if value == 0.0 or min_effective_magnitude <= 0.0:
+        return value
+    if abs(value) >= min_effective_magnitude:
+        return value
+    return min_effective_magnitude if value > 0 else -min_effective_magnitude
 
 
 class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
@@ -134,6 +130,28 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         super().start()
 
         network_interface = self.config.network_interface
+
+        from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type: ignore[import-not-found]
+            MotionSwitcherClient,
+        )
+        from unitree_sdk2py.core.channel import (
+            ChannelFactoryInitialize,  # type: ignore[import-not-found]
+        )
+        from unitree_sdk2py.g1.arm.g1_arm_action_client import (  # type: ignore[import-not-found]
+            G1ArmActionClient,
+        )
+        from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
+            ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
+            ROBOT_API_ID_LOCO_GET_FSM_ID,
+            ROBOT_API_ID_LOCO_GET_FSM_MODE,
+        )
+        from unitree_sdk2py.g1.loco.g1_loco_client import (
+            LocoClient,  # type: ignore[import-not-found]
+        )
+
+        _LOCO_API_IDS["GET_FSM_ID"] = ROBOT_API_ID_LOCO_GET_FSM_ID
+        _LOCO_API_IDS["GET_FSM_MODE"] = ROBOT_API_ID_LOCO_GET_FSM_MODE
+        _LOCO_API_IDS["GET_BALANCE_MODE"] = ROBOT_API_ID_LOCO_GET_BALANCE_MODE
 
         # Initialise DDS channel factory
         logger.info(f"Initializing DDS on interface: {network_interface}")
@@ -270,9 +288,13 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
         assert self.loco_client is not None
-        vx = twist.linear.x
-        vy = twist.linear.y
-        vyaw = twist.angular.z
+        raw_vx = twist.linear.x
+        raw_vy = twist.linear.y
+        raw_vyaw = twist.angular.z
+
+        vx = _boost_above_deadzone(raw_vx, self.config.min_effective_linear_velocity)
+        vy = _boost_above_deadzone(raw_vy, self.config.min_effective_linear_velocity)
+        vyaw = _boost_above_deadzone(raw_vyaw, self.config.min_effective_angular_velocity)
 
         if self._stop_timer:
             self._stop_timer.cancel()
@@ -521,6 +543,3 @@ class G1HighLevelDdsSdk(Module, HighLevelG1Spec):
         except Exception as e:
             logger.error(f"Error getting FSM ID: {e}")
             return None
-
-
-__all__ = ["FsmState", "G1HighLevelDdsSdk", "G1HighLevelDdsSdkConfig"]

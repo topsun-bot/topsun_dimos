@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Iterator
-import time
+import threading
 from typing import Any
 
 import pytest
@@ -34,7 +34,6 @@ from dimos.utils.testing.collector import CallbackCollector
 def lcm_pub_sub_base(lcm_url: str) -> Iterator[LCMPubSubBase]:
     lcm = LCMPubSubBase(url=lcm_url)
     lcm.start()
-    time.sleep(0.05)  # let the handler thread enter the LCM loop
     yield lcm
     lcm.stop()
 
@@ -43,7 +42,6 @@ def lcm_pub_sub_base(lcm_url: str) -> Iterator[LCMPubSubBase]:
 def pickle_lcm(lcm_url: str) -> Iterator[PickleLCM]:
     lcm = PickleLCM(url=lcm_url)
     lcm.start()
-    time.sleep(0.05)  # let the handler thread enter the LCM loop
     yield lcm
     lcm.stop()
 
@@ -52,7 +50,6 @@ def pickle_lcm(lcm_url: str) -> Iterator[PickleLCM]:
 def lcm(lcm_url: str) -> Iterator[LCM]:
     lcm = LCM(url=lcm_url)
     lcm.start()
-    time.sleep(0.05)  # let the handler thread enter the LCM loop
     yield lcm
     lcm.stop()
 
@@ -97,6 +94,20 @@ def test_LCMPubSubBase_pubsub(lcm_pub_sub_base: LCMPubSubBase) -> None:
 
     assert isinstance(received_topic, Topic)
     assert received_topic == topic
+
+
+def test_subscribe_calls_lcm_warmup(lcm: LCM) -> None:
+    warmup_threads = []
+
+    class WarmupMessage(MockLCMMessage):
+        @classmethod
+        def lcm_warmup(cls) -> None:
+            warmup_threads.append(threading.current_thread())
+
+    lcm.subscribe(Topic(topic="/warmup", lcm_type=WarmupMessage), lambda msg, topic: None)
+
+    # Warmed synchronously on the subscriber's thread, not the LCM handler thread.
+    assert warmup_threads == [threading.current_thread()]
 
 
 def test_lcm_autodecoder_pubsub(lcm: LCM) -> None:

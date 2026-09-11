@@ -35,6 +35,7 @@ import os
 from pathlib import Path
 import platform
 from queue import Empty, Queue
+import shutil
 import signal
 import socket
 import struct
@@ -43,7 +44,6 @@ import threading
 import time
 from typing import Any
 
-import cv2
 import numpy as np
 from pydantic import Field
 from reactivex.disposable import Disposable
@@ -61,7 +61,8 @@ from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.utils.data import get_data
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.utils.data import get_data, get_data_dir
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.ros1 import (
     deserialize_compressed_image,
@@ -248,6 +249,7 @@ class UnityBridgeModule(Module):
     color_image: Out[Image]
     semantic_image: Out[Image]
     camera_info: Out[CameraInfo]
+    tf: Out[TFMessage]
 
     @staticmethod
     def rerun_blueprint() -> Any:
@@ -379,7 +381,16 @@ class UnityBridgeModule(Module):
             logger.warning(f"Unity binary not found at {p}")
             return None
 
-        # Pull from LFS (auto-downloads + extracts on first use)
+        # Optional LFS lookup. Do not call get_data() when git-lfs is
+        # missing: that helper pytest.skips, which would abort Module.__init__
+        # after the event-loop thread is already running and leak it.
+        candidate = get_data_dir() / _LFS_ASSET / "environment" / "Model.x86_64"
+        if candidate.exists():
+            return candidate
+        if shutil.which("git-lfs") is None:
+            logger.warning("git-lfs unavailable; Unity binary not resolved")
+            return None
+
         try:
             data_dir = get_data(_LFS_ASSET)
             candidate = data_dir / "environment" / "Model.x86_64"
@@ -663,6 +674,8 @@ class UnityBridgeModule(Module):
             self._send_queue.put(("__raw__", frame))
 
     def _handle_unity_message(self, topic: str, data: bytes) -> None:
+        import cv2
+
         if topic == "/registered_scan":
             pc_result = deserialize_pointcloud2(data)
             if pc_result is not None:
@@ -782,20 +795,22 @@ class UnityBridgeModule(Module):
         )
 
         self.tf.publish(
-            Transform(
-                translation=Vector3(x, y, z),
-                rotation=quat,
-                frame_id="map",
-                child_frame_id="sensor",
-                ts=now,
-            ),
-            Transform(
-                translation=Vector3(0.0, 0.0, 0.0),
-                rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-                frame_id="map",
-                child_frame_id="world",
-                ts=now,
-            ),
+            TFMessage(
+                Transform(
+                    translation=Vector3(x, y, z),
+                    rotation=quat,
+                    frame_id="map",
+                    child_frame_id="sensor",
+                    ts=now,
+                ),
+                Transform(
+                    translation=Vector3(0.0, 0.0, 0.0),
+                    rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
+                    frame_id="map",
+                    child_frame_id="world",
+                    ts=now,
+                ),
+            )
         )
 
         with self._state_lock:

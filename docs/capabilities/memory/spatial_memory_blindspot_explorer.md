@@ -1066,14 +1066,14 @@ Sending: 检查附近有没有空间记忆盲区，有的话过去探索一下
 ---
 ---
 (timeout waiting for agent response)
-(no response from agent — is an agent module deployed?)
+(no response from agent - is an agent module deployed?)
 ```
 
 这不是空间记忆盲区算法返回的失败结果，而是自然语言 agent 链路没有返回任何消息。`dimos tell` 的链路是：向 `/human_input` 发布文本，然后等待 `/agent` 或 `/agent_idle`。如果超时期间没有收到 agent 输出，就会打印这两行。
 
 常见原因：
 
-- 当前没有运行 DimOS 实例。可先执行 `dimos status` 检查；若显示 `No running DimOS instance`，需要先启动 blueprint。
+- 当前没有运行 dimOS 实例。可先执行 `dimos status` 检查；若显示 `No running dimOS instance`，需要先启动 blueprint。
 - 启动的是非 agentic blueprint，里面没有 `McpClient` agent 模块，因此没有模块订阅 `/human_input` 并回复 `/agent`。
 - agentic blueprint 还没完成启动，或 `McpClient` 因模型/API key/MCP server 连接失败等原因崩溃或卡住。
 - 使用了只包含 `McpServer` 的配置。`McpServer` 只暴露工具；自然语言 `dimos tell` 还需要 `McpClient.blueprint()` 把用户文本映射成工具调用。

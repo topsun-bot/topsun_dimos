@@ -159,7 +159,6 @@ def _qwen_model_kwargs() -> dict[str, Any]:
 # 否则 observe 看图会瞎编（如把坐着说成站着）。
 _QWEN_MODEL = os.environ.get("DIMOS_QWEN_MODEL", "qwen-vl-max-latest")
 
-
 unitree_go2_qwen_follow = autoconnect(
     # 基础必须用 unitree_go2_spatial（不是 unitree_go2）——因为下面挂的
     # NavigationSkillContainer 强依赖 SpatialMemorySpec + SpatialLandmarkMemorySpec
@@ -189,6 +188,3 @@ unitree_go2_qwen_follow = autoconnect(
     WebInput.blueprint(),
     SpeakSkill.blueprint(),
 )
-
-
-__all__ = ["unitree_go2_qwen_follow"]

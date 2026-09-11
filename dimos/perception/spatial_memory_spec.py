@@ -12,23 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Protocol
+"""Public Topsun spatial-memory Spec.
 
-import numpy as np
+Upstream moved the implementation to ``dimos.perception.experimental``. This
+module keeps the Topsun import path so semantic nav, greeter, and follow-up
+branches (``feat/spatial-memory-export``, ``feat/web-spatial-memory-ui``,
+``feat/store_map``, ``feat/open-goal-search``) can rebase without rewriting
+callers.
 
-from dimos.spec.utils import Spec
-from dimos.types.robot_location import RobotLocation
+Port plan: implementation + Topsun grafts (``new_memory`` wipe, Chroma
+recovery, ``tag_location_with_image``) live in experimental; this file is the
+stable public Spec.
+"""
 
-
-class SpatialMemorySpec(Spec, Protocol):
-    def tag_location(self, robot_location: RobotLocation) -> bool: ...
-    def tag_location_with_image(self, robot_location: RobotLocation, image: np.ndarray) -> bool: ...
-    def query_tagged_location(self, query: str) -> RobotLocation | None: ...
-    def query_location_by_image(self, image: np.ndarray) -> RobotLocation | None: ...
-    def query_by_text(self, text: str, limit: int = 5) -> list[dict]: ...  # type: ignore[type-arg]
-    def query_by_text_with_images(self, text: str, limit: int = 3) -> list[dict]: ...  # type: ignore[type-arg]
-    def get_memory_locations(self) -> list[dict[str, float | str]]: ...
-    def get_room_image(self, location_id: str) -> np.ndarray | None: ...
-    def get_room_images(self) -> list[dict[str, object]]: ...
-    def get_image_by_id(self, frame_id: str) -> np.ndarray | None: ...
-    def clear_all(self) -> dict[str, int]: ...
+from dimos.perception.experimental.spatial_memory_spec import (
+    SpatialMemorySpec as SpatialMemorySpec,
+)

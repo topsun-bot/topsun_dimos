@@ -44,7 +44,7 @@ from dimos.protocol.pubsub.impl.rospubsub_conversion import (
     dimos_to_ros,
     ros_to_dimos,
 )
-from dimos.protocol.pubsub.spec import PubSub
+from dimos.protocol.pubsub.spec import PubSub, SubscriptionGate
 
 
 @runtime_checkable
@@ -107,7 +107,7 @@ class RawROS(PubSub[RawROSTopic, Any]):
         else:
             self._qos = QoSProfile(  # type: ignore[no-untyped-call]
                 # Haven't noticed any difference between BEST_EFFORT and RELIABLE for local comms in our tests
-                # ./bin/dev python -m pytest -svm tool -k ros dimos/protocol/pubsub/benchmark/test_benchmark.py
+                # ./bin/dev python -m pytest -sv -k ros dimos/protocol/pubsub/benchmark/tool_benchmark.py
                 #
                 # but RELIABLE seems to have marginally higher throughput
                 reliability=QoSReliabilityPolicy.RELIABLE,
@@ -220,9 +220,10 @@ class RawROS(PubSub[RawROSTopic, Any]):
             raise RuntimeError("ROS pubsub not started")
 
         with self._lock:
+            gate = SubscriptionGate(callback)
 
             def ros_callback(msg: Any) -> None:
-                callback(msg, topic)
+                gate.dispatch(msg, topic)
 
             qos = topic.qos if topic.qos is not None else self._qos
             subscription = self._node.create_subscription(
@@ -234,6 +235,7 @@ class RawROS(PubSub[RawROSTopic, Any]):
             self._subscriptions[topic.topic].append((subscription, callback))
 
             def unsubscribe() -> None:
+                gate.kill()
                 with self._lock:
                     if topic.topic in self._subscriptions:
                         self._subscriptions[topic.topic] = [

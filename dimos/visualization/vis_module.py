@@ -26,13 +26,17 @@ from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
 def vis_module(
     viewer_backend: ViewerBackend,
     rerun_config: dict[str, Any] | None = None,
-    foxglove_config: dict[str, Any] | None = None,
 ) -> Blueprint:
     """Create a visualization blueprint based on the selected viewer backend.
 
-    Bundles the appropriate viewer module (Rerun or Foxglove) together with
+    Bundles the Rerun viewer module together with
     the ``WebsocketVisModule`` and ``RerunWebSocketServer`` so that the web
     dashboard and remote viewer connections work out of the box.
+
+    Command Center was removed; ``WebsocketVisModule`` no longer 503s on
+    ``/command-center``. Authored ``cockpit()`` (or a ``*-cockpit`` blueprint)
+    is the live UI — it is not composed here so stacks that already add
+    ``cockpit()`` do not start a second relay on the same port.
 
     Example usage::
 
@@ -44,25 +48,15 @@ def vis_module(
                     "world/camera_info": lambda ci: ci.to_rerun(...),
                 },
                 "static": {
-                    "world/tf/base_link": lambda rr: [rr.Boxes3D(...)],
+                    "world/robot_body": lambda rr: [rr.Boxes3D(...)],
                 },
             },
         )
     """
-    if foxglove_config is None:
-        foxglove_config = {}
     if rerun_config is None:
         rerun_config = {}
 
     match viewer_backend:
-        case "foxglove":
-            from dimos.robot.foxglove_bridge import FoxgloveBridge
-
-            return autoconnect(
-                FoxgloveBridge.blueprint(**foxglove_config),
-                RerunWebSocketServer.blueprint(),
-                WebsocketVisModule.blueprint(),
-            )
         case "rerun":
             from dimos.core.global_config import global_config
             from dimos.protocol.pubsub.impl.lcmpubsub import LCM
@@ -72,9 +66,7 @@ def vis_module(
             rerun_config.setdefault("pubsubs", [LCM()])
             rerun_config.setdefault("rerun_open", global_config.rerun_open)
             rerun_config.setdefault("rerun_web", global_config.rerun_web)
-            rerun_config.setdefault("save_to_disk", global_config.rerun_save)
-            rerun_config.setdefault("save_dir", global_config.rerun_save_dir)
-            return autoconnect(
+            bundle = autoconnect(
                 RerunBridgeModule.blueprint(
                     **rerun_config,
                 ),
@@ -82,7 +74,8 @@ def vis_module(
                 WebsocketVisModule.blueprint(),
             )
         case "none":
-            return autoconnect(WebsocketVisModule.blueprint())
+            bundle = autoconnect(WebsocketVisModule.blueprint())
         case _:
             valid = ", ".join(get_args(ViewerBackend))
             raise ValueError(f"Unknown viewer_backend {viewer_backend!r}. Expected one of: {valid}")
+    return bundle

@@ -37,7 +37,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import cv2
 import numpy as np
 from PIL import Image as PILImage
 import torch
@@ -116,6 +115,8 @@ class DoorDetector:
             List of detection dicts with keys:
                 bbox, confidence, door_state, cropped_bytes.
         """
+        import cv2
+
         h, w = frame.shape[:2]
         frame_area = h * w
 

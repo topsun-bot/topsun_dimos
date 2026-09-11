@@ -19,7 +19,6 @@ Uses GTSAM iSAM2 for pose graph optimization and PCL ICP for loop closure.
 
 from __future__ import annotations
 
-from pathlib import Path
 import time
 
 from reactivex.disposable import Disposable
@@ -32,6 +31,7 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.navigation.nav_stack.frames import FRAME_MAP, FRAME_ODOM
 from dimos.utils.logging_config import setup_logger
 
@@ -39,7 +39,7 @@ logger = setup_logger()
 
 
 class PGOConfig(NativeModuleConfig):
-    cwd: str | None = str(Path(__file__).resolve().parent / "cpp")
+    cwd: str | None = "cpp"
     executable: str = "result/bin/pgo"
     build_command: str | None = "nix build .#default --no-write-lock-file"
 
@@ -72,6 +72,7 @@ class PGOConfig(NativeModuleConfig):
 class PGO(NativeModule):
     """Pose graph optimization with loop closure using GTSAM iSAM2 + PCL ICP."""
 
+    _lcm_only_native = True
     config: PGOConfig
 
     registered_scan: In[PointCloud2]
@@ -79,6 +80,7 @@ class PGO(NativeModule):
     corrected_odometry: Out[Odometry]
     global_map: Out[PointCloud2]
     pgo_tf: Out[Odometry]
+    tf: Out[TFMessage]
 
     @rpc
     def start(self) -> None:
@@ -122,11 +124,13 @@ class PGO(NativeModule):
         ts: float,
     ) -> None:
         self.tf.publish(
-            Transform(
-                frame_id=self.config.world_frame,
-                child_frame_id=self.config.local_frame,
-                translation=Vector3(*translation),
-                rotation=Quaternion(*rotation),
-                ts=ts,
+            TFMessage(
+                Transform(
+                    frame_id=self.config.world_frame,
+                    child_frame_id=self.config.local_frame,
+                    translation=Vector3(*translation),
+                    rotation=Quaternion(*rotation),
+                    ts=ts,
+                )
             )
         )

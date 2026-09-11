@@ -19,7 +19,7 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.navigation.bbox_navigation import BBoxNavigationModule
 from dimos.perception.detection.door.door_spatial_memory_module import SpatialLandmarkMemoryModule
-from dimos.perception.object_tracker_2d import ObjectTracker2D
+from dimos.perception.experimental.object_tracker_2d import ObjectTracker2D
 from dimos.perception.spatial_perception import SpatialMemory
 
 _perception_and_memory = autoconnect(
@@ -32,5 +32,3 @@ _perception_and_memory = autoconnect(
         (BBoxNavigationModule, "detection2d", "detection2darray"),
     ]
 )
-
-__all__ = ["_perception_and_memory"]

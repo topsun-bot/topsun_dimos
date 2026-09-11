@@ -221,9 +221,7 @@ class GreeterTourSkillContainer(Module):
             landmark.intro_script[:80],
         )
         source_note = {"provided": "手写", "llm": "LLM 生成", "fallback": "默认模板"}[source]
-        return (
-            f"已记录地标 '{clean_name}'（讲解词:{source_note}）,共 {len(self._store)} 个地标。"
-        )
+        return f"已记录地标 '{clean_name}'（讲解词:{source_note}）,共 {len(self._store)} 个地标。"
 
     @skill
     def list_landmarks(self) -> str:
@@ -261,13 +259,3 @@ class GreeterTourSkillContainer(Module):
             self.config.guide_speak_template.format(name=landmark.name), blocking=True
         )
         return f"guiding:{landmark.name}"
-
-
-__all__ = [
-    "GreeterTourSkillConfig",
-    "GreeterTourSkillContainer",
-    "distance_2d",
-    "is_guide_request",
-    "parse_synonyms",
-    "within_arrival",
-]
