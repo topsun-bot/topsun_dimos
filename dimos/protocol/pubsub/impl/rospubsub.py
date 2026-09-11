@@ -220,7 +220,6 @@ class RawROS(PubSub[RawROSTopic, Any]):
             raise RuntimeError("ROS pubsub not started")
 
         with self._lock:
-
             gate = SubscriptionGate(callback)
 
             def ros_callback(msg: Any) -> None:
