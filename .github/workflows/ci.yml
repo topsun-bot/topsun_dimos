@@ -498,20 +498,19 @@ jobs:
       contains(fromJSON('["success", "skipped"]'), needs.cachix-build-check.result) &&
       contains(fromJSON('["success", "skipped"]'), needs.cachix-build.result)
     needs: [cachix-build-check, cachix-build]
-    timeout-minutes: 20
+    # 3.14/3.14t have hung past a 20m cancel on ubuntu-latest. Keep required
+    # CPython 3.10–3.14 here; free-threading is optional in tests-freethreaded.
+    timeout-minutes: 40
     strategy:
       matrix:
         pyver: ['3.10', '3.11', '3.12', '3.13', '3.14']
         os: ["ubuntu-latest"]
         experimental: [false]
         include:
-          - os: "ubuntu-latest"
-            pyver: "3.14t"
-            experimental: false
           - os: "ubuntu-24.04-arm"
             pyver: "3.14"
             experimental: false
-      fail-fast: true
+      fail-fast: false
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
     env:
@@ -610,6 +609,40 @@ jobs:
           # See the "Upload coverage" step above.
           use_pypi: true
           version: "11.2.8"
+
+  # Free-threading 3.14t has hung to a 20m job cancel (xdist+coverage+GIL=0).
+  # Keep it out of `tests` so a cancel cannot fail ci-complete / alls-green.
+  tests-freethreaded:
+    timeout-minutes: 40
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+      - name: Setup Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          allow-prereleases: true
+          python-version: "3.14t"
+      - name: Install dependency for pyaudio (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+      - name: Remove git LFS to avoid accidental large downloads
+        run: sudo rm -f /usr/bin/git-lfs
+      - name: Set PYTHON_GIL=0 for free-threading builds
+        run: echo "PYTHON_GIL=0" >> $GITHUB_ENV
+      - name: Install dependencies
+        run: uv sync --group tests --frozen
+      - name: Run tests
+        timeout-minutes: 18
+        run: uv run pytest --numprocesses=1 --junitxml=junit.xml -m 'not (tool or self_hosted or mujoco or dimsim)'
 
   self-hosted-tests:
     # Runs on push, merge_group (trusted — a maintainer must approve + queue the
