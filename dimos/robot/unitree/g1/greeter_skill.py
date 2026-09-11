@@ -272,5 +272,3 @@ class GreeterSkillContainer(Module):
         action_name = random.choice(names)
         logger.info("跳舞模式: Orin 随机全身舞 %s", action_name)
         return self.execute_custom_action(action_name)
-
-
