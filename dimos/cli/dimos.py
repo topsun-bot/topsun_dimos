@@ -48,7 +48,6 @@ import typer
 
 from dimos.cli.cache import app as cache_app
 from dimos.cli.can import app as can_app
-from dimos.cli.embodiedgen import app as embodiedgen_app
 from dimos.cli.cloud import login as cloud_login, logout as cloud_logout, whoami as cloud_whoami
 from dimos.cli.commands.apriltag import apriltag
 from dimos.cli.commands.bake import bake
@@ -65,6 +64,7 @@ from dimos.cli.commands.mcp import agent_send_cmd, mcp_app
 from dimos.cli.commands.rerun_bridge import rerun_bridge_cmd
 from dimos.cli.commands.topic import topic_app
 from dimos.cli.commands.tuis import agentspy, humancli, lcmspy, spy, top
+from dimos.cli.embodiedgen import app as embodiedgen_app
 from dimos.cli.hardware_cli import app as hardware_app
 from dimos.cli.landmarks import app as landmarks_app
 from dimos.cli.shell import shell

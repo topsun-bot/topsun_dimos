@@ -22,8 +22,8 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from dimos.core.global_config import GlobalConfig
 from dimos.cli.embodiedgen import app as embodiedgen_cli
+from dimos.core.global_config import GlobalConfig
 from dimos.simulation.embodiedgen.compose import (
     MINIMAL_SCENE_XML,
     apply_embodiedgen_scene,
