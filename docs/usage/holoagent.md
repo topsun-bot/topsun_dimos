@@ -6,7 +6,7 @@ explicitly acknowledges DimOS; it is a ROS 2 + OpenClaw stack with a
 DimOS-inspired skill/blueprint layer, not a drop-in replacement for this repo.
 
 Do **not** vendor the HoloAgent tree. HoloAgent bundles Navigation2, FAST-LIVO
-(GPL/BSD license conflict — see HoloAgent `THIRD_PARTY_NOTICES.md`), OVO,
+(GPL/BSD license conflict -- see HoloAgent `THIRD_PARTY_NOTICES.md`), OVO,
 SAM, and robot-specific ROS packages. Topsun Go2/G1 already have DimOS-native
 equivalents for most of that surface.
 
@@ -134,13 +134,13 @@ structured keys (`floor`/`room`/`object`, `forward`/`left`/`rotation`).
 ## Next files to touch (not in this PR)
 
 1. Optional: load a prebuilt HMSG and call `FsrVlnClient.query` in-process
-   (`agentic_robot/fsr_vln/api.py`) — only if Topsun ships HoloAgent maps
+   (`agentic_robot/fsr_vln/api.py`) -- only if Topsun ships HoloAgent maps
    and accepts the CUDA/SAM/OVO dependency.
 2. Optional: in-process wait for HoloAgent `waypoint_reached` (the HTTP
    path is still publish-only; `CAP_MOVEMENT` is held until
    `holoagent_stop_nav`).
 3. Do **not** start from an upstream `dimensionalOS/dimos` merge for this
-   slice — `@skill`, MCP, and Go2/G1 blueprints already exist on
+   slice -- `@skill`, MCP, and Go2/G1 blueprints already exist on
    `topsun-bot/topsun_dimos` main. No open upstream-merge PR was found.
 
 ## License
