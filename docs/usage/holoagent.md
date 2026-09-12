@@ -58,13 +58,13 @@ Default blueprints (`unitree-go2-agentic`, `unitree-g1-agentic`) are unchanged.
 ## Run
 
 Start HoloAgent `robot_bridge` on the robot (their default is `0.0.0.0:8000`).
-`--holoagent-url` is a root `GlobalConfig` flag (same as `--replay`); put it
-**before** `run`. `run` does not declare it, so Click/Typer rejects
-`dimos run … --holoagent-url …`.
+`--holoagent-url` is a root `GlobalConfig` flag (same as `--robot-ip`). It
+works before `run` or after the blueprint name.
 
 ```bash
-# Go2
+# Go2 (flag before run, or after the blueprint)
 dimos --holoagent-url http://127.0.0.1:8000 run unitree-go2-holoagent
+dimos run unitree-go2-holoagent --holoagent-url http://127.0.0.1:8000
 
 # G1
 dimos --holoagent-url http://127.0.0.1:8000 run unitree-g1-holoagent
@@ -86,10 +86,11 @@ handles (that HTTP path publishes `chat_signal_pub`).
 
 HoloAgent nav skills publish to ROS and return when the HTTP call is
 accepted. They do **not** wait for `waypoint_reached`. They hold
-`CAP_MOVEMENT` until `holoagent_stop_nav` (or `holoagent_navigation_signal`
-with name `stop`), so a later native or HoloAgent movement skill is refused
-until that stop. Module shutdown (`dimos stop`) best-effort POSTs
-`/api/navigation/stop` before dropping the HTTP client.
+`CAP_MOVEMENT` until `holoagent_stop_nav`. Do not use
+`holoagent_navigation_signal("stop")` to release that hold: MCP refuses it
+while another HoloAgent nav skill holds movement. Module shutdown
+(`dimos stop`) best-effort POSTs `/api/navigation/stop` before dropping
+the HTTP client.
 
 `unitree-go2-holoagent` / `unitree-g1-holoagent` replace the nested
 `McpClient` prompt with the robot prompt plus `HOLOAGENT_SKILLS_PROMPT`,
@@ -104,11 +105,17 @@ use `holoagent_semantic_nav` or native DimOS navigation.
 Compose the same nav skills into an existing Go2 blueprint without a new file:
 
 ```python skip
-from dimos.agents.skills.holoagent import HoloAgentNavSkillContainer
+from dimos.agents.mcp.mcp_client import McpClient
+from dimos.agents.skills.holoagent import HOLOAGENT_SKILLS_PROMPT, HoloAgentNavSkillContainer
+from dimos.agents.system_prompt import SYSTEM_PROMPT
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitree_go2_agentic
 
-my_stack = autoconnect(unitree_go2_agentic, HoloAgentNavSkillContainer.blueprint())
+my_stack = autoconnect(
+    unitree_go2_agentic,
+    McpClient.blueprint(system_prompt=SYSTEM_PROMPT + HOLOAGENT_SKILLS_PROMPT),
+    HoloAgentNavSkillContainer.blueprint(),
+)
 ```
 
 G1 uses the same `HoloAgentNavSkillContainer`.

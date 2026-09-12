@@ -323,6 +323,23 @@ def test_run_accepts_global_config_flags_before_and_after_blueprint(
     assert stubbed_run["parsed_config"].global_config["robot_ip"] == "192.168.0.116"
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--holoagent-url", "http://10.0.0.8:8000", "run", "alpha"],
+        ["run", "alpha", "--holoagent-url", "http://10.0.0.8:8000"],
+    ],
+)
+def test_run_accepts_holoagent_url_before_and_after_blueprint(
+    argv: list[str],
+    stubbed_run: dict[str, Any],
+) -> None:
+    result = CliRunner().invoke(main, argv)
+
+    assert result.exit_code == 0, result.output
+    assert stubbed_run["parsed_config"].global_config["holoagent_url"] == "http://10.0.0.8:8000"
+
+
 def test_after_run_global_config_is_applied_before_blueprint_resolution(
     stubbed_run: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,

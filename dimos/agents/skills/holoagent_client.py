@@ -193,6 +193,9 @@ class HoloAgentBridgeClient:
         token = HoloAgentBridgeContract.safe_path_token(skill_name, "arm skill")
         return self._request("POST", f"/api/arm/{token}")
 
+    def close(self) -> None:
+        self._session.close()
+
     def _request(
         self,
         method: str,

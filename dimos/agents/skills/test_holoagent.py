@@ -142,13 +142,14 @@ def test_navigation_signal_success() -> None:
     assert skills.stopped_tools == []
 
 
-def test_navigation_signal_stop_releases_hold() -> None:
+def test_navigation_signal_stop_refuses_and_directs_to_stop_nav() -> None:
     skills, client = _container()
-    client.navigation_signal.return_value = {"success": True}
     result = skills.holoagent_navigation_signal("stop")
-    assert "published" in result
-    assert skills.started_tools == ["holoagent_nav"]
-    assert skills.stopped_tools == ["holoagent_nav"]
+    client.navigation_signal.assert_not_called()
+    assert "holoagent_stop_nav" in result
+    assert "refused" in result
+    assert skills.started_tools == []
+    assert skills.stopped_tools == []
 
 
 def test_health_success_is_not_a_publish_message() -> None:
@@ -171,6 +172,7 @@ def test_module_shutdown_stops_bridge() -> None:
     client.stop_navigation.return_value = {"success": True}
     skills._stop_bridge_best_effort()
     client.stop_navigation.assert_called_once()
+    client.close.assert_called_once()
     assert skills.stopped_tools == ["holoagent_nav"]
     assert skills._client is None
 
@@ -180,6 +182,7 @@ def test_module_shutdown_still_drops_client_if_bridge_stop_fails() -> None:
     client.stop_navigation.side_effect = HoloAgentBridgeError("down")
     skills._stop_bridge_best_effort()
     client.stop_navigation.assert_called_once()
+    client.close.assert_called_once()
     assert skills._client is None
     assert skills.stopped_tools == ["holoagent_nav"]
 

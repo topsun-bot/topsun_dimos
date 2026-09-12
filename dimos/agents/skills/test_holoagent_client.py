@@ -177,6 +177,12 @@ def test_body_read_error_is_wrapped() -> None:
         client.health()
 
 
+def test_close_closes_session() -> None:
+    session = MagicMock()
+    HoloAgentBridgeClient("http://127.0.0.1:8000", session=session).close()
+    session.close.assert_called_once()
+
+
 def test_from_global_config_uses_passed_config() -> None:
     from dimos.core.global_config import GlobalConfig
 

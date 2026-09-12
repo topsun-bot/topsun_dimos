@@ -49,8 +49,10 @@ floor/room/object scene-graph navigation.
 
 These calls publish to the bridge and return when HTTP is accepted. They do
 not wait for the robot to reach a goal. They hold the `movement` capability
-until `holoagent_stop_nav` (or `holoagent_navigation_signal` with name
-`stop`). Do not start another movement skill until then.
+until `holoagent_stop_nav`. Do not call `holoagent_navigation_signal` with
+name `stop` to release that hold -- MCP refuses it while another HoloAgent
+nav skill holds movement. Do not start another movement skill until
+`holoagent_stop_nav`.
 
 - `holoagent_semantic_nav` — FSR-VLN / HMSG semantic goal via `/api/semantic_nav`
 - `holoagent_relative_move` — short relative pose via `/api/relative_nav`
@@ -117,6 +119,10 @@ class HoloAgentNavSkillContainer(Module):
                 logger.warning("HoloAgent bridge stop during shutdown failed: %s", exc)
             except Exception:
                 logger.exception("HoloAgent bridge stop during shutdown failed")
+            try:
+                client.close()
+            except Exception:
+                logger.exception("HoloAgent HTTP client close during shutdown failed")
         self._release_nav_hold()
         self._client = None
 
@@ -245,13 +251,20 @@ class HoloAgentNavSkillContainer(Module):
         """Trigger a named HoloAgent navigation signal.
 
         Sends POST /api/navigation/{name} (robot_bridge → chat_signal_pub).
-        Examples from HoloAgent robot-service skill: one_point_1, stop.
-        Name ``stop`` releases the CAP_MOVEMENT hold; other names hold it
-        until holoagent_stop_nav.
+        Examples from HoloAgent robot-service skill: one_point_1. Name
+        ``stop`` is refused here: MCP cannot acquire CAP_MOVEMENT while
+        another HoloAgent nav skill holds it. Use holoagent_stop_nav.
 
         Args:
-            name: Signal name such as "one_point_1" or "stop".
+            name: Signal name such as "one_point_1". Use holoagent_stop_nav
+                instead of "stop".
         """
+        if name.strip() == "stop":
+            return (
+                "HoloAgent navigation_signal('stop') refused: use "
+                "holoagent_stop_nav. MCP cannot start this skill while "
+                "another HoloAgent nav skill holds movement."
+            )
         self._begin_nav_hold()
         keep_hold = False
         try:
@@ -260,7 +273,7 @@ class HoloAgentNavSkillContainer(Module):
             except HoloAgentBridgeError as exc:
                 logger.warning("HoloAgent navigation signal failed: %s", exc)
                 return f"HoloAgent navigation signal failed: {exc}"
-            keep_hold = name.strip() != "stop"
+            keep_hold = True
             return _format_bridge_result(f"navigation_signal({name})", result)
         finally:
             if not keep_hold:
