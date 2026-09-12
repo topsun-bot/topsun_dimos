@@ -78,7 +78,16 @@ jobs:
           FORCE: ${{ inputs.force-cachix-build }}
           MARKER_HIT: ${{ steps.marker.outputs.cache-hit }}
         run: |
-          if [ "$FORCE" != "true" ] && [ "$MARKER_HIT" = "true" ]; then
+          # This job has no `environment:`, so the PR workflow applies.
+          # environment-protected cachix-build still executes the base/main
+          # definition, whose if: needs-build == 'true' is the only skip
+          # signal a topsun PR can send. Only dimensionalOS/dimos can write
+          # dimensionalos.cachix.org; force needs-build=false everywhere else.
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          if [ "${GITHUB_REPOSITORY}" != "dimensionalOS/dimos" ]; then
+            echo "::notice::Not dimensionalOS/dimos; forcing needs-build=false so environment-protected cachix-build is skipped."
+            echo "needs-build=false" >> "$GITHUB_OUTPUT"
+          elif [ "$FORCE" != "true" ] && [ "$MARKER_HIT" = "true" ]; then
             echo "needs-build=false" >> "$GITHUB_OUTPUT"
           else
             echo "needs-build=true" >> "$GITHUB_OUTPUT"
