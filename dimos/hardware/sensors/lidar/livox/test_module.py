@@ -14,6 +14,7 @@
 
 """The python config and the rust struct/registry agree field for field."""
 
+import importlib
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ import pytest
 import tomllib
 
 from dimos.core.native_module import NativeModuleConfig
+from dimos.hardware.sensors.lidar.livox import livox_blueprints
 from dimos.hardware.sensors.lidar.livox.module import Mid360, Mid360Config, _resolved_host_ip
 
 _RUST_MANIFEST = Path(__file__).parent / "rust" / "Cargo.toml"
@@ -58,6 +60,15 @@ def test_rust_struct_has_every_config_key() -> None:
 def test_empty_pcap_is_rejected() -> None:
     with pytest.raises(ValidationError, match="DIMOS_MID360_PCAP"):
         Mid360Config(pcap="")
+
+
+def test_demo_pcap_replay_blueprint_imports_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registered blueprints must import without DIMOS_MID360_PCAP (dimos list / CI)."""
+    monkeypatch.delenv("DIMOS_MID360_PCAP", raising=False)
+    module = importlib.reload(livox_blueprints)
+    assert module.demo_mid360_pcap_replay is not None
 
 
 def test_pcap_mode_skips_host_ip_resolution(monkeypatch: pytest.MonkeyPatch) -> None:

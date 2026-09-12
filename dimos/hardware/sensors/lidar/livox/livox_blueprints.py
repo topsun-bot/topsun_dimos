@@ -23,9 +23,11 @@ mid360 = autoconnect(
     vis_module("rerun"),
 ).global_config(n_workers=2, robot_model="mid360")
 
-# Replays the capture named by DIMOS_MID360_PCAP (required) through the
-# same driver pipeline as the live sensor.
+# Replays the capture named by DIMOS_MID360_PCAP through the same driver
+# pipeline as the live sensor. Unset/empty must stay None so importing the
+# registered blueprint (dimos list, test_all_blueprints) does not construct
+# Mid360Config(pcap="") — the validator rejects that empty string.
 demo_mid360_pcap_replay = autoconnect(
-    Mid360.blueprint(pcap=os.environ.get("DIMOS_MID360_PCAP", "")),
+    Mid360.blueprint(pcap=os.environ.get("DIMOS_MID360_PCAP") or None),
     vis_module("rerun"),
 ).global_config(n_workers=2, robot_model="mid360_pcap_replay")
