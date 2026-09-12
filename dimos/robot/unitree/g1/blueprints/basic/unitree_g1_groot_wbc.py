@@ -384,7 +384,7 @@ _G1_ROOT = G1_RERUN_ROOT if global_config.simulation == "mujoco" else "world/odo
 
 _G1_URDF_PATH = Path(__file__).resolve().parents[2] / "g1.urdf"
 _G1_TELEOP_MODEL = RobotModelConfig(
-    model=G1_TELEOP_ARM_MODEL,
+    model=G1_TELEOP_ARM_MODEL.with_default_joint_acceleration_limit(2.0),
     joint_names=list(g1_arms),
     base_link="pelvis",
 )

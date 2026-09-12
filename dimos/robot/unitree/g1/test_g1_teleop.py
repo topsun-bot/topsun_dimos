@@ -29,6 +29,7 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
 from dimos.control.tasks.trajectory_task.trajectory_task import JOINT_TRAJECTORY_TASK_NAME
 from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import Blueprint
+from dimos.manipulation.planning.spec.validation import prepare_robot_model
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_groot_wbc import (
     _G1_TELEOP_MODEL,
@@ -80,6 +81,13 @@ def test_g1_blueprint_uses_shared_bimanual_teleop_task() -> None:
     assert _G1_TELEOP_MODEL.base_link == "pelvis"
     assert _G1_TELEOP_MODEL.joint_names == g1_arms
     assert task.params["max_joint_velocity_rad_s"] == pytest.approx(np.deg2rad(120.0))
+
+
+def test_g1_teleop_model_is_accepted_by_prepare_robot_model() -> None:
+    prepared = prepare_robot_model(_G1_TELEOP_MODEL)
+
+    assert prepared.joint_space.names == tuple(g1_arms)
+    assert prepared.joint_space.acceleration_limits == pytest.approx((2.0,) * len(g1_arms))
 
 
 def test_g1_blueprint_keeps_bounded_trajectory_path_below_teleop() -> None:
