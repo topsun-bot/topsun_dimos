@@ -17,16 +17,22 @@
 
 Requires a running HorizonRobotics HoloAgent ``robot_bridge`` for the
 ``holoagent_*`` navigation skills (default ``http://127.0.0.1:8000``).
-Native DimOS navigation and sport skills remain available. G1 arm FIFO
-skills live on ``unitree-g1-holoagent`` only.
+Native DimOS navigation and sport skills remain available. HoloAgent
+``/api/arm`` is not exposed on Go2 or G1.
 """
 
-from dimos.agents.skills.holoagent import HoloAgentNavSkillContainer
+from dimos.agents.mcp.mcp_client import McpClient
+from dimos.agents.skills.holoagent import HOLOAGENT_SKILLS_PROMPT, HoloAgentNavSkillContainer
+from dimos.agents.system_prompt import SYSTEM_PROMPT
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitree_go2_agentic
 
 unitree_go2_holoagent = autoconnect(
     unitree_go2_agentic,
+    # Later McpClient atom wins (same instance name) so the agent also
+    # calls holoagent_stop_nav; native stop_all_motion does not cancel
+    # a robot_bridge goal.
+    McpClient.blueprint(system_prompt=SYSTEM_PROMPT + HOLOAGENT_SKILLS_PROMPT),
     HoloAgentNavSkillContainer.blueprint(),
 )
 

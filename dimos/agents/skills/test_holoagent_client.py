@@ -148,6 +148,17 @@ def test_http_error_is_wrapped() -> None:
         client.health()
 
 
+def test_http_status_error_is_wrapped() -> None:
+    session = MagicMock()
+    response = MagicMock()
+    response.raise_for_status.side_effect = requests.HTTPError("503")
+    session.request.return_value = response
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=session)
+
+    with pytest.raises(HoloAgentBridgeError, match="GET http://127.0.0.1:8000/health failed"):
+        client.health()
+
+
 class _ChunkedBodyResponse:
     def raise_for_status(self) -> None:
         return None

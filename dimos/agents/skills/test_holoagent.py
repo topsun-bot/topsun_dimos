@@ -151,11 +151,37 @@ def test_navigation_signal_stop_releases_hold() -> None:
     assert skills.stopped_tools == ["holoagent_nav"]
 
 
+def test_health_success_is_not_a_publish_message() -> None:
+    skills, client = _container()
+    client.health.return_value = {"status": "ok"}
+    result = skills.holoagent_health()
+    assert result.startswith("HoloAgent robot_bridge health:")
+    assert "not waiting for arrival" not in result
+
+
 def test_bridge_errors_are_returned_as_strings() -> None:
     skills, client = _container()
     client.health.side_effect = HoloAgentBridgeError("GET http://127.0.0.1:8000/health failed")
     result = skills.holoagent_health()
-    assert result.startswith("HoloAgent robot_bridge not reachable")
+    assert result.startswith("HoloAgent health check failed:")
+
+
+def test_module_shutdown_stops_bridge() -> None:
+    skills, client = _container()
+    client.stop_navigation.return_value = {"success": True}
+    skills._stop_bridge_best_effort()
+    client.stop_navigation.assert_called_once()
+    assert skills.stopped_tools == ["holoagent_nav"]
+    assert skills._client is None
+
+
+def test_module_shutdown_still_drops_client_if_bridge_stop_fails() -> None:
+    skills, client = _container()
+    client.stop_navigation.side_effect = HoloAgentBridgeError("down")
+    skills._stop_bridge_best_effort()
+    client.stop_navigation.assert_called_once()
+    assert skills._client is None
+    assert skills.stopped_tools == ["holoagent_nav"]
 
 
 def test_stop_nav_success() -> None:
@@ -205,3 +231,20 @@ def test_holoagent_url_env_aliases(
         monkeypatch.delenv(alias, raising=False)
     monkeypatch.setenv(env_name, value)
     assert GlobalConfig(_env_file=None).holoagent_url == value
+
+
+def test_dimos_holoagent_url_wins_over_other_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dimos.core.global_config import GlobalConfig
+
+    monkeypatch.delenv("holoagent_url", raising=False)
+    monkeypatch.setenv("HOLOAGENT_URL", "http://old.example:8000")
+    monkeypatch.setenv("DIMOS_HOLOAGENT_URL", "http://new.example:8000")
+    assert GlobalConfig(_env_file=None).holoagent_url == "http://new.example:8000"
+
+
+def test_holoagent_prompt_requires_bridge_stop_on_user_halt() -> None:
+    from dimos.agents.skills.holoagent import HOLOAGENT_SKILLS_PROMPT
+
+    assert "holoagent_stop_nav" in HOLOAGENT_SKILLS_PROMPT
+    assert "stop_all_motion" in HOLOAGENT_SKILLS_PROMPT
+    assert "does not cancel a" in HOLOAGENT_SKILLS_PROMPT

@@ -88,7 +88,14 @@ HoloAgent nav skills publish to ROS and return when the HTTP call is
 accepted. They do **not** wait for `waypoint_reached`. They hold
 `CAP_MOVEMENT` until `holoagent_stop_nav` (or `holoagent_navigation_signal`
 with name `stop`), so a later native or HoloAgent movement skill is refused
-until that stop.
+until that stop. Module shutdown (`dimos stop`) best-effort POSTs
+`/api/navigation/stop` before dropping the HTTP client.
+
+`unitree-go2-holoagent` / `unitree-g1-holoagent` replace the nested
+`McpClient` prompt with the robot prompt plus `HOLOAGENT_SKILLS_PROMPT`,
+so a user stop request calls `holoagent_stop_nav` as well as
+`stop_all_motion`. Native `stop_all_motion` still does not cancel the
+bridge by itself.
 
 Relative moves are short adjustments: finite values, at least one non-zero
 axis, `|forward|`/`|left|` ≤ 3.0 m, `|rotation|` ≤ 180°. Longer goals should
@@ -129,9 +136,9 @@ structured keys (`floor`/`room`/`object`, `forward`/`left`/`rotation`).
 1. Optional: load a prebuilt HMSG and call `FsrVlnClient.query` in-process
    (`agentic_robot/fsr_vln/api.py`) — only if Topsun ships HoloAgent maps
    and accepts the CUDA/SAM/OVO dependency.
-2. Optional: append `HOLOAGENT_SKILLS_PROMPT` from
-   `dimos/agents/skills/holoagent.py` to `McpClient.blueprint(system_prompt=...)`
-   on the holoagent blueprints so the LLM prefers the right stack.
+2. Optional: in-process wait for HoloAgent `waypoint_reached` (the HTTP
+   path is still publish-only; `CAP_MOVEMENT` is held until
+   `holoagent_stop_nav`).
 3. Do **not** start from an upstream `dimensionalOS/dimos` merge for this
    slice — `@skill`, MCP, and Go2/G1 blueprints already exist on
    `topsun-bot/topsun_dimos` main. No open upstream-merge PR was found.

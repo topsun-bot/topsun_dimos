@@ -57,6 +57,10 @@ until `holoagent_stop_nav` (or `holoagent_navigation_signal` with name
 - `holoagent_stop_nav` — stop HoloAgent navigation
 - `holoagent_health` — check that robot_bridge is reachable
 
+When the user asks to stop, halt, or cancel motion, call `holoagent_stop_nav`
+and native `stop_all_motion`. Native `stop_all_motion` does not cancel a
+HoloAgent robot_bridge goal.
+
 HoloAgent `/api/arm/{skill}` is not exposed: it publishes `arm_signal_pub`,
 but `g1_arm` `getcmd.cpp` only subscribes to `chat_signal_pub`. Prefer native
 `execute_arm_command`. FIFO names such as `wave_above_head` can be sent with
@@ -85,8 +89,7 @@ class HoloAgentNavSkillContainer(Module):
 
     @rpc
     def stop(self) -> None:
-        self._release_nav_hold()
-        self._client = None
+        self._stop_bridge_best_effort()
         super().stop()
 
     def _bridge(self) -> HoloAgentBridgeClient:
@@ -99,6 +102,23 @@ class HoloAgentNavSkillContainer(Module):
 
     def _release_nav_hold(self) -> None:
         self.stop_tool(_HOLOAGENT_NAV_TOOL)
+
+    def _stop_bridge_best_effort(self) -> None:
+        """POST /api/navigation/stop if a client exists, then drop it.
+
+        Shutdown still proceeds if the bridge call fails. ``super().stop()``
+        errors are not swallowed.
+        """
+        client = self._client
+        if client is not None:
+            try:
+                client.stop_navigation()
+            except HoloAgentBridgeError as exc:
+                logger.warning("HoloAgent bridge stop during shutdown failed: %s", exc)
+            except Exception:
+                logger.exception("HoloAgent bridge stop during shutdown failed")
+        self._release_nav_hold()
+        self._client = None
 
     @skill
     def holoagent_health(self) -> str:
@@ -115,8 +135,8 @@ class HoloAgentNavSkillContainer(Module):
             result = self._bridge().health()
         except HoloAgentBridgeError as exc:
             logger.warning("HoloAgent health check failed: %s", exc)
-            return f"HoloAgent robot_bridge not reachable: {exc}"
-        return _format_bridge_result("health", result)
+            return f"HoloAgent health check failed: {exc}"
+        return f"HoloAgent robot_bridge health: {json.dumps(result, ensure_ascii=False)}"
 
     @skill(uses=[CAP_MOVEMENT], lifecycle="background")
     def holoagent_semantic_nav(

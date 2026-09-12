@@ -122,9 +122,9 @@ class GlobalConfig(BaseSettings):
     holoagent_url: str = Field(
         default="http://127.0.0.1:8000",
         validation_alias=AliasChoices(
-            "holoagent_url",
-            "HOLOAGENT_URL",
             "DIMOS_HOLOAGENT_URL",
+            "HOLOAGENT_URL",
+            "holoagent_url",
         ),
         description=(
             "Base URL of a running HorizonRobotics HoloAgent robot_bridge "
