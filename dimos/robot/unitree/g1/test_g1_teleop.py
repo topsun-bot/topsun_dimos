@@ -80,9 +80,11 @@ def test_g1_blueprint_uses_shared_bimanual_teleop_task() -> None:
     ]
     assert _G1_TELEOP_MODEL.base_link == "pelvis"
     assert _G1_TELEOP_MODEL.joint_names == g1_arms
+    assert _G1_TELEOP_MODEL.model._default_joint_acceleration_limit == 2.0
     assert task.params["max_joint_velocity_rad_s"] == pytest.approx(np.deg2rad(120.0))
 
 
+@pytest.mark.self_hosted
 def test_g1_teleop_model_is_accepted_by_prepare_robot_model() -> None:
     prepared = prepare_robot_model(_G1_TELEOP_MODEL)
 

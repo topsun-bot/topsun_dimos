@@ -123,7 +123,7 @@ def synth_pcap(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def _require_binary(name: str) -> Path:
     binary = _RELEASE / name
     if not binary.exists():
-        pytest.fail(
+        pytest.skip(
             f"{binary} missing; run: cargo build --release -p dimos-livox -p dimos-virtual-mid360"
         )
     return binary
