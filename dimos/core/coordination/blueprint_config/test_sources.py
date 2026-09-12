@@ -68,6 +68,31 @@ def test_preparse_environment_null_coerces_to_none() -> None:
     assert values["relay_url"] is None
 
 
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {
+            "HOLOAGENT_URL": "http://old.example:8000",
+            "DIMOS_HOLOAGENT_URL": "http://new.example:8000",
+        },
+        {
+            "DIMOS_HOLOAGENT_URL": "http://new.example:8000",
+            "HOLOAGENT_URL": "http://old.example:8000",
+        },
+    ],
+)
+def test_preparse_prefers_first_alias_choice(environ: dict[str, str]) -> None:
+    values = BlueprintConfigParser.preparse_global_config(environ=environ)
+    assert values["holoagent_url"] == "http://new.example:8000"
+
+
+def test_preparse_prefers_dimos_transport_alias() -> None:
+    values = BlueprintConfigParser.preparse_global_config(
+        environ={"DIMOS_TRANSPORT": "lcm", "transport": "zenoh"},
+    )
+    assert values["transport"] == "lcm"
+
+
 def test_config_file_errors_are_clear_but_missing_file_is_optional(tmp_path: Path) -> None:
     parser = BlueprintConfigParser(PrimaryModule.blueprint())
     parser.parse(config_path=tmp_path / "missing.json", environ={})

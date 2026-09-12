@@ -21,7 +21,7 @@ from dimos.agents.skills.holoagent import (
     HoloAgentNavSkillContainer,
     HoloAgentSkillContainer,
 )
-from dimos.agents.skills.holoagent_client import HoloAgentBridgeError
+from dimos.agents.skills.holoagent_client import SHUTDOWN_TIMEOUT_SEC, HoloAgentBridgeError
 
 
 class _BareHoloAgentSkills(HoloAgentNavSkillContainer):
@@ -113,6 +113,20 @@ def test_semantic_nav_rejects_blank_object() -> None:
     result = skills.holoagent_semantic_nav("   ")
     client.semantic_nav.assert_not_called()
     assert "refused" in result
+    assert skills.stopped_tools == ["holoagent_nav"]
+
+
+def test_failed_same_tool_takeover_keeps_hold() -> None:
+    skills, client = _container()
+    client.semantic_nav.return_value = {"success": True}
+    skills.holoagent_semantic_nav("coffee machine", floor="1F", room="pantry")
+
+    result = skills.holoagent_semantic_nav("   ")
+
+    client.semantic_nav.assert_called_once()
+    assert "refused" in result
+    assert skills.started_tools == ["holoagent_nav", "holoagent_nav"]
+    assert skills.stopped_tools == []
 
 
 def test_semantic_nav_rejects_commas() -> None:
@@ -171,7 +185,7 @@ def test_module_shutdown_stops_bridge() -> None:
     skills, client = _container()
     client.stop_navigation.return_value = {"success": True}
     skills._stop_bridge_best_effort()
-    client.stop_navigation.assert_called_once()
+    client.stop_navigation.assert_called_once_with(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
     client.close.assert_called_once()
     assert skills.stopped_tools == ["holoagent_nav"]
     assert skills._client is None
@@ -181,7 +195,7 @@ def test_module_shutdown_still_drops_client_if_bridge_stop_fails() -> None:
     skills, client = _container()
     client.stop_navigation.side_effect = HoloAgentBridgeError("down")
     skills._stop_bridge_best_effort()
-    client.stop_navigation.assert_called_once()
+    client.stop_navigation.assert_called_once_with(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
     client.close.assert_called_once()
     assert skills._client is None
     assert skills.stopped_tools == ["holoagent_nav"]
@@ -251,3 +265,12 @@ def test_holoagent_prompt_requires_bridge_stop_on_user_halt() -> None:
     assert "holoagent_stop_nav" in HOLOAGENT_SKILLS_PROMPT
     assert "stop_all_motion" in HOLOAGENT_SKILLS_PROMPT
     assert "does not cancel a" in HOLOAGENT_SKILLS_PROMPT
+    assert "execute_arm_command" not in HOLOAGENT_SKILLS_PROMPT
+
+
+def test_g1_holoagent_prompt_mentions_native_arm() -> None:
+    from dimos.agents.skills.holoagent import HOLOAGENT_G1_SKILLS_PROMPT
+
+    assert "holoagent_stop_nav" in HOLOAGENT_G1_SKILLS_PROMPT
+    assert "execute_arm_command" in HOLOAGENT_G1_SKILLS_PROMPT
+    assert "holoagent_navigation_signal" in HOLOAGENT_G1_SKILLS_PROMPT

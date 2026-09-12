@@ -27,6 +27,7 @@ from typing import Any
 from dimos.agents.annotation import skill
 from dimos.agents.capabilities import CAP_MOVEMENT
 from dimos.agents.skills.holoagent_client import (
+    SHUTDOWN_TIMEOUT_SEC,
     HoloAgentBridgeClient,
     HoloAgentBridgeContract,
     HoloAgentBridgeError,
@@ -41,7 +42,7 @@ logger = setup_logger()
 # HoloAgent nav skill currently holds CAP_MOVEMENT.
 _HOLOAGENT_NAV_TOOL = "holoagent_nav"
 
-HOLOAGENT_SKILLS_PROMPT = """
+_HOLOAGENT_NAV_PROMPT = """
 # HoloAgent robot_bridge (optional)
 Use these skills only when a HorizonRobotics HoloAgent ``robot_bridge`` is
 running (default ``http://127.0.0.1:8000``) and the user wants that stack's
@@ -54,15 +55,26 @@ name `stop` to release that hold -- MCP refuses it while another HoloAgent
 nav skill holds movement. Do not start another movement skill until
 `holoagent_stop_nav`.
 
-- `holoagent_semantic_nav` — FSR-VLN / HMSG semantic goal via `/api/semantic_nav`
-- `holoagent_relative_move` — short relative pose via `/api/relative_nav`
-- `holoagent_stop_nav` — stop HoloAgent navigation
-- `holoagent_health` — check that robot_bridge is reachable
+- `holoagent_semantic_nav` -- FSR-VLN / HMSG semantic goal via `/api/semantic_nav`
+- `holoagent_relative_move` -- short relative pose via `/api/relative_nav`
+- `holoagent_stop_nav` -- stop HoloAgent navigation
+- `holoagent_health` -- check that robot_bridge is reachable
 
 When the user asks to stop, halt, or cancel motion, call `holoagent_stop_nav`
 and native `stop_all_motion`. Native `stop_all_motion` does not cancel a
 HoloAgent robot_bridge goal.
+"""
 
+HOLOAGENT_SKILLS_PROMPT = (
+    _HOLOAGENT_NAV_PROMPT
+    + """
+Otherwise use native DimOS `navigate_with_text` and `move`.
+"""
+)
+
+HOLOAGENT_G1_SKILLS_PROMPT = (
+    _HOLOAGENT_NAV_PROMPT
+    + """
 HoloAgent `/api/arm/{skill}` is not exposed: it publishes `arm_signal_pub`,
 but `g1_arm` `getcmd.cpp` only subscribes to `chat_signal_pub`. Prefer native
 `execute_arm_command`. FIFO names such as `wave_above_head` can be sent with
@@ -70,6 +82,7 @@ but `g1_arm` `getcmd.cpp` only subscribes to `chat_signal_pub`. Prefer native
 
 Otherwise use native DimOS `navigate_with_text`, `move`, and `execute_arm_command`.
 """
+)
 
 
 def _format_bridge_result(action: str, result: dict[str, Any]) -> str:
@@ -83,6 +96,7 @@ class HoloAgentNavSkillContainer(Module):
     """HoloAgent robot_bridge navigation skills (Go2 and G1)."""
 
     _client: HoloAgentBridgeClient | None = None
+    _nav_hold_open: bool = False
 
     @rpc
     def start(self) -> None:
@@ -99,22 +113,34 @@ class HoloAgentNavSkillContainer(Module):
             self._client = HoloAgentBridgeClient.from_global_config(self.config.g)
         return self._client
 
-    def _begin_nav_hold(self) -> None:
+    def _begin_nav_hold(self) -> bool:
+        """Open or rebind the nav tool stream.
+
+        Returns True if a hold was already open (same-tool takeover). A
+        failed takeover must keep that hold: ``start_tool`` rebinds the
+        live stream, and releasing here would drop CAP_MOVEMENT while the
+        previous bridge goal is still driving.
+        """
+        already_open = self._nav_hold_open
         self.start_tool(_HOLOAGENT_NAV_TOOL)
+        self._nav_hold_open = True
+        return already_open
 
     def _release_nav_hold(self) -> None:
         self.stop_tool(_HOLOAGENT_NAV_TOOL)
+        self._nav_hold_open = False
 
     def _stop_bridge_best_effort(self) -> None:
         """POST /api/navigation/stop if a client exists, then drop it.
 
-        Shutdown still proceeds if the bridge call fails. ``super().stop()``
-        errors are not swallowed.
+        Uses a short HTTP timeout so an unavailable bridge cannot outlive
+        worker/CLI teardown. Shutdown still proceeds if the bridge call
+        fails. ``super().stop()`` errors are not swallowed.
         """
         client = self._client
         if client is not None:
             try:
-                client.stop_navigation()
+                client.stop_navigation(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
             except HoloAgentBridgeError as exc:
                 logger.warning("HoloAgent bridge stop during shutdown failed: %s", exc)
             except Exception:
@@ -164,8 +190,7 @@ class HoloAgentNavSkillContainer(Module):
             floor: Floor label such as "1F", or "unknown" if not specified.
             room: Room name such as "pantry" or "meeting room", or "unknown".
         """
-        self._begin_nav_hold()
-        keep_hold = False
+        keep_hold = self._begin_nav_hold()
         try:
             try:
                 HoloAgentBridgeContract.format_semantic_cmd(floor, room, object_name)
@@ -209,8 +234,7 @@ class HoloAgentNavSkillContainer(Module):
                 Magnitude must be finite and at most
                 ``HoloAgentBridgeContract.MAX_RELATIVE_ROTATION_DEG`` (180).
         """
-        self._begin_nav_hold()
-        keep_hold = False
+        keep_hold = self._begin_nav_hold()
         try:
             try:
                 HoloAgentBridgeContract.check_relative_nav(forward, left, rotation)
@@ -265,8 +289,7 @@ class HoloAgentNavSkillContainer(Module):
                 "holoagent_stop_nav. MCP cannot start this skill while "
                 "another HoloAgent nav skill holds movement."
             )
-        self._begin_nav_hold()
-        keep_hold = False
+        keep_hold = self._begin_nav_hold()
         try:
             try:
                 result = self._bridge().navigation_signal(name)

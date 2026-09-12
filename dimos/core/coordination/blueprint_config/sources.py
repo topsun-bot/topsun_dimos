@@ -87,7 +87,9 @@ def merge_global_environment(
     environ: Mapping[str, str],
 ) -> None:
     global_env_names = global_environment_names()
+    alias_ranks = global_environment_alias_ranks()
     targets = _global_option_targets()
+    applied_rank: dict[str, int] = {}
 
     def set_coerced(path: tuple[str, ...], raw_name: str, value: str) -> None:
         target = targets.get(normalize_option_name(".".join(path)))
@@ -97,7 +99,12 @@ def merge_global_environment(
     for raw_name, value in environ.items():
         global_field = global_env_names.get(raw_name.lower())
         if global_field is not None:
+            rank = alias_ranks[global_field].get(raw_name.lower(), 10_000)
+            previous = applied_rank.get(global_field)
+            if previous is not None and previous <= rank:
+                continue
             set_coerced((global_field,), raw_name, value)
+            applied_rank[global_field] = rank
             continue
         parts = tuple(part.lower().replace("-", "_") for part in raw_name.split("__"))
         if len(parts) >= 2 and parts[0] == "g":
@@ -186,3 +193,25 @@ def global_environment_names() -> dict[str, str]:
                 if isinstance(choice, str):
                     names[choice.lower()] = field_name
     return names
+
+
+def global_environment_alias_ranks() -> dict[str, dict[str, int]]:
+    """Map each GlobalConfig field to env-alias ranks (0 = highest priority).
+
+    ``AliasChoices`` order is pydantic's first-match-wins order. Environment
+    merge must use the same order instead of ``environ`` insertion order.
+    """
+    ranks_by_field: dict[str, dict[str, int]] = {}
+    for field_name, info in GlobalConfig.model_fields.items():
+        ranks: dict[str, int] = {}
+        alias = info.validation_alias
+        if isinstance(alias, AliasChoices):
+            for index, choice in enumerate(alias.choices):
+                if isinstance(choice, str):
+                    ranks[choice.lower()] = index
+        elif isinstance(alias, str):
+            ranks[alias.lower()] = 0
+        if field_name.lower() not in ranks:
+            ranks[field_name.lower()] = len(ranks)
+        ranks_by_field[field_name] = ranks
+    return ranks_by_field

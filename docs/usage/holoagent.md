@@ -92,11 +92,15 @@ while another HoloAgent nav skill holds movement. Module shutdown
 (`dimos stop`) best-effort POSTs `/api/navigation/stop` before dropping
 the HTTP client.
 
-`unitree-go2-holoagent` / `unitree-g1-holoagent` replace the nested
-`McpClient` prompt with the robot prompt plus `HOLOAGENT_SKILLS_PROMPT`,
-so a user stop request calls `holoagent_stop_nav` as well as
-`stop_all_motion`. Native `stop_all_motion` still does not cancel the
-bridge by itself.
+`unitree-go2-holoagent` replaces the nested `McpClient` prompt with the
+Go2 prompt plus `HOLOAGENT_SKILLS_PROMPT` (navigation only).
+`unitree-g1-holoagent` uses `HOLOAGENT_G1_SKILLS_PROMPT`, which also
+points at native `execute_arm_command` and FIFO names via
+`holoagent_navigation_signal`. A user stop request should call
+`holoagent_stop_nav` as well as `stop_all_motion`. Native
+`stop_all_motion` still does not cancel the bridge by itself. Module
+shutdown uses a 2s HTTP timeout for `POST /api/navigation/stop` so an
+unavailable bridge cannot outlive worker teardown.
 
 Relative moves are short adjustments: finite values, at least one non-zero
 axis, `|forward|`/`|left|` ≤ 3.0 m, `|rotation|` ≤ 180°. Longer goals should

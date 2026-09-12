@@ -19,6 +19,7 @@ import pytest
 import requests
 
 from dimos.agents.skills.holoagent_client import (
+    SHUTDOWN_TIMEOUT_SEC,
     HoloAgentBridgeClient,
     HoloAgentBridgeContract,
     HoloAgentBridgeError,
@@ -175,6 +176,19 @@ def test_body_read_error_is_wrapped() -> None:
 
     with pytest.raises(HoloAgentBridgeError, match="GET http://127.0.0.1:8000/health failed"):
         client.health()
+
+
+def test_stop_navigation_accepts_timeout_override() -> None:
+    session = MagicMock()
+    response = MagicMock()
+    response.content = b'{"success": true}'
+    response.json.return_value = {"success": True}
+    session.request.return_value = response
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=session)
+
+    client.stop_navigation(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
+
+    assert session.request.call_args.kwargs["timeout"] == SHUTDOWN_TIMEOUT_SEC
 
 
 def test_close_closes_session() -> None:

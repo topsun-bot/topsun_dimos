@@ -42,6 +42,8 @@ import requests
 from dimos.core.global_config import GlobalConfig, global_config
 
 _DEFAULT_TIMEOUT_SEC = 10.0
+# Worker/CLI teardown is about 5s. A hung bridge must not outlive that.
+SHUTDOWN_TIMEOUT_SEC = 2.0
 
 
 class HoloAgentBridgeError(RuntimeError):
@@ -176,8 +178,8 @@ class HoloAgentBridgeClient:
             {"cmd": HoloAgentBridgeContract.format_relative_cmd(forward, left, rotation_deg)},
         )
 
-    def stop_navigation(self) -> dict[str, Any]:
-        return self._request("POST", "/api/navigation/stop")
+    def stop_navigation(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
+        return self._request("POST", "/api/navigation/stop", timeout_sec=timeout_sec)
 
     def navigation_signal(self, name: str) -> dict[str, Any]:
         token = HoloAgentBridgeContract.safe_path_token(name, "navigation signal")
@@ -201,14 +203,17 @@ class HoloAgentBridgeClient:
         method: str,
         path: str,
         payload: dict[str, Any] | None = None,
+        *,
+        timeout_sec: float | None = None,
     ) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
+        timeout = self.timeout_sec if timeout_sec is None else timeout_sec
         try:
             response = self._session.request(
                 method=method,
                 url=url,
                 json=payload,
-                timeout=self.timeout_sec,
+                timeout=timeout,
             )
             response.raise_for_status()
             content = response.content

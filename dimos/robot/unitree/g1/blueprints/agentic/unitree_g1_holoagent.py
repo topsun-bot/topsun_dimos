@@ -22,7 +22,7 @@ HoloAgent ``/api/arm`` is not wired: use native ``execute_arm_command``.
 """
 
 from dimos.agents.mcp.mcp_client import McpClient
-from dimos.agents.skills.holoagent import HOLOAGENT_SKILLS_PROMPT, HoloAgentNavSkillContainer
+from dimos.agents.skills.holoagent import HOLOAGENT_G1_SKILLS_PROMPT, HoloAgentNavSkillContainer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic import unitree_g1_agentic
 from dimos.robot.unitree.g1.system_prompt import G1_SYSTEM_PROMPT
@@ -32,7 +32,7 @@ unitree_g1_holoagent = autoconnect(
     # Later McpClient atom wins (same instance name) so the agent also
     # calls holoagent_stop_nav; native stop_all_motion does not cancel
     # a robot_bridge goal.
-    McpClient.blueprint(system_prompt=G1_SYSTEM_PROMPT + HOLOAGENT_SKILLS_PROMPT),
+    McpClient.blueprint(system_prompt=G1_SYSTEM_PROMPT + HOLOAGENT_G1_SKILLS_PROMPT),
     HoloAgentNavSkillContainer.blueprint(),
 )
 
