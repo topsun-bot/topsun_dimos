@@ -61,8 +61,8 @@ dimos --replay run unitree-go2-agentic --daemon
 
 # Then use MCP tools:
 dimos mcp list-tools                                              # all available skills as JSON
-dimos mcp call move --arg x=0.5 --arg duration=2.0               # call by key=value args
-dimos mcp call move --json-args '{"x": 0.5, "duration": 2.0}'    # call by JSON
+dimos mcp call move_to --arg x=0.5 --arg relative=true           # Go2 skill (not `move`)
+dimos mcp call move_to --json-args '{"x": 0.5, "relative": true}'
 dimos mcp status      # PID, module list, skill list
 dimos mcp modules     # module → skills mapping
 

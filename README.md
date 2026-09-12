@@ -32,7 +32,7 @@
 
 系统依赖：[Ubuntu](docs/installation/ubuntu.md) · [Nix](docs/installation/nix.md) · [macOS](docs/installation/osx.md) · [需求](docs/requirements.md)
 
-```bash
+```bash skip
 export GIT_LFS_SKIP_SMUDGE=1
 git clone https://github.com/topsun-bot/topsun_dimos.git
 cd topsun_dimos
@@ -46,7 +46,7 @@ uv pip install -e '.[base,unitree]'   # 本仓可编辑安装，不是 PyPI 上�
 
 只要上游 DimOS、不要本仓改动时，可用上游安装脚本（会 clone `dimensionalOS/dimos`，不是本仓）：
 
-```bash
+```bash skip
 curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/install.sh | bash
 ```
 
@@ -60,10 +60,10 @@ curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/in
 | `dimos --simulation run unitree-go2-agentic` | 再装 `.[sim]` + `OPENAI_API_KEY` |
 | `dimos --simulation run unitree-g1-agentic-sim` | 同上 |
 | `dimos run unitree-go2-agentic --robot-ip <IP>` | 真机 Go2（`OPENAI_API_KEY`；不必装 `sim`） |
-| `dimos --simulation run unitree-go2-agentic-ollama` | `.[sim]` + 本机已 `ollama serve`（模型 `qwen3:8b`） |
+| `dimos --simulation run unitree-go2-agentic-ollama` | `.[sim]` + `ollama serve` + `ollama pull qwen3:8b` |
 | `dimos list` | 全部蓝图 |
 
-```bash
+```bash skip
 # 回放（无硬件）
 dimos --replay run unitree-go2
 
@@ -76,7 +76,9 @@ dimos --simulation run unitree-go2-agentic
 export ROBOT_IP=<YOUR_ROBOT_IP>
 dimos run unitree-go2-agentic
 
-# 本地 Ollama（先 https://ollama.com 安装，并保持 ollama serve）
+# 本地 Ollama（https://ollama.com ；daemon 不会自动 pull）
+# ollama serve
+# ollama pull qwen3:8b
 # dimos --simulation run unitree-go2-agentic-ollama
 ```
 
@@ -88,7 +90,7 @@ dimos run unitree-go2-agentic
 
 Agent 控机器人的当前路径：蓝图里同时放 `McpServer` + `McpClient`，LLM 发现并调用 `@skill`。默认 `unitree-go2-agentic` 用 `gpt-5.6-luna`，需 `OPENAI_API_KEY`。Go2 位移技能是 `move_to`（不是 `move`）。
 
-```bash
+```bash skip
 export OPENAI_API_KEY=<YOUR_KEY>
 dimos --replay run unitree-go2-agentic --daemon
 dimos status
@@ -115,10 +117,11 @@ MCP：`http://localhost:9990/mcp`（`GlobalConfig.mcp_port`）。
 
 ## 开发
 
-```bash
+```bash skip
 export GIT_LFS_SKIP_SMUDGE=1
 git clone https://github.com/topsun-bot/topsun_dimos.git
 cd topsun_dimos
+# uv run 会按需同步 default-groups=tests（含 pytest-xdist）
 uv run pytest --numprocesses=auto dimos
 ```
 
