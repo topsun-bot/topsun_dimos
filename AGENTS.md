@@ -145,6 +145,8 @@ docs/
 
 If you are a coding agent working on this dimos codebase, our coding agent focused docs are at `docs/coding-agents/index.md`
 
+**CI incidents → `docs/ci-oncall/`** (read-only triage playbooks; humans merge, push cache, and deploy).
+
 ---
 
 ## Architecture
@@ -397,3 +399,4 @@ CI asserts the file is current — if it's stale, CI fails. Externally packaged 
 - CLI / dimos run: `docs/usage/cli.md`
 - LFS data: `docs/development/large_file_management.md`
 - Agent system: `docs/capabilities/agents/`
+- CI incidents: `docs/ci-oncall/`
