@@ -25,6 +25,9 @@ Modes:
                  while the push daemon drains. cachix-action reports push
                  failures without failing the build, so CI must run this
                  before trusting a build enough to save the publish marker.
+                 Repositories that cannot write the configured cache skip this
+                 check and record `.cachix-marker/skip-publish` instead of
+                 pretending the paths were pushed.
   --record-links Print `result-symlink store-path` per built module. The
                  publish job stores this in the marker cache entry so consumers
                  can materialise binaries without evaluating anything.
@@ -63,6 +66,9 @@ import urllib.error
 import urllib.request
 
 MARKER_SALT = 1
+SKIP_PUBLISH_NAME = "skip-publish"
+DIMENSIONALOS_CACHIX = "dimensionalos"
+DIMENSIONALOS_REPO = "dimensionalOS/dimos"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DIR = REPO_ROOT / "dimos"
@@ -80,6 +86,50 @@ def _github_output(line: str) -> None:
     if github_output:
         with open(github_output, "a") as handle:
             handle.write(line + "\n")
+
+
+def marker_dir() -> Path:
+    """Directory the publish job stores (and consumers restore) as the marker."""
+    override = os.environ.get("CACHIX_MARKER_DIR")
+    return Path(override) if override else REPO_ROOT / ".cachix-marker"
+
+
+def can_publish_to_configured_cache() -> bool:
+    """Whether this checkout is allowed to push to $CACHIX_CACHE_NAME.
+
+    Only dimensionalOS/dimos writes dimensionalos.cachix.org. A required-workflow
+    ruleset pins `.github/workflows/ci.yml` to this repo's `main`, so PR edits
+    to that file never run; the publish job still checks out the PR and runs
+    this script. Returning false here is the signal that job can honor.
+    """
+    cache = os.environ.get("CACHIX_CACHE_NAME", "")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    if cache == DIMENSIONALOS_CACHIX:
+        return repository in ("", DIMENSIONALOS_REPO)
+    return True
+
+
+def write_skip_publish_marker() -> Path:
+    """Record that this inputs-hash was not published to Cachix."""
+    path = marker_dir() / SKIP_PUBLISH_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "This repository cannot publish to the configured Cachix cache.\n"
+        "Do not treat this marker as proof that store paths are in Cachix.\n"
+    )
+    return path
+
+
+def skip_publish_recorded(links_file: str | os.PathLike[str] | None = None) -> bool:
+    """True when the restored marker says nothing was published."""
+    if links_file is not None:
+        return (Path(links_file).parent / SKIP_PUBLISH_NAME).is_file()
+    return (marker_dir() / SKIP_PUBLISH_NAME).is_file()
+
+
+def hosted_ci_skips_native_fallback() -> bool:
+    """GitHub-hosted runners never compile the heavy native closures."""
+    return os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
 
 
 # Pre-filter source files for a NativeModuleConfig subclass before parsing
@@ -428,6 +478,16 @@ def _result_links(modules: tuple[DiscoveredModule, ...]) -> list[tuple[str, str]
 def link_results(links_file: str) -> None:
     """Recreate the result symlinks a publish recorded, fetching any store
     paths the local store lacks by exact path — no nix evaluation at all."""
+    if skip_publish_recorded(links_file):
+        if hosted_ci_skips_native_fallback():
+            _log(
+                "Publish marker is skip-publish; leaving native modules unprovisioned "
+                "on this GitHub-hosted runner"
+            )
+            return
+        _log("Publish marker is skip-publish; building native modules locally")
+        build_all(discover())
+        return
     entries = [line.split(" ", 1) for line in Path(links_file).read_text().splitlines() if line]
     if not entries:
         raise SystemExit(f"{links_file}: no recorded result links")
@@ -449,6 +509,13 @@ def link_results(links_file: str) -> None:
 
 
 def verify_published(modules: tuple[DiscoveredModule, ...]) -> None:
+    if not can_publish_to_configured_cache():
+        write_skip_publish_marker()
+        _log(
+            "Not the Cachix publisher for this cache; skipping --verify-published "
+            f"(GITHUB_REPOSITORY={os.environ.get('GITHUB_REPOSITORY', '')})"
+        )
+        return
     cache = os.environ.get("CACHIX_CACHE_NAME")
     if not cache:
         raise SystemExit("--verify-published needs CACHIX_CACHE_NAME set")
@@ -521,6 +588,13 @@ def main() -> None:
         link_results(args.link_results)
         return
     if args.record_links:
+        if not can_publish_to_configured_cache():
+            write_skip_publish_marker()
+            _log(
+                "Not the Cachix publisher for this cache; recording skip-publish "
+                "instead of result links"
+            )
+            return
         for link, store in _result_links(modules):
             print(f"{link} {store}")
         return
@@ -534,14 +608,26 @@ def main() -> None:
         print(digest)
         _github_output(f"inputs-hash={digest}")
         return
+    if not can_publish_to_configured_cache():
+        write_skip_publish_marker()
+        _log(
+            "Not the Cachix publisher for this cache; skipping native-module "
+            f"publish build (GITHUB_REPOSITORY={os.environ.get('GITHUB_REPOSITORY', '')})"
+        )
+        return
 
+    build_all(modules, dry_run=args.dry_run)
+
+
+def build_all(modules: tuple[DiscoveredModule, ...], dry_run: bool = False) -> None:
+    """Realise every discovered module (or dry-run the same set)."""
     failed = 0
     pending: list[str] = []
     workers = int(os.environ.get("BUILD_WORKERS") or os.cpu_count() or 2)
-    verb = "Checking" if args.dry_run else "Building"
+    verb = "Checking" if dry_run else "Building"
     _log(f"{verb} {len(modules)} module(s) with up to {workers} workers")
     with ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(build_one, module, args.dry_run): module for module in modules}
+        futures = {executor.submit(build_one, module, dry_run): module for module in modules}
         for future in as_completed(futures):
             try:
                 name, needs_build, status = future.result()
@@ -552,8 +638,8 @@ def main() -> None:
                 _log(f"FAIL:  {futures[future].qualname}: {error}")
                 failed += 1
     if failed:
-        sys.exit(f"{failed} {'check' if args.dry_run else 'build'}(s) failed")
-    if args.dry_run:
+        sys.exit(f"{failed} {'check' if dry_run else 'build'}(s) failed")
+    if dry_run:
         _log(f"Would build: {', '.join(sorted(pending)) or 'nothing'}")
         _github_output(f"needs-build={'true' if pending else 'false'}")
 

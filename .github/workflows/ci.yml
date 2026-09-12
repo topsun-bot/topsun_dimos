@@ -48,6 +48,11 @@ jobs:
     # Holds no secrets, so it runs on fork PRs too: forks need its inputs-hash
     # output to restore the base branch's publish marker and download the
     # prebuilt binaries. Only cachix-build itself is fork-guarded.
+    #
+    # Org ruleset 16130185 requires this file from refs/heads/main, so PR
+    # edits to these jobs do not run. The publish job still checks out the
+    # PR tip and runs bin/build-native-modules — that script is the skip /
+    # verify signal until this workflow itself reaches main.
     if: ${{ !cancelled() }}
     timeout-minutes: 10
     runs-on: ubuntu-latest

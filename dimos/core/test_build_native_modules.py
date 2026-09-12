@@ -32,6 +32,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 from types import ModuleType
 from typing import NamedTuple
 
@@ -294,3 +295,92 @@ def test_flake_refs_resolve_and_are_covered() -> None:
                     f"{flake}: reference {token!r} resolves to {target!r}, outside the hashed "
                     "input set — teach bin/build-native-modules._FLAKE_REF the new form"
                 )
+
+
+@pytest.mark.parametrize(
+    ("repository", "cache", "expected"),
+    [
+        ("dimensionalOS/dimos", "dimensionalos", True),
+        ("topsun-bot/topsun_dimos", "dimensionalos", False),
+        ("", "dimensionalos", True),
+        ("topsun-bot/topsun_dimos", "other-cache", True),
+    ],
+)
+def test_can_publish_to_configured_cache(
+    monkeypatch: pytest.MonkeyPatch, repository: str, cache: str, expected: bool
+) -> None:
+    if repository:
+        monkeypatch.setenv("GITHUB_REPOSITORY", repository)
+    else:
+        monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setenv("CACHIX_CACHE_NAME", cache)
+    assert _SCRIPT.can_publish_to_configured_cache() is expected
+
+
+def test_foreign_repo_verify_skips_without_result_links(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "topsun-bot/topsun_dimos")
+    monkeypatch.setenv("CACHIX_CACHE_NAME", "dimensionalos")
+    monkeypatch.setenv("CACHIX_MARKER_DIR", str(tmp_path))
+    _SCRIPT.verify_published(_SCRIPT.discover())
+    assert (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).is_file()
+
+
+def test_publisher_repo_verify_still_requires_result_links(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "dimensionalOS/dimos")
+    monkeypatch.setenv("CACHIX_CACHE_NAME", "dimensionalos")
+    with pytest.raises(SystemExit, match="no result symlink"):
+        _SCRIPT.verify_published(_SCRIPT.discover())
+
+
+def test_link_results_skips_on_github_hosted_skip_publish(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).write_text("skip\n")
+    (tmp_path / "links.txt").write_text("")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    built = []
+    monkeypatch.setattr(_SCRIPT, "build_all", lambda modules: built.append(modules))
+    _SCRIPT.link_results(str(tmp_path / "links.txt"))
+    assert built == []
+
+
+def test_link_results_builds_on_self_hosted_skip_publish(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).write_text("skip\n")
+    (tmp_path / "links.txt").write_text("")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
+    built = []
+    monkeypatch.setattr(_SCRIPT, "build_all", lambda modules: built.append(modules))
+    _SCRIPT.link_results(str(tmp_path / "links.txt"))
+    assert len(built) == 1
+
+
+def test_foreign_repo_cli_build_writes_skip_without_building(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "topsun-bot/topsun_dimos")
+    monkeypatch.setenv("CACHIX_CACHE_NAME", "dimensionalos")
+    monkeypatch.setenv("CACHIX_MARKER_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["build-native-modules"])
+    built = []
+    monkeypatch.setattr(_SCRIPT, "build_all", lambda *args, **kwargs: built.append("built"))
+    _SCRIPT.main()
+    assert built == []
+    assert (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).is_file()
+
+
+def test_foreign_repo_record_links_writes_skip_publish(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "topsun-bot/topsun_dimos")
+    monkeypatch.setenv("CACHIX_CACHE_NAME", "dimensionalos")
+    monkeypatch.setenv("CACHIX_MARKER_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["build-native-modules", "--record-links"])
+    _SCRIPT.main()
+    assert "/nix/store" not in capsys.readouterr().out
+    assert (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).is_file()
