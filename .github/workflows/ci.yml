@@ -98,21 +98,8 @@ jobs:
     #
     # Gated on cachix-build-check so an entry into the `cachix` environment
     # always corresponds to a real publish — see that job for why.
-    #
-    # Only dimensionalOS/dimos can push to dimensionalos.cachix.org. This
-    # repository is an independent clone: same-repo PRs still satisfy the
-    # fork guard, but cachix-action gets no write token (post-step:
-    # "Pushing is disabled.") and topsun-only nav_stack store paths can
-    # never appear in that cache. A secrets.CACHIX_AUTH_TOKEN != '' check
-    # is not usable here — secrets is not a job-level if context, and the
-    # same comparison as a job env flag stayed true while authToken was
-    # omitted from the action. Skip the job rather than spend ~40min and
-    # fail --verify-published. Do not save a lie-marker. Hosted tests
-    # already tolerate a marker miss; self-hosted falls back to a local
-    # nix build. github.repository is valid in job-level if.
     if: |
       !cancelled() &&
-      github.repository == 'dimensionalOS/dimos' &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.cachix-build-check.outputs.needs-build == 'true'
     needs: cachix-build-check
@@ -123,11 +110,31 @@ jobs:
       contents: read  # For checkout
 
     steps:
+      # Runner-side check: only dimensionalOS/dimos can write
+      # dimensionalos.cachix.org. Job-level github.repository == that name
+      # did not skip this job on topsun-bot/topsun_dimos (same-repo PRs still
+      # entered, built natives ~50min, then --verify-published failed while
+      # cachix-action logged "Pushing is disabled."). GITHUB_REPOSITORY is
+      # the runner env and is logged below. Do not save a lie-marker.
+      # Hosted tests already tolerate a marker miss; self-hosted builds locally.
+      - name: Decide whether this repo can publish to Cachix
+        id: publish
+        run: |
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          if [ "${GITHUB_REPOSITORY}" = "dimensionalOS/dimos" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping Cachix publish on ${GITHUB_REPOSITORY}; only dimensionalOS/dimos writes dimensionalos.cachix.org."
+          fi
       - name: Checkout
+        if: steps.publish.outputs.enabled == 'true'
         uses: actions/checkout@v7
       - name: Free runner disk space
+        if: steps.publish.outputs.enabled == 'true'
         uses: BRAINSia/free-disk-space@v2.1.3
       - name: Install Nix (with Cachix substituter)
+        if: steps.publish.outputs.enabled == 'true'
         env:
           INPUT_EXTRA_NIX_CONFIG: |
             extra-substituters = https://dimensionalos.cachix.org
@@ -141,6 +148,7 @@ jobs:
         # Restoring these skips the ~20s/module evaluation cost, which is
         # paid every cold run otherwise. /nix/store is intentionally NOT
         # cached here — that's the slow heavy part that Cachix handles.
+        if: steps.publish.outputs.enabled == 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -149,15 +157,18 @@ jobs:
           key: nix-fetcher-build-${{ runner.os }}-${{ hashFiles('bin/build-native-modules', '**/flake.lock', '**/flake.nix') }}
           restore-keys: nix-fetcher-build-${{ runner.os }}-
       - name: Authenticate Cachix
+        if: steps.publish.outputs.enabled == 'true'
         uses: cachix/cachix-action@v17
         with:
           name: dimensionalos
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build native modules
+        if: steps.publish.outputs.enabled == 'true'
         env:
           BUILD_WORKERS: "1"
         run: python3 bin/build-native-modules
       - name: Verify Cachix holds the built paths
+        if: steps.publish.outputs.enabled == 'true'
         env:
           CACHIX_CACHE_NAME: dimensionalos
         run: python3 bin/build-native-modules --verify-published
@@ -165,6 +176,7 @@ jobs:
         # The manifest is forensics for the marker saved below; links.txt maps
         # each result symlink to its store path so consumers can materialise
         # the binaries with --link-results instead of re-running nix.
+        if: steps.publish.outputs.enabled == 'true'
         env:
           CACHIX_CACHE_NAME: dimensionalos
         run: |
@@ -173,6 +185,7 @@ jobs:
             > .cachix-marker/inputs-hash.txt 2> .cachix-marker/manifest.txt
           python3 bin/build-native-modules --record-links > .cachix-marker/links.txt
       - name: Save publish marker
+        if: steps.publish.outputs.enabled == 'true'
         uses: actions/cache/save@v6
         with:
           path: .cachix-marker
