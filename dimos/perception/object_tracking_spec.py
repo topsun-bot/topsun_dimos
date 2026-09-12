@@ -13,7 +13,3 @@
 # limitations under the License.
 
 """Public Topsun object-tracking Spec (re-export after upstream experimental move)."""
-
-from dimos.perception.experimental.object_tracking_spec import (
-    ObjectTrackingSpec as ObjectTrackingSpec,
-)

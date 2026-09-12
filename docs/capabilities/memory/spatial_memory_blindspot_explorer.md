@@ -190,8 +190,7 @@ def find_nearest_memory_blindspot(
     search_radius_m: float = 5.0,
     coverage_radius_m: float = 1.0,
     stale_after_sec: float = 600.0,
-) -> PoseStamped | None:
-    ...
+) -> PoseStamped | None: ...
 ```
 
 候选点生成策略：

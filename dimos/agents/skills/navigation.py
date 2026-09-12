@@ -191,9 +191,7 @@ def _create_vl_model() -> Any:
     if not provider:
         if os.getenv("DASHSCOPE_API_KEY"):
             provider = "dashscope"
-        elif os.getenv("DIMOS_VLM_API_KEY"):
-            provider = "openai"
-        elif os.getenv("OPENAI_API_KEY"):
+        elif os.getenv("DIMOS_VLM_API_KEY") or os.getenv("OPENAI_API_KEY"):
             provider = "openai"
         elif os.getenv("ALIBABA_API_KEY"):
             provider = "qwen"
@@ -2300,9 +2298,7 @@ class NavigationSkillContainer(Module):
         bw, bh = x2 - x1, y2 - y1
         if bw < 24 or bh < 24:
             return False
-        if bw * bh > 0.55 * w * h:
-            return False
-        return True
+        return not bw * bh > 0.55 * w * h
 
     def _get_bbox_for_current_frame(self, query: str) -> BBox | None:
         if self._latest_image is None:
@@ -2970,10 +2966,12 @@ class NavigationSkillContainer(Module):
 
         elapsed = time.time() - started_at
         lines = [
-            "Memory-driven exploration finished: "
-            f"visited {visited} goal(s), timed out {timed_out}, "
-            f"stuck {stuck}, recovered {recovered}, "
-            f"recovery_failed {recovery_failed}, elapsed {elapsed:.0f}s.",
+            (
+                "Memory-driven exploration finished: "
+                f"visited {visited} goal(s), timed out {timed_out}, "
+                f"stuck {stuck}, recovered {recovered}, "
+                f"recovery_failed {recovery_failed}, elapsed {elapsed:.0f}s."
+            ),
             f"Stopped because {stop_reason}.",
         ]
         if include_object_summary:

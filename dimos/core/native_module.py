@@ -80,9 +80,9 @@ else:
     _set_process_to_die_when_parent_dies = None  # type: ignore[assignment]
 
 if sys.version_info < (3, 13):
-    from typing_extensions import TypeVar
+    pass
 else:
-    from typing import TypeVar
+    pass
 
 logger = setup_logger()
 
@@ -182,9 +182,6 @@ class NativeModuleConfig(ModuleConfig):
             else:
                 args.extend([f"--{cli_name}", str(val)])
         return args
-
-
-_NativeConfig = TypeVar("_NativeConfig", bound=NativeModuleConfig, default=NativeModuleConfig)
 
 
 class LcmOnlyNative:

@@ -161,12 +161,12 @@ class GreeterLandmarkStore:
         self._lock = threading.Lock()
         self._landmarks: dict[str, Landmark] = {}
 
-    def load(self) -> None: ...        # 读 JSON → dict(按归一化名称)
-    def save(self) -> None: ...        # 写 JSON
-    def upsert(self, landmark: Landmark) -> None: ...   # 新增/覆盖 + 立即持久化
+    def load(self) -> None: ...  # 读 JSON → dict(按归一化名称)
+    def save(self) -> None: ...  # 写 JSON
+    def upsert(self, landmark: Landmark) -> None: ...  # 新增/覆盖 + 立即持久化
     def all(self) -> list[Landmark]: ...
     def names(self) -> list[str]: ...
-    def intro_scripts(self) -> list[str]: ...           # 去重非空讲解词(预缓存用)
+    def intro_scripts(self) -> list[str]: ...  # 去重非空讲解词(预缓存用)
     def match(self, text: str) -> Landmark | None: ...  # 最长关键词(名称/同义词)子串匹配
     def __len__(self) -> int: ...
 ```
@@ -178,7 +178,7 @@ class GreeterLandmarkStore:
 纯函数（可单测）：
 
 ```python skip
-def parse_synonyms(raw: str) -> tuple[str, ...]: ...          # 逗号/顿号/空格分隔去重
+def parse_synonyms(raw: str) -> tuple[str, ...]: ...  # 逗号/顿号/空格分隔去重
 def is_guide_request(text: str, guide_keywords: tuple[str, ...]) -> bool: ...  # 带路 vs 问路
 def distance_2d(ax, ay, bx, by) -> float: ...
 def within_arrival(px, py, landmark, threshold_m) -> bool: ...  # 平面到站判定
@@ -188,9 +188,9 @@ def within_arrival(px, py, landmark, threshold_m) -> bool: ...  # 平面到站�
 
 ```python skip
 class GreeterTourSkillConfig(ModuleConfig):
-    store_path: str = ""                 # 空 → ~/.local/state/dimos/greeter_landmarks.json
+    store_path: str = ""  # 空 → ~/.local/state/dimos/greeter_landmarks.json
     arrival_threshold_m: float = 0.8
-    arrival_gesture: str = "HighWave"    # 到站后可选手势
+    arrival_gesture: str = "HighWave"  # 到站后可选手势
     guide_keywords: tuple[str, ...] = ("带我去", "带我到", "带我", "带路", "领我", "送我", "去一下")
     guide_speak_template: str = "好的，请跟我来，我带您去{name}。"
     unknown_template: str = "抱歉，这个地点还没录入地图，请咨询工作人员。"
@@ -198,8 +198,8 @@ class GreeterTourSkillConfig(ModuleConfig):
 
 class GreeterTourSkillContainer(Module):
     config: GreeterTourSkillConfig
-    corrected_odometry: In[Odometry]     # PGO 校正后里程计(世界系),与导航目标同参考系
-    goal: Out[PointStamped]              # 自动接 SimplePlanner.goal
+    corrected_odometry: In[Odometry]  # PGO 校正后里程计(世界系),与导航目标同参考系
+    goal: Out[PointStamped]  # 自动接 SimplePlanner.goal
     _speak: SpeakSkillSpec
     _greeter: GreeterSkillSpec | None = None
 
@@ -266,17 +266,21 @@ self.arm_action_client._RegistApi(_ARM_STOP_CUSTOM_ACTION_API_ID, 0)
 if topic == ARM_TOPIC:
     return self._handle_arm_request(api_id, parameter)
 
+
 # 新增 helper:
 def _handle_arm_request(self, api_id, parameter):
     if self.arm_action_client is None:
         return {"code": -1, "error": "arm_action_client_not_initialized"}
     try:
-        if api_id == ARM_API_ID:                       # 7106 预设手势
+        if api_id == ARM_API_ID:  # 7106 预设手势
             return {"code": self.arm_action_client.ExecuteAction(int(parameter.get("data", 0)))}
-        if api_id == _ARM_GET_ACTION_LIST_API_ID:       # 7107
+        if api_id == _ARM_GET_ACTION_LIST_API_ID:  # 7107
             code, action_data = self.arm_action_client.GetActionList()
             return {"code": code, "data": action_data}
-        if api_id in (_ARM_EXECUTE_CUSTOM_ACTION_API_ID, _ARM_STOP_CUSTOM_ACTION_API_ID):  # 7108/7113 全身舞
+        if api_id in (
+            _ARM_EXECUTE_CUSTOM_ACTION_API_ID,
+            _ARM_STOP_CUSTOM_ACTION_API_ID,
+        ):  # 7108/7113 全身舞
             code, _ = self.arm_action_client._Call(api_id, json.dumps(parameter))
             return {"code": code}
         return {"code": -1, "error": "unsupported_arm_api"}
@@ -293,9 +297,10 @@ def _handle_arm_request(self, api_id, parameter):
 ```python skip
 from dimos.robot.unitree.g1.greeter_tour_skill_spec import TourGuideSpec
 
+
 class GreeterIntentRouter(Module):
     ...
-    _tour: TourGuideSpec | None = None    # 仅 Orin 版注入
+    _tour: TourGuideSpec | None = None  # 仅 Orin 版注入
 
     def _on_human_input(self, text):
         ...
@@ -311,12 +316,13 @@ class GreeterIntentRouter(Module):
         ):
             self._dispatch_tour_query(cleaned)
             return
-        ...   # 其余逻辑不变
+        ...  # 其余逻辑不变
 
     def _dispatch_tour_query(self, text):
         lock = self._busy_lock
         if not lock.acquire(blocking=False):
             return
+
         def _run():
             self._set_agent_busy(True)
             try:
@@ -325,6 +331,7 @@ class GreeterIntentRouter(Module):
             finally:
                 self._set_agent_busy(False)
                 lock.release()
+
         threading.Thread(target=_run, name="greeter-tour-query", daemon=True).start()
 ```
 
@@ -334,9 +341,7 @@ class GreeterIntentRouter(Module):
 from dimos.core.module import ModuleBase
 from dimos.spec.utils import Spec
 
-GREETER_REMAPPINGS: list[
-    tuple[type[ModuleBase], str, str | type[ModuleBase] | type[Spec]]
-] = [
+GREETER_REMAPPINGS: list[tuple[type[ModuleBase], str, str | type[ModuleBase] | type[Spec]]] = [
     (McpClient, "human_input", "llm_human_input"),
 ]
 ```
@@ -428,6 +433,7 @@ GREETER_REMAPPINGS: list[
 ```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd
+
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
     time.sleep(0.3)  # ← 无论音频多长,0.3s后即返回
     ...
@@ -444,6 +450,7 @@ def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
 ```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd
+
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
     sd.wait()  # 正确阻塞到播放结束
     logger.info("SpeakSkill 缓存播放,耗时 %.1fs, text=%s", time.monotonic() - t0, text[:40])
@@ -650,6 +657,7 @@ shared arm const import 校验                                        → 7107/7
 ```python skip
 def _play_cached_audio(self, audio: np.ndarray, text: str, t0: float) -> str:
     import sounddevice as sd  # type: ignore[import-untyped]
+
     sd.play(audio, samplerate=_SPEECH_SAMPLE_RATE)
     # Block until playback actually finishes - sd.play() is non-blocking, so a
     # fixed sleep would return mid-utterance and let a follow-up gesture/speak
