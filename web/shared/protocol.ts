@@ -322,8 +322,7 @@ function isRobotInfo(value: unknown): value is RobotInfo {
 // different: it spans all of JSON (null included), so only absence is
 // invalid. The manifest is only checked for record-ness here -- its
 // structure belongs to parseManifest (see RobotManifest above).
-const isFiniteNumber = (v: unknown): v is number =>
-  typeof v === "number" && Number.isFinite(v);
+const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const absentOrNumber = (v: unknown) => v === undefined || isFiniteNumber(v);
 const requestIdOk = (v: unknown) =>
   typeof v === "string" && v.length >= 1 && v.length <= MAX_REQUEST_ID_LEN;
@@ -353,7 +352,15 @@ export function msgFromUnknown(value: unknown): Msg | null {
     const actual = value[name];
     if (kind === "number") {
       if (!isFiniteNumber(actual)) return null;
-    } else if (typeof actual !== kind) {
+    } else if (kind === "string") {
+      if (typeof actual !== "string") return null;
+    } else if (kind === "boolean") {
+      if (typeof actual !== "boolean") return null;
+    } else if (kind === "object") {
+      if (typeof actual !== "object") return null;
+    } else if (kind === "undefined") {
+      if (typeof actual !== "undefined") return null;
+    } else {
       return null;
     }
   }
