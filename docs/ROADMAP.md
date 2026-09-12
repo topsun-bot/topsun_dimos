@@ -52,7 +52,7 @@ Horizon [HoloAgent](https://github.com/HorizonRobotics/HoloAgent) 已承认 DimO
 
 **不要：** vendor 未公开运行时；在获得预览/规范前宣称「已对接 MHS」。
 
-DimOS MCP 继续做机器人语义技能；MHS 若开放，再评估设备发现与安全限，另开 PR。
+DimOS MCP 继续做机器人语义技能；MHS 若开放，再评估设备发现与设备安全限制（行程、功率上限等），另开 PR。
 
 ### 6. 灵巧 VLA（候选，未合入）
 
