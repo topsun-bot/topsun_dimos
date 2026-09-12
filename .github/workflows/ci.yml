@@ -676,8 +676,12 @@ jobs:
     # Runs on push, merge_group (trusted — a maintainer must approve + queue the
     # PR), and same-repo PRs. Skipped on fork PRs, which would expose the
     # self-hosted runner to untrusted code from external contributors.
+    # topsun-bot has no self-hosted runners, so these must skip outside
+    # dimensionalOS/dimos; ci-complete already has
+    # allowed-skips: self-hosted-tests, self-hosted-large-tests.
     if: |
       !cancelled() &&
+      github.repository == 'dimensionalOS/dimos' &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.cachix-build-check.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.cachix-build.result)
@@ -916,8 +920,12 @@ jobs:
 
   self-hosted-large-tests:
     # Skip on PRs from forks which would expose the self-hosted runner to untrusted code from external contributors.
+    # topsun-bot has no self-hosted runners, so these must skip outside
+    # dimensionalOS/dimos; ci-complete already has
+    # allowed-skips: self-hosted-tests, self-hosted-large-tests.
     if: |
       !cancelled() &&
+      github.repository == 'dimensionalOS/dimos' &&
       (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.cachix-build-check.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.cachix-build.result)
