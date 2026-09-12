@@ -96,8 +96,10 @@ jobs:
     # merge_group runs the PR's *merged* workflow with secrets, so .github/
     # changes must be reviewed before a fork PR is queued.
     #
-    # Gated on cachix-build-check so an entry into the `cachix` environment
-    # always corresponds to a real publish — see that job for why.
+    # Gated on cachix-build-check so this job only runs when a native-module
+    # compile (and, on publish events, a Cachix push) is actually needed.
+    # Same-repo PRs and non-main pushes still enter the job for the compile
+    # gate; skipPush is set so they do not publish — see Set up Cachix below.
     if: |
       !cancelled() &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -135,20 +137,26 @@ jobs:
             ~/.local/state/nix
           key: nix-fetcher-build-${{ runner.os }}-${{ hashFiles('bin/build-native-modules', '**/flake.lock', '**/flake.nix') }}
           restore-keys: nix-fetcher-build-${{ runner.os }}-
-      - name: Authenticate Cachix
+      # skipPush on PRs and non-main pushes (empty token + skipPush:false fails
+      # with "Pushing is disabled"). Publish only on main push / merge_group /
+      # workflow_dispatch. merge_group is not a push, so skipPush stays false.
+      - name: Set up Cachix
         uses: cachix/cachix-action@v17
         with:
           name: dimensionalos
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
       - name: Build native modules
         env:
           BUILD_WORKERS: "1"
         run: python3 bin/build-native-modules
       - name: Verify Cachix holds the built paths
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
         env:
           CACHIX_CACHE_NAME: dimensionalos
         run: python3 bin/build-native-modules --verify-published
       - name: Record the published inputs manifest
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
         # Forensics for the marker saved below: the manifest names every tree
         # hash behind the inputs-hash this publish ran for.
         env:
@@ -158,6 +166,7 @@ jobs:
           python3 bin/build-native-modules --inputs-hash \
             > .cachix-marker/inputs-hash.txt 2> .cachix-marker/manifest.txt
       - name: Save publish marker
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
         uses: actions/cache/save@v6
         with:
           path: .cachix-marker
