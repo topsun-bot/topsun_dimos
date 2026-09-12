@@ -44,7 +44,7 @@ uv pip install -e '.[base,unitree]'   # 本仓可编辑安装，不是 PyPI 上�
 `--simulation` 再装仿真 extra：`uv pip install -e '.[sim]'`。  
 开发全量：`uv sync --extra all`（需 [uv](https://docs.astral.sh/uv/) ≥ 0.9.25）。同样装的是当前 checkout。
 
-只要上游 DimOS、不要本仓改动时，可用上游安装脚本（会 clone `dimensionalOS/dimos`，不是本仓）：
+只要上游 DimOS、不要本仓改动时，可用上游安装脚本。交互默认 **Library** 模式是 `uv pip install dimos[...]`（PyPI）；**Developer** 模式才 clone `dimensionalOS/dimos`：
 
 ```bash skip
 curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/install.sh | bash
@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/in
 
 | 命令 | 作用 |
 |------|------|
-| `dimos --replay run unitree-go2` | Go2 导航回放（`.[base,unitree]` 即可；首次约 75 MB LFS） |
+| `dimos --replay run unitree-go2` | Go2 导航回放（`.[base,unitree]` 即可；首次约 200 MB LFS） |
 | `dimos --simulation run unitree-go2-agentic` | 再装 `.[sim]` + `OPENAI_API_KEY` |
 | `dimos --simulation run unitree-g1-agentic-sim` | 同上 |
 | `dimos run unitree-go2-agentic --robot-ip <IP>` | 真机 Go2（`OPENAI_API_KEY`；不必装 `sim`） |
