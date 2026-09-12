@@ -508,6 +508,31 @@ def link_results(links_file: str) -> None:
         _log(f"LINK:  {link} -> {store}")
 
 
+def record_links(modules: tuple[DiscoveredModule, ...]) -> None:
+    """Print `result-symlink store-path` lines, or a skip-publish marker.
+
+    A foreign-repo publish job has no result links and must not fail. A
+    self-hosted fallback that just built still needs the store paths for
+    gcroots, so existing links are recorded even when this repo cannot push.
+    """
+    try:
+        entries = _result_links(modules)
+    except SystemExit:
+        if can_publish_to_configured_cache():
+            raise
+        entries = []
+    if not can_publish_to_configured_cache():
+        write_skip_publish_marker()
+        if not entries:
+            _log(
+                "Not the Cachix publisher for this cache; recording skip-publish "
+                "instead of result links"
+            )
+            return
+    for link, store in entries:
+        print(f"{link} {store}")
+
+
 def verify_published(modules: tuple[DiscoveredModule, ...]) -> None:
     if not can_publish_to_configured_cache():
         write_skip_publish_marker()
@@ -588,15 +613,7 @@ def main() -> None:
         link_results(args.link_results)
         return
     if args.record_links:
-        if not can_publish_to_configured_cache():
-            write_skip_publish_marker()
-            _log(
-                "Not the Cachix publisher for this cache; recording skip-publish "
-                "instead of result links"
-            )
-            return
-        for link, store in _result_links(modules):
-            print(f"{link} {store}")
+        record_links(modules)
         return
     if args.verify_published:
         verify_published(modules)
@@ -608,7 +625,7 @@ def main() -> None:
         print(digest)
         _github_output(f"inputs-hash={digest}")
         return
-    if not can_publish_to_configured_cache():
+    if not can_publish_to_configured_cache() and hosted_ci_skips_native_fallback():
         write_skip_publish_marker()
         _log(
             "Not the Cachix publisher for this cache; skipping native-module "

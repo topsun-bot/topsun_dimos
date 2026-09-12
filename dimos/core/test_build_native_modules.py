@@ -366,12 +366,28 @@ def test_foreign_repo_cli_build_writes_skip_without_building(
     monkeypatch.setenv("GITHUB_REPOSITORY", "topsun-bot/topsun_dimos")
     monkeypatch.setenv("CACHIX_CACHE_NAME", "dimensionalos")
     monkeypatch.setenv("CACHIX_MARKER_DIR", str(tmp_path))
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
     monkeypatch.setattr(sys, "argv", ["build-native-modules"])
     built = []
     monkeypatch.setattr(_SCRIPT, "build_all", lambda *args, **kwargs: built.append("built"))
     _SCRIPT.main()
     assert built == []
     assert (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).is_file()
+
+
+def test_foreign_repo_cli_build_runs_on_self_hosted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "topsun-bot/topsun_dimos")
+    monkeypatch.setenv("CACHIX_CACHE_NAME", "dimensionalos")
+    monkeypatch.setenv("CACHIX_MARKER_DIR", str(tmp_path))
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
+    monkeypatch.setattr(sys, "argv", ["build-native-modules"])
+    built = []
+    monkeypatch.setattr(_SCRIPT, "build_all", lambda *args, **kwargs: built.append("built"))
+    _SCRIPT.main()
+    assert built == ["built"]
+    assert not (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).is_file()
 
 
 def test_foreign_repo_record_links_writes_skip_publish(
@@ -383,4 +399,20 @@ def test_foreign_repo_record_links_writes_skip_publish(
     monkeypatch.setattr(sys, "argv", ["build-native-modules", "--record-links"])
     _SCRIPT.main()
     assert "/nix/store" not in capsys.readouterr().out
+    assert (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).is_file()
+
+
+def test_foreign_repo_record_links_keeps_existing_result_links(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "topsun-bot/topsun_dimos")
+    monkeypatch.setenv("CACHIX_CACHE_NAME", "dimensionalos")
+    monkeypatch.setenv("CACHIX_MARKER_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        _SCRIPT,
+        "_result_links",
+        lambda modules: [("dimos/nav/result", "/nix/store/aaaa-native")],
+    )
+    _SCRIPT.record_links(())
+    assert capsys.readouterr().out == "dimos/nav/result /nix/store/aaaa-native\n"
     assert (tmp_path / _SCRIPT.SKIP_PUBLISH_NAME).is_file()
