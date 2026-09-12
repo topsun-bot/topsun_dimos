@@ -352,7 +352,15 @@ export function msgFromUnknown(value: unknown): Msg | null {
     const actual = value[name];
     if (kind === "number") {
       if (!isFiniteNumber(actual)) return null;
-    } else if (typeof actual !== kind) {
+    } else if (kind === "string") {
+      if (typeof actual !== "string") return null;
+    } else if (kind === "boolean") {
+      if (typeof actual !== "boolean") return null;
+    } else if (kind === "object") {
+      if (typeof actual !== "object") return null;
+    } else if (kind === "undefined") {
+      if (typeof actual !== "undefined") return null;
+    } else {
       return null;
     }
   }
