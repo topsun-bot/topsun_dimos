@@ -26,6 +26,8 @@ import { type Delivery, MAX_MANIFEST_ID_LEN } from "./manifest.ts";
 export type { ChannelSpec, Delivery, Dir, PanelSpec, Publish } from "./manifest.ts";
 export { RESERVED_CHANNEL_PREFIX } from "./manifest.ts";
 
+// v6: /api/info.wtUrl is a WebTransport base URL; clients append their role
+// path. v5 advertised the complete /viewer endpoint.
 // v5: the robot hello leaves datagrams (and their ~1100 B budget) and rides
 // an @control data frame on a robot-opened one-shot bidi stream; channel ids
 // beginning with "@" are reserved for protocol control; a robot datagram
@@ -44,7 +46,7 @@ export { RESERVED_CHANNEL_PREFIX } from "./manifest.ts";
 // misread in both directions). v2: a reliable channel packs all its frames
 // onto one persistent stream. Bump on any change an old peer would silently
 // misparse.
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 // The reserved data-frame channel carrying robot-leg control messages (v5+:
 // the robot's hello upstream, subs snapshots downstream on the robot control
@@ -322,8 +324,7 @@ function isRobotInfo(value: unknown): value is RobotInfo {
 // different: it spans all of JSON (null included), so only absence is
 // invalid. The manifest is only checked for record-ness here -- its
 // structure belongs to parseManifest (see RobotManifest above).
-const isFiniteNumber = (v: unknown): v is number =>
-  typeof v === "number" && Number.isFinite(v);
+const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const absentOrNumber = (v: unknown) => v === undefined || isFiniteNumber(v);
 const requestIdOk = (v: unknown) =>
   typeof v === "string" && v.length >= 1 && v.length <= MAX_REQUEST_ID_LEN;
@@ -353,7 +354,7 @@ export function msgFromUnknown(value: unknown): Msg | null {
     const actual = value[name];
     if (kind === "number") {
       if (!isFiniteNumber(actual)) return null;
-    } else if (typeof actual !== kind) {
+    } else if (typeof actual !== "string") {
       return null;
     }
   }

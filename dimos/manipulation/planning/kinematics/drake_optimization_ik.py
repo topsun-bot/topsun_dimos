@@ -24,6 +24,7 @@ import numpy as np
 from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.kinematics.utils import (
     filter_result_to_group as _filter_result_to_group,
+    finite_retry_limits as _finite_retry_limits,
     resolve_single_pose_target_request as _resolve_single_pose_target_request,
     unique_pose_target_frame as _unique_pose_target_frame,
 )
@@ -104,8 +105,8 @@ class DrakeOptimizationIK:
             rotation=target_pose.orientation,
         ).to_matrix()
 
-        # Get joint limits
-        lower_limits, upper_limits = world.get_joint_limits()
+        joint_space = world.get_prepared_model().joint_space
+        lower_limits, upper_limits = joint_space.position_limits()
 
         # Get seed from current state if not provided
         if seed is None:
@@ -127,8 +128,15 @@ class DrakeOptimizationIK:
             if attempt == 0:
                 current_seed = seed_positions
             else:
-                # Random seed within joint limits
-                current_seed = np.random.uniform(lower_limits, upper_limits)
+                retry_lower, retry_upper = _finite_retry_limits(
+                    joint_space,
+                    seed_positions,
+                    lower_limits,
+                    upper_limits,
+                    range(len(seed_positions)),
+                    attempt,
+                )
+                current_seed = np.random.uniform(retry_lower, retry_upper)
 
             # Solve IK
             result = self._solve_single(
@@ -200,7 +208,8 @@ class DrakeOptimizationIK:
                 "DrakeOptimizationIK requires a pose-targetable planning group",
             )
 
-        lower_limits, upper_limits = world.get_joint_limits()
+        joint_space = world.get_prepared_model().joint_space
+        lower_limits, upper_limits = joint_space.position_limits()
         target_matrix = Transform(
             translation=request.target_pose.position,
             rotation=request.target_pose.orientation,
@@ -219,10 +228,17 @@ class DrakeOptimizationIK:
                 current_seed = request.seed_positions
             else:
                 current_seed = request.seed_positions.copy()
-                random_group_positions = np.random.uniform(
-                    lower_limits[request.group_indices], upper_limits[request.group_indices]
+                retry_lower, retry_upper = _finite_retry_limits(
+                    joint_space,
+                    request.seed_positions,
+                    lower_limits,
+                    upper_limits,
+                    request.group_indices,
+                    attempt,
                 )
-                current_seed[request.group_indices] = random_group_positions
+                current_seed[request.group_indices] = np.random.uniform(
+                    retry_lower[request.group_indices], retry_upper[request.group_indices]
+                )
 
             result = self._solve_single(
                 world=world,

@@ -182,7 +182,7 @@ class RelayE2E:
             ready = relay.start()
             manifest = default_manifest(RelayBridgeConfig(), ("tele_cmd_vel",))
             module = RelayBridgeModule(
-                relay_url=ready.wt_url,
+                relay_url=ready.open_url,
                 open_browser=False,
                 web_build=False,
                 robot_id=robot_id,
