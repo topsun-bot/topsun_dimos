@@ -24,7 +24,3 @@ Port plan: implementation + Topsun grafts (``new_memory`` wipe, Chroma
 recovery, ``tag_location_with_image``) live in experimental; this file is the
 stable public Spec.
 """
-
-from dimos.perception.experimental.spatial_memory_spec import (
-    SpatialMemorySpec as SpatialMemorySpec,
-)

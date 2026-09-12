@@ -24,7 +24,3 @@ module holds the merged implementation (upstream move + Topsun wipe/recovery
 RPCs). Unify after rebasing ``feat/spatial-memory-export`` and related
 branches.
 """
-
-from dimos.perception.experimental.spatial_perception import (
-    SpatialMemory as SpatialMemory,
-)

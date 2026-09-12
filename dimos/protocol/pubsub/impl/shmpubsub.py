@@ -219,8 +219,7 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
             try:
                 gate.dispatch(payload_bytes, topic)
             except Exception:
-                logger.warn(f"Payload couldn't be pushed to topic: {topic}")
-                pass
+                logger.warning(f"Payload couldn't be pushed to topic: {topic}")
 
         # Build host frame [len:4] + [uuid:16] + payload and publish
         # We embed the message UUID in the frame for echo suppression
@@ -362,8 +361,6 @@ class PickleSharedMemory(
 ):
     """SharedMemory pubsub that transports arbitrary Python objects via pickle."""
 
-    ...
-
 
 class LCMSharedMemoryPubSubBase(PubSub[Topic, Any]):
     """SharedMemory pubsub that uses LCM Topic type, delegating to SharedMemoryPubSubBase."""
@@ -398,5 +395,3 @@ class LCMSharedMemory(  # type: ignore[misc]
     LCMSharedMemoryPubSubBase,
 ):
     """SharedMemory pubsub that uses LCM binary encoding (no pickle overhead)."""
-
-    ...

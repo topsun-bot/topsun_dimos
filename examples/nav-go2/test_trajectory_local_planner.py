@@ -99,13 +99,7 @@ def test_nomad_config_resolves_relative_goal_image_path(tmp_path: Path) -> None:
     goal_path.write_bytes(b"placeholder")
     config_path = tmp_path / "nomad_nav.yaml"
     config_path.write_text(
-        "\n".join(
-            [
-                "goal_image_path: goal.png",
-                "checkpoint_path: checkpoint.pth",
-                "model_config_path: model.yaml",
-            ]
-        )
+        "goal_image_path: goal.png\ncheckpoint_path: checkpoint.pth\nmodel_config_path: model.yaml"
     )
 
     cfg = NoMaDConfig.from_yaml(config_path)

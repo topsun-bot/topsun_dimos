@@ -140,8 +140,7 @@ class SpatialLandmarkMemory:
                 by_name.rotation = rec.rotation
                 if rec.state:
                     by_name.state = rec.state
-                if rec.confidence > by_name.confidence:
-                    by_name.confidence = rec.confidence
+                by_name.confidence = max(by_name.confidence, rec.confidence)
                 if rec.image_snapshot_path:
                     by_name.image_snapshot_path = rec.image_snapshot_path
                 self._dirty = True
@@ -159,8 +158,7 @@ class SpatialLandmarkMemory:
             existing.state = rec.state
             if rec.name:
                 existing.name = rec.name
-            if rec.confidence > existing.confidence:
-                existing.confidence = rec.confidence
+            existing.confidence = max(existing.confidence, rec.confidence)
             if rec.image_snapshot_path:
                 existing.image_snapshot_path = rec.image_snapshot_path
             self._dirty = True
@@ -215,7 +213,7 @@ class SpatialLandmarkMemory:
         lower = query.lower()
         results: list[SpatialRecord] = []
         for rec in self._records.values():
-            haystack = " ".join((rec.name, rec.description, rec.state, rec.record_id)).lower()
+            haystack = f"{rec.name} {rec.description} {rec.state} {rec.record_id}".lower()
             if lower in haystack:
                 results.append(rec)
         return results[:limit]
