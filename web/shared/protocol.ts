@@ -352,8 +352,8 @@ export function msgFromUnknown(value: unknown): Msg | null {
     const actual = value[name];
     if (kind === "number") {
       if (!isFiniteNumber(actual)) return null;
-    } else if (typeof actual !== "string") {
-      return null;
+    } else if (kind === "string") {
+      if (typeof actual !== "string") return null;
     }
   }
   const structural = Object.hasOwn(MSG_VALIDATORS, value.t) ? MSG_VALIDATORS[value.t] : undefined;
