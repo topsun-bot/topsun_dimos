@@ -579,4 +579,3 @@ export class DataFrameStreamReader {
     return out;
   }
 }
-
