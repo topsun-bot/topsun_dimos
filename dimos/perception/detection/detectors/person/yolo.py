@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ultralytics import YOLO  # type: ignore[attr-defined]
-
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.perception.detection.detectors.base import Detector
 from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
@@ -32,6 +30,9 @@ class YoloPersonDetector(Detector):
         device: str | None = None,
         conf: float = 0.5,
     ) -> None:
+        # ~0.5s: deferred to keep module import (test collection) light.
+        from ultralytics import YOLO  # type: ignore[attr-defined]
+
         # conf 默认 0.5（兼容旧调用）；跟随场景（YoloPersonDetector + follow_me）
         # 通常需要降低到 0.2 上下，才能在"只看到下半身/侧身/转身"等机位低的情况
         # 下也能稳定框出人。

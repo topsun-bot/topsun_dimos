@@ -30,12 +30,9 @@ from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
 warnings.filterwarnings("ignore", category=LangChainPendingDeprecationWarning)
 
 import httpx
-from langchain.agents import create_agent
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.base import BaseMessage
 from langchain_core.tools import StructuredTool
-from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from reactivex.disposable import Disposable
 import requests
@@ -65,6 +62,11 @@ def init_model(model_name: str, trace_dir: Path | None = None) -> Any:
     (:mod:`dimos.agents.llm_trace`). Only OpenAI-backed models take the
     ``http_client``; other providers keep working, untraced at the wire.
     """
+    # ~2s: langchain's chat-model machinery pulls transformers+torch; deferred to
+    # keep module import (test collection, CLI startup) light.
+    from langchain.chat_models import init_chat_model
+    from langchain_openai import ChatOpenAI
+
     client = None if trace_dir is None else tracing_http_client(trace_dir)
     if ":" in model_name or not model_name.startswith(_RESPONSES_REASONING_MODEL_PREFIXES):
         model = init_chat_model(model=model_name)
@@ -291,6 +293,10 @@ class McpClient(Module):
         self.agent_idle.publish(True)
 
     def _rebuild_agent(self) -> None:
+        # ~2s: pulls transformers+torch; deferred to keep module import light.
+        from langchain.agents import create_agent
+        from langchain.chat_models import init_chat_model
+
         # Under the lock, or a concurrent set_trace_dir can lose its path to this build.
         with self._lock:
             if self.config.model_fixture is not None:
