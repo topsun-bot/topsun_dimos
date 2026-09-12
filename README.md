@@ -38,10 +38,10 @@ git clone https://github.com/topsun-bot/topsun_dimos.git
 cd topsun_dimos
 uv venv --python "3.12"
 source .venv/bin/activate
-uv pip install 'dimos[base,unitree]'
+uv pip install -e '.[base,unitree]'   # 本仓可编辑安装，不是 PyPI 上的 dimos
 ```
 
-开发全量：`uv sync --extra all`（需 [uv](https://docs.astral.sh/uv/) ≥ 0.9.25）。
+开发全量：`uv sync --extra all`（需 [uv](https://docs.astral.sh/uv/) ≥ 0.9.25）。同样装的是当前 checkout。
 
 只要上游 DimOS、不要本仓改动时，可用上游安装脚本（会 clone `dimensionalOS/dimos`，不是本仓）：
 
@@ -56,17 +56,19 @@ curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/in
 | 命令 | 作用 |
 |------|------|
 | `dimos --replay run unitree-go2` | Go2 导航回放（无需真机；首次约 75 MB LFS） |
-| `dimos --simulation run unitree-go2-agentic` | Go2 + LLM agent + MCP |
-| `dimos --simulation run unitree-g1-agentic-sim` | G1 MuJoCo + agent + skills |
-| `dimos run unitree-go2-agentic --robot-ip <IP>` | 真机 Go2 |
+| `dimos --simulation run unitree-go2-agentic` | Go2 + LLM agent + MCP（需 `OPENAI_API_KEY`） |
+| `dimos --simulation run unitree-g1-agentic-sim` | G1 MuJoCo + agent + skills（需 `OPENAI_API_KEY`） |
+| `dimos run unitree-go2-agentic --robot-ip <IP>` | 真机 Go2（需 `OPENAI_API_KEY`） |
+| `dimos --simulation run unitree-go2-agentic-ollama` | 同上，本地 Ollama，无需 OpenAI key |
 | `dimos list` | 全部蓝图 |
 
 ```bash
 # 回放（无硬件）
 dimos --replay run unitree-go2
 
-# 仿真
-uv pip install 'dimos[base,unitree,sim]'
+# 仿真 + 默认 OpenAI agent
+uv pip install -e '.[base,unitree,sim]'
+export OPENAI_API_KEY=<YOUR_KEY>
 dimos --simulation run unitree-go2-agentic
 
 # 真机
@@ -80,14 +82,15 @@ dimos run unitree-go2-agentic
 
 ## Agent / MCP
 
-Agent 控机器人的当前路径：蓝图里同时放 `McpServer` + `McpClient`，LLM 发现并调用 `@skill`。
+Agent 控机器人的当前路径：蓝图里同时放 `McpServer` + `McpClient`，LLM 发现并调用 `@skill`。默认 `unitree-go2-agentic` 用 `gpt-5.6-luna`，需 `OPENAI_API_KEY`。Go2 位移技能是 `move_to`（不是 `move`）。
 
 ```bash
+export OPENAI_API_KEY=<YOUR_KEY>
 dimos --replay run unitree-go2-agentic --daemon
 dimos status
 dimos agent-send "walk forward then stop"
 dimos mcp list-tools
-dimos mcp call move --arg x=0.5 --arg duration=2.0
+dimos mcp call move_to --arg x=0.5 --arg relative=true
 dimos stop
 ```
 
