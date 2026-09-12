@@ -98,10 +98,22 @@ jobs:
     #
     # Gated on cachix-build-check so an entry into the `cachix` environment
     # always corresponds to a real publish — see that job for why.
+    #
+    # Also require a write token. This repository is not a GitHub fork of
+    # dimensionalOS/dimos and cannot push to dimensionalos.cachix.org
+    # (topsun-only nav_stack store paths would never be accepted there
+    # anyway). An empty CACHIX_AUTH_TOKEN used to spend ~40min building
+    # natives, then fail --verify-published while the post-step logged
+    # "Pushing is disabled." Skip rather than save a lie-marker; hosted
+    # tests already tolerate a marker miss (binaries absent, native_e2e
+    # skipped) and self-hosted falls back to a local nix build.
+    # Job-level secrets.* does not see environment-only secrets — if a
+    # write token is added later, put it in repository secrets.
     if: |
       !cancelled() &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
-      needs.cachix-build-check.outputs.needs-build == 'true'
+      needs.cachix-build-check.outputs.needs-build == 'true' &&
+      secrets.CACHIX_AUTH_TOKEN != ''
     needs: cachix-build-check
     timeout-minutes: 300
     environment: cachix
