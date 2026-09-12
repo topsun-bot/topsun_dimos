@@ -1,353 +1,143 @@
-<div align="center">
+# Topsun DimOS
 
-<img width="1000" alt="banner_bordered_trimmed" src="https://github.com/user-attachments/assets/64f13b39-da06-4f58-add0-cfc44f04db4e" />
+**北极星：Agent 控机器人**  
+*North star: an agent that controls robots — eventually fine-grained dexterity (极限).*
 
-<h2>The Agentive Operating System for Physical Space</h2>
+[dimensionalOS/dimos](https://github.com/dimensionalOS/dimos) 是 **基线 OS**（模块、蓝图、传输、`@skill` / MCP），不是本仓的产品口号。  
+本仓是 Topsun 的集成枢纽：在 DimOS 之上，按**能力**接入外部栈，走出 **Baseline → 极限灵巧控制**。
 
-[![Discord](https://img.shields.io/discord/1341146487186391173?style=flat-square&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/dimos)
-[![Stars](https://img.shields.io/github/stars/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/stargazers)
-[![Forks](https://img.shields.io/github/forks/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/fork)
-[![Contributors](https://img.shields.io/github/contributors/dimensionalOS/dimos?style=flat-square)](https://github.com/dimensionalOS/dimos/graphs/contributors)
-[![Docs](https://img.shields.io/badge/Docs-docs.dimensionalos.com-1682a3?style=flat-square&logo=readthedocs&logoColor=white)](https://docs.dimensionalos.com)
-![Nix](https://img.shields.io/badge/Nix-flakes-5277C3?style=flat-square&logo=NixOS&logoColor=white)
-![NixOS](https://img.shields.io/badge/NixOS-supported-5277C3?style=flat-square&logo=NixOS&logoColor=white)
-![CUDA](https://img.shields.io/badge/CUDA-supported-76B900?style=flat-square&logo=nvidia&logoColor=white)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
+> **按能力合并，不 dump 第三方整仓。**  
+> We merge **by capability** (thin bridges / shims). We do **not** vendor full third-party trees.
 
-<a href="https://trendshift.io/repositories/23169" target="_blank"><img src="https://trendshift.io/api/badge/repositories/23169" alt="dimensionalOS%2Fdimos | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+上游基线：[dimensionalOS/dimos](https://github.com/dimensionalOS/dimos) · 文档：[docs.dimensionalos.com](https://docs.dimensionalos.com) · 本仓路线图：[docs/ROADMAP.md](docs/ROADMAP.md)
 
-<big><big>
+---
 
-[Docs](https://docs.dimensionalos.com) •
-[Hardware](#hardware) •
-[Installation](#installation) •
-[Agent CLI & MCP](#agent-cli-and-mcp) •
-[Blueprints](#blueprints) •
-[dimTELE: Remote Teleop](#dimtele-remote-teleop) •
-[Development](#development)
+## 路线图
 
-⚠️ **Pre-Release Beta** ⚠️
+| 阶段 | 状态 | 做什么 |
+|------|------|--------|
+| **Baseline** — DimOS | 已跟上游 `main` | 模块 / 蓝图 / LCM·Zenoh / 导航感知 / Go2·G1 |
+| **Agent / MCP skills** | 已在本仓 | `McpServer` + `McpClient`，自然语言调 `@skill` |
+| **HoloAgent `robot_bridge`** | 进行中 [#118](https://github.com/topsun-bot/topsun_dimos/pull/118) | HTTP skill shim（语义/相对导航）。不 vendor HoloAgent ROS 树 |
+| **Sim assets（EmbodiedGen）** | 进行中 [#125](https://github.com/topsun-bot/topsun_dimos/pull/125) | 薄 catalog / MuJoCo 挂载。不 vendor 生成器与权重 |
+| **MHS** | 预览笔记 only | [topsun-bot/model-hardware-standard](https://github.com/topsun-bot/model-hardware-standard)。**不**宣称已对接，**不** vendor 未开源运行时 |
+| **灵巧 VLA** | 候选评估，未合入 | [LeRobot](https://github.com/huggingface/lerobot)、[OpenPI / π0](https://github.com/Physical-Intelligence/openpi) —— 评估对象，不是 vendor dump |
 
-</big></big>
+空间记忆 public shim 与现有导航大模块**保留**，不在集成清理中删除。
 
-</div>
+---
 
-# About
+## 安装（本仓）
 
-Dimensional is the modern operating system for generalist robotics. We are setting the next-generation SDK standard, integrating with the majority of robot manufacturers.
+系统依赖：[Ubuntu](docs/installation/ubuntu.md) · [Nix](docs/installation/nix.md) · [macOS](docs/installation/osx.md) · [需求](docs/requirements.md)
 
-With a simple install and no ROS required, build physical applications entirely in python that run on any humanoid, quadruped, or drone.
-
-Dimensional is agent native -- "vibecode" your robots in natural language and build (local & hosted) multi-agent systems that work seamlessly with your hardware. Agents run as native modules — subscribing to any embedded stream, from perception (lidar, camera) and spatial memory down to control loops and motor drivers.
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/capabilities/navigation/index.md"><img src="assets/readme/navigation.gif" alt="Navigation" width="100%"></a>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/readme/perception.png" alt="Perception" width="100%">
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <h3><a href="docs/capabilities/navigation/index.md">Navigation and Mapping</a></h3>
-      SLAM, dynamic obstacle avoidance, route planning, and autonomous exploration — via both DimOS native and ROS<br><a href="https://x.com/stash_pomichter/status/2010471593806545367">Watch video</a>
-    </td>
-    <td align="center" width="50%">
-      <h3>Perception</h3>
-      Detectors, 3d projections, VLMs, Audio processing
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/capabilities/agents/index.md"><img src="assets/readme/agentic_control.gif" alt="Agents" width="100%"></a>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/readme/spatial_memory.gif" alt="Spatial Memory" width="100%">
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <h3><a href="docs/capabilities/agents/index.md">Agentive Control, MCP</a></h3>
-      "hey Robot, go find the kitchen"<br><a href="https://x.com/stash_pomichter/status/2015912688854200322">Watch video</a>
-    </td>
-    <td align="center" width="50%">
-      <h3>Spatial Memory</h3>
-      Spatio-temporal RAG, Dynamic memory, Object localization and permanence<br><a href="https://x.com/stash_pomichter/status/1980741077205414328">Watch video</a>
-    </td>
-  </tr>
-</table>
-
-
-# Hardware
-
-<table>
-  <tr>
-    <td align="center" width="20%">
-      <h3>Quadruped</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="20%">
-      <h3>Humanoid</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="20%">
-      <h3>Arm</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="20%">
-      <h3>Drone</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-    <td align="center" width="20%">
-      <h3>Misc</h3>
-      <img width="245" height="1" src="assets/readme/spacer.png">
-    </td>
-  </tr>
-
-  <tr>
-    <td align="center" width="20%">
-      🟩 <a href="docs/platforms/quadruped/go2/index.md">Unitree Go2 pro/air</a><br>
-      🟥 <a href="dimos/robot/unitree/b1">Unitree B1</a><br>
-    </td>
-    <td align="center" width="20%">
-      🟨 <a href="docs/platforms/humanoid/g1/index.md">Unitree G1</a><br>
-    </td>
-    <td align="center" width="20%">
-      🟨 <a href="docs/capabilities/manipulation/index.md">Xarm</a><br>
-      🟨 <a href="docs/capabilities/manipulation/index.md">AgileX Piper</a><br>
-    </td>
-    <td align="center" width="20%">
-      🟧 <a href="dimos/robot/drone/README.md">MAVLink</a><br>
-      🟧 <a href="dimos/robot/drone/README.md">DJI Mavic</a><br>
-    </td>
-    <td align="center" width="20%">
-      🟥 <a href="https://github.com/dimensionalOS/openFT-sensor">Force Torque Sensor</a><br>
-    </td>
-  </tr>
-</table>
-<br>
-<div align="right">
-🟩 stable 🟨 beta 🟧 alpha 🟥 experimental
-
-</div>
-
-> [!IMPORTANT]
-> 🤖 Direct your favorite Agent (OpenClaw, Claude Code, etc.) to [AGENTS.md](AGENTS.md) and our [CLI and MCP](#agent-cli-and-mcp) interfaces to start building powerful Dimensional applications.
-
-# Installation
-
-## Interactive Install
-
-```sh skip
-curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/install.sh | bash
-```
-
-> See [`scripts/install.sh --help`](scripts/install.sh) for non-interactive and advanced options.
-
-## Manual System Install
-
-To set up your system dependencies, follow one of these guides:
-
-- 🟩 [Ubuntu 22.04 / 24.04](docs/installation/ubuntu.md)
-- 🟩 [NixOS / General Linux](docs/installation/nix.md)
-- 🟧 [macOS](docs/installation/osx.md)
-
-> Full system requirements, tested configs, and dependency tiers: [docs/requirements.md](docs/requirements.md)
-
-## Python Install
-
-### Quickstart
-
-```bash
+```bash skip
+export GIT_LFS_SKIP_SMUDGE=1
+git clone https://github.com/topsun-bot/topsun_dimos.git
+cd topsun_dimos
 uv venv --python "3.12"
 source .venv/bin/activate
-uv pip install 'dimos[base,unitree]'
+uv pip install -e '.[base,unitree]'   # 本仓可编辑安装，不是 PyPI 上的 dimos
+```
 
-# Replay a recorded quadruped session (no hardware needed)
-# NOTE: First run will show a black rerun window while ~75 MB downloads from LFS
+`--simulation` 再装仿真 extra：`uv pip install -e '.[sim]'`。  
+开发全量：`uv sync --extra all`（需 [uv](https://docs.astral.sh/uv/) ≥ 0.9.25）。同样装的是当前 checkout。
+
+只要上游 DimOS、不要本仓改动时，可用上游安装脚本。交互默认 **Library** 模式是 `uv pip install dimos[...]`（PyPI）；**Developer** 模式才 clone `dimensionalOS/dimos`：
+
+```bash skip
+curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/dev/scripts/install.sh | bash
+```
+
+---
+
+## 运行
+
+| 命令 | 作用 |
+|------|------|
+| `dimos --replay run unitree-go2` | Go2 导航回放（`.[base,unitree]` 即可；默认 `go2_short`，首次约 75 MB） |
+| `dimos --simulation run unitree-go2-agentic` | 再装 `.[sim]` + `OPENAI_API_KEY` |
+| `dimos --simulation run unitree-g1-agentic-sim` | 同上 |
+| `dimos run unitree-go2-agentic --robot-ip <IP>` | 真机 Go2（`OPENAI_API_KEY`；不必装 `sim`） |
+| `dimos --simulation run unitree-go2-agentic-ollama` | `.[sim]` + `ollama serve` + `ollama pull qwen3:8b` |
+| `dimos list` | 全部蓝图 |
+
+```bash skip
+# 回放（无硬件）
 dimos --replay run unitree-go2
-```
 
-```bash
-# Install with simulation support
-uv pip install 'dimos[base,unitree,sim]'
+# 仿真 + 默认 OpenAI agent
+uv pip install -e '.[base,unitree,sim]'
+export OPENAI_API_KEY=<YOUR_KEY>
+dimos --simulation run unitree-go2-agentic
 
-# Run quadruped in MuJoCo simulation
-dimos --simulation run unitree-go2
-
-# Run humanoid in simulation
-dimos --simulation run unitree-g1-sim
-```
-
-```bash
-# Control a real robot (Unitree quadruped over WebRTC)
+# 真机
 export ROBOT_IP=<YOUR_ROBOT_IP>
-dimos run unitree-go2
+dimos run unitree-go2-agentic
+
+# 本地 Ollama（https://ollama.com ；daemon 不会自动 pull）
+# ollama serve
+# ollama pull qwen3:8b
+# dimos --simulation run unitree-go2-agentic-ollama
 ```
 
-# Featured Runfiles
+更多蓝图：[docs/usage/blueprints.md](docs/usage/blueprints.md) · CLI：[docs/usage/cli.md](docs/usage/cli.md) · Agent 约定：[AGENTS.md](AGENTS.md)
 
-| Run command | What it does |
-|-------------|-------------|
-| `dimos --replay run unitree-go2` | Quadruped navigation replay — SLAM, costmap, A* planning |
-| `dimos --replay --replay-db go2_bigoffice run unitree-go2-memory` | Quadruped temporal memory replay |
-| `dimos --simulation run unitree-go2-agentic` | Quadruped agentic + MCP server in simulation |
-| `dimos --simulation run unitree-g1-sim` | Humanoid in MuJoCo simulation |
-| `dimos --replay run drone-basic` | Drone video + telemetry replay |
-| `dimos --replay run drone-agentic` | Drone + LLM agent with flight skills (replay) |
-| `dimos run demo-camera` | Webcam demo — no hardware needed |
-| `dimos run keyboard-teleop-xarm7` | Keyboard teleop with mock xArm7 (requires `dimos[manipulation]` extra) |
-| `dimos --simulation run unitree-go2-agentic-ollama` | Quadruped agentic with local LLM (requires [Ollama](https://ollama.com) + `ollama serve`) |
+---
 
-> Full blueprint docs: [docs/usage/blueprints.md](docs/usage/blueprints.md)
+## Agent / MCP
 
-# Agent CLI and MCP
+Agent 控机器人的当前路径：蓝图里同时放 `McpServer` + `McpClient`，LLM 发现并调用 `@skill`。默认 `unitree-go2-agentic` 用 `gpt-5.6-luna`，需 `OPENAI_API_KEY`。Go2 位移技能是 `move_to`（不是 `move`）。
 
-The `dimos` CLI manages the full lifecycle — run blueprints, inspect state, interact with agents, and call skills via MCP.
-
-```bash
-dimos run unitree-go2-agentic --daemon   # Start in background
-dimos status                              # Check what's running
-dimos log -f                              # Follow logs
-dimos agent-send "explore the room"       # Send agent a command
-dimos mcp list-tools                      # List available MCP skills
-dimos mcp call move_to --arg x=0.5 --arg relative=true  # Call a skill directly
-dimos stop                                # Shut down
+```bash skip
+export OPENAI_API_KEY=<YOUR_KEY>
+dimos --replay run unitree-go2-agentic --daemon
+dimos status
+dimos agent-send "walk forward then stop"
+dimos mcp list-tools
+dimos mcp call move_to --arg x=0.5 --arg relative=true
+dimos stop
 ```
 
-> Full CLI reference: [docs/usage/cli.md](docs/usage/cli.md)
+MCP：`http://localhost:9990/mcp`（`GlobalConfig.mcp_port`）。
 
-# dimTELE: Remote Teleop
+---
 
-**dimTELE** is hosted teleoperation for DimOS robots: operate them remotely from any browser or Quest headset over WebRTC. The robot dials out to a hosted broker, so you don't need to open any inbound ports on the robot's network. It works behind a home router, on Wi-Fi, wired LAN, or cellular.
+## 硬件（基线已支持）
 
-1. Open [teleop.dimensionalos.com](https://teleop.dimensionalos.com), log in, and grab an API key (**API Keys → + New Key**).
-2. Run a teleop blueprint on the robot, passing the key as `TRANSPORTS__BROKER__API_KEY`:
+| | 稳定 | Beta | Alpha / 实验 |
+|---|------|------|----------------|
+| 四足 | [Go2](docs/platforms/quadruped/go2/index.md) | | [B1](dimos/robot/unitree/b1) |
+| 人形 | | [G1](docs/platforms/humanoid/g1/index.md) | |
+| 臂 | | [xArm](docs/capabilities/manipulation/index.md)、[Piper](docs/capabilities/manipulation/index.md) | |
+| 无人机 | | | [MAVLink / DJI](dimos/robot/drone/README.md) |
 
-   ```bash
-   # Robot dials out to the broker with your API key
-   TRANSPORTS__BROKER__API_KEY=<your-api-key> \
-   dimos run teleop-hosted-go2-transport
-   ```
+---
 
-3. Your robot appears under **Available Robots** — click **Connect** and drive the robot from the browser.
+## 开发
 
-| Blueprint | Notes |
-|-----------|-------|
-| `teleop-hosted-go2-transport` | Browser teleop — drive + camera + minimap + click-to-nav (recommended) |
-| `teleop-hosted-go2-multicam` | Adds a second RealSense, operator-selectable, mux'd into one video track |
-
-> Full guide: [dimTELE](docs/capabilities/teleoperation/hosted.md) • [WebRTC internals](dimos/teleop/hosted/README.md)
-
-# Usage
-
-## Use DimOS as a Library
-
-See below a simple robot connection module that sends streams of continuous `cmd_vel` to the robot and receives `color_image` to a simple `Listener` module. DimOS Modules are subsystems on a robot that communicate with other modules using standardized messages.
-
-```py skip
-import threading, time, numpy as np
-from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.core import rpc
-from dimos.core.module import Module
-from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs import Twist
-from dimos.msgs.sensor_msgs import Image, ImageFormat
-
-class RobotConnection(Module):
-    cmd_vel: In[Twist]
-    color_image: Out[Image]
-
-    @rpc
-    def start(self):
-        threading.Thread(target=self._image_loop, daemon=True).start()
-
-    def _image_loop(self):
-        while True:
-            img = Image.from_numpy(
-                np.zeros((120, 160, 3), np.uint8),
-                format=ImageFormat.RGB,
-                frame_id="camera_optical",
-            )
-            self.color_image.publish(img)
-            time.sleep(0.2)
-
-class Listener(Module):
-    color_image: In[Image]
-
-    @rpc
-    def start(self):
-        self.color_image.subscribe(lambda img: print(f"image {img.width}x{img.height}"))
-
-if __name__ == "__main__":
-    autoconnect(
-        RobotConnection.blueprint(),
-        Listener.blueprint(),
-    ).build().loop()
-```
-
-## Blueprints
-
-Blueprints are instructions for how to construct and wire modules. We compose them with
-`autoconnect(...)`, which connects streams by `(name, type)` and returns a `Blueprint`.
-
-Blueprints can be composed, remapped, and have transports overridden if `autoconnect()` fails due to conflicting variable names or `In[]` and `Out[]` message types.
-
-A blueprint example that connects the image stream from a robot to an MCP-backed LLM agent for reasoning and action execution.
-```py skip
-from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.transport import LCMTransport
-from dimos.msgs.sensor_msgs import Image
-from dimos.robot.unitree.go2.connection import go2_connection
-from dimos.agents.mcp.mcp_client import McpClient
-from dimos.agents.mcp.mcp_server import McpServer
-
-blueprint = autoconnect(
-    go2_connection(),
-    McpServer.blueprint(),
-    McpClient.blueprint(),
-).transports({("color_image", Image): LCMTransport("/color_image", Image)})
-
-# Run the blueprint
-if __name__ == "__main__":
-    blueprint.build().loop()
-```
-
-## Library API
-
-- [Modules](docs/usage/modules.md)
-- [LCM](docs/usage/lcm.md)
-- [Blueprints](docs/usage/blueprints.md)
-- [Transports](docs/usage/transports/index.md) — LCM, SHM, DDS, Zenoh, ROS 2
-- [Data Streams](docs/usage/data_streams/index.md)
-- [Configuration](docs/usage/configuration.md)
-- [Visualization](docs/usage/visualization.md)
-
-## Demos
-
-<img src="assets/readme/dimos_demo.gif" alt="DimOS Demo" width="100%">
-
-# Development
-
-## Develop on DimOS
-
-```sh skip
+```bash skip
 export GIT_LFS_SKIP_SMUDGE=1
-git clone https://github.com/dimensionalOS/dimos.git
-cd dimos
-
-# Run the default test suite (uv run syncs deps on demand; --all-groups
-# only needed for self-hosted tests / mypy — see docs/development/testing.md)
+git clone https://github.com/topsun-bot/topsun_dimos.git
+cd topsun_dimos
+# uv run 会按需同步 default-groups=tests（含 pytest-xdist）
 uv run pytest --numprocesses=auto dimos
 ```
 
+模块 / 蓝图 / 传输：[docs/usage/modules.md](docs/usage/modules.md) · [docs/usage/blueprints.md](docs/usage/blueprints.md) · [docs/usage/transports/index.md](docs/usage/transports/index.md)
 
-## Multi Language Support
+---
 
-Python is our glue and prototyping language, but we support many languages via LCM interop.
+## 不会做什么
 
-Check our language interop examples:
-- [C++](examples/language-interop/cpp/)
-- [Lua](examples/language-interop/lua/)
-- [TypeScript](examples/language-interop/ts/)
+- 不把 DimOS 营销文案当成 Topsun 产品定位。
+- 不把 HoloAgent、EmbodiedGen、LeRobot、OpenPI、MHS **整仓**拷进本仓库。
+- **不宣称**已对接 Anthropic MHS（研究预览、尚未开源）。笔记：[model-hardware-standard](https://github.com/topsun-bot/model-hardware-standard)。
+- **不引用未核实的病毒式演示**（例如所谓 GPT-6 Astra / 斯坦福五指魔方）作为本仓能力或路线依据。
+
+灵巧「极限」只作方向；公开可核基线仅作参考，不是本仓结果：
+
+- OpenAI (2019)，Shadow Dexterous Hand 解魔方 — [Solving Rubik’s Cube with a Robot Hand](https://openai.com/index/solving-rubiks-cube/) · [arXiv:1910.07113](https://arxiv.org/abs/1910.07113)
+- [LeRobot](https://github.com/huggingface/lerobot)（Hugging Face）
+- [OpenPI / π0](https://github.com/Physical-Intelligence/openpi)（Physical Intelligence）
