@@ -42,7 +42,9 @@ import dimos.manipulation.planning.kinematics.pink_ik as pink_planning
 from dimos.manipulation.planning.kinematics.pink_ik import (
     PinkIK,
     PinkIKConfig,
-    _finite_retry_limits,
+)
+from dimos.manipulation.planning.kinematics.utils import (
+    finite_retry_limits as _finite_retry_limits,
 )
 import dimos.manipulation.planning.kinematics.pink_solver as pink_ik
 from dimos.manipulation.planning.kinematics.pink_solver import (
@@ -1908,3 +1910,4 @@ def test_solve_pose_targets_mapping_value_error_fails_without_retrying(
     assert result.status == IKStatus.NO_SOLUTION
     assert "Pink IK mapping failed" in result.message
     assert world.joint_state_calls == 0
+
