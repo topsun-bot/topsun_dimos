@@ -30,6 +30,7 @@ from dimos.manipulation.planning.spec.joint_space import (
     JointCoordinate,
     JointSpace,
 )
+from dimos.manipulation.planning.spec.models import IKResult
 from dimos.manipulation.planning.spec.validation import PreparedRobotModel
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -145,3 +146,33 @@ def test_solve_pose_targets_rejects_group_without_pose_target_frame() -> None:
 
     assert result.status == IKStatus.UNSUPPORTED
     assert "no tip" in result.message
+
+
+def test_solve_retries_sample_finite_domain_for_circular_joints(mocker) -> None:
+    world = _World()
+    world.prepared = PreparedRobotModel(
+        config=world.config,
+        description=world.prepared.description,
+        joint_space=JointSpace(
+            tuple(
+                JointCoordinate(name, "continuous", CoordinateTopology.CIRCLE, None, None, 1.0, 2.0)
+                for name in world.config.joint_names
+            )
+        ),
+        planning_groups=(),
+    )
+    seeds: list[np.ndarray] = []
+
+    def fake_solve_iterative(self, world, target_pose, seed, **kwargs) -> IKResult:
+        seeds.append(np.asarray(seed.position, dtype=np.float64).copy())
+        return IKResult(status=IKStatus.NO_SOLUTION, joint_state=None, message="no solution")
+
+    mocker.patch.object(JacobianIK, "solve_iterative", fake_solve_iterative)
+
+    result = JacobianIK().solve(world=world, target_pose=_pose(), max_attempts=2)
+
+    assert result.status == IKStatus.NO_SOLUTION
+    assert len(seeds) == 2
+    assert np.isfinite(seeds[1]).all()
+    np.testing.assert_array_less(seeds[1], np.pi + 1e-9)
+    np.testing.assert_array_less(-np.pi - 1e-9, seeds[1])

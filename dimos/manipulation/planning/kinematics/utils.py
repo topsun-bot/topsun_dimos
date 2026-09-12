@@ -23,6 +23,7 @@ from numpy.typing import NDArray
 from dimos.manipulation.planning.groups.models import PlanningGroup, PlanningGroupSelection
 from dimos.manipulation.planning.groups.utils import filter_joint_state_to_selected_joints
 from dimos.manipulation.planning.spec.enums import IKStatus
+from dimos.manipulation.planning.spec.joint_space import JointSpace
 from dimos.manipulation.planning.spec.models import IKResult
 from dimos.manipulation.planning.spec.protocols import WorldSpec
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -99,6 +100,30 @@ def resolve_single_pose_target_request(
         seed_positions=seed_positions,
         group_indices=indices,
     ), None
+
+
+def finite_retry_limits(
+    joint_space: JointSpace,
+    seed_positions: NDArray[np.float64],
+    lower_limits: NDArray[np.float64],
+    upper_limits: NDArray[np.float64],
+    movable_indices: Sequence[int],
+    attempt: int,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Build finite retry bounds through the canonical joint-space policy."""
+    margin = float(2 ** (attempt - 1))
+    seed = joint_space.normalize_positions(seed_positions)
+    request_lower, request_upper = joint_space.finite_sampling_domain(seed, seed, margin)
+    lower = lower_limits.copy()
+    upper = upper_limits.copy()
+    for index in movable_indices:
+        lower[index] = request_lower[index]
+        upper[index] = request_upper[index]
+        if not np.isfinite(lower[index]) or not np.isfinite(upper[index]):
+            raise ValueError(
+                f"Cannot sample retry seed for unbounded joint '{joint_space.names[index]}'"
+            )
+    return lower, upper
 
 
 def positions_by_name(state: JointState, joint_names: list[str]) -> NDArray[np.float64]:

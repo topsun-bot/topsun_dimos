@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from dimos.manipulation.planning.groups.models import PlanningGroup
+from dimos.manipulation.planning.groups.models import PlanningGroup, PlanningGroupDefinition
 from dimos.manipulation.planning.kinematics import drake_optimization_ik as drake_ik
 from dimos.manipulation.planning.kinematics.drake_optimization_ik import DrakeOptimizationIK
 from dimos.manipulation.planning.spec.config import RobotModelConfig
@@ -123,6 +123,101 @@ def test_solve_pose_targets_uses_group_tip_locks_seed_fallback_and_filters(monke
     assert calls[0]["target_frame_name"] == "group_tip_link"
     np.testing.assert_allclose(calls[0]["seed"], [1.0, 22.0, 3.0, 4.0])
     assert calls[0]["locked_joint_positions"] == {0: 1.0, 2: 3.0}
+
+
+def _world_with_circular_joints() -> FakeWorld:
+    world = FakeWorld()
+    names = list(world.config.joint_names)
+    config = RobotModelConfig(
+        model=world.config.model,
+        joint_names=names,
+        planning_groups=[
+            PlanningGroupDefinition(
+                name="arm",
+                joint_names=tuple(names),
+                base_link="base_link",
+                tip_link="ee_link",
+            )
+        ],
+    )
+    world.config = config
+    world.prepared = PreparedRobotModel(
+        config=config,
+        description=world.prepared.description,
+        joint_space=JointSpace(
+            tuple(
+                JointCoordinate(name, "continuous", CoordinateTopology.CIRCLE, None, None, 1.0, 2.0)
+                for name in names
+            )
+        ),
+        planning_groups=(),
+    )
+    return world
+
+
+def _failing_ik_result() -> IKResult:
+    return IKResult(status=IKStatus.NO_SOLUTION, joint_state=None, message="no solution")
+
+
+def test_solve_retries_sample_finite_domain_for_circular_joints(monkeypatch) -> None:
+    monkeypatch.setattr(drake_ik, "DRAKE_AVAILABLE", True)
+    monkeypatch.setattr(DrakeOptimizationIK, "_validate_world", lambda self, world: None)
+    monkeypatch.setattr(drake_ik, "RigidTransform", lambda matrix: matrix, raising=False)
+
+    world = _world_with_circular_joints()
+    seeds: list[np.ndarray] = []
+
+    def fake_solve_single(self, **kwargs) -> IKResult:
+        seeds.append(np.asarray(kwargs["seed"], dtype=np.float64).copy())
+        return _failing_ik_result()
+
+    monkeypatch.setattr(DrakeOptimizationIK, "_solve_single", fake_solve_single)
+
+    result = DrakeOptimizationIK().solve(
+        world=world,  # type: ignore[arg-type]
+        target_pose=PoseStamped(),
+        max_attempts=2,
+    )
+
+    assert result.status == IKStatus.NO_SOLUTION
+    assert len(seeds) == 2
+    assert np.isfinite(seeds[1]).all()
+    np.testing.assert_array_less(seeds[1], np.pi + 1e-9)
+    np.testing.assert_array_less(-np.pi - 1e-9, seeds[1])
+
+
+def test_solve_pose_targets_retries_sample_finite_domain_for_circular_joints(monkeypatch) -> None:
+    monkeypatch.setattr(drake_ik, "DRAKE_AVAILABLE", True)
+    monkeypatch.setattr(DrakeOptimizationIK, "_validate_world", lambda self, world: None)
+    monkeypatch.setattr(drake_ik, "RigidTransform", lambda matrix: matrix, raising=False)
+
+    world = _world_with_circular_joints()
+    group = PlanningGroup(
+        id="reach",
+        joint_names=("arm/shoulder", "arm/wrist"),
+        base_link="base_link",
+        tip_link="group_tip_link",
+    )
+    seeds: list[np.ndarray] = []
+
+    def fake_solve_single(self, **kwargs) -> IKResult:
+        seeds.append(np.asarray(kwargs["seed"], dtype=np.float64).copy())
+        return _failing_ik_result()
+
+    monkeypatch.setattr(DrakeOptimizationIK, "_solve_single", fake_solve_single)
+
+    result = DrakeOptimizationIK().solve_pose_targets(
+        world=world,  # type: ignore[arg-type]
+        pose_targets={group: PoseStamped()},
+        max_attempts=2,
+    )
+
+    assert result.status == IKStatus.NO_SOLUTION
+    assert len(seeds) == 2
+    assert np.isfinite(seeds[1][[1, 3]]).all()
+    np.testing.assert_array_less(seeds[1][[1, 3]], np.pi + 1e-9)
+    np.testing.assert_array_less(-np.pi - 1e-9, seeds[1][[1, 3]])
+    np.testing.assert_allclose(seeds[1][[0, 2]], [1.0, 3.0])
 
 
 class FakeRigidTransform:

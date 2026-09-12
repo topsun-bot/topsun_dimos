@@ -33,11 +33,11 @@ from dimos.manipulation.planning.kinematics.pink_solver import (
     _seed_positions_for_mapping,
 )
 from dimos.manipulation.planning.kinematics.utils import (
+    finite_retry_limits as _finite_retry_limits,
     seed_positions_with_world_fallback as _seed_positions_with_world_fallback,
     unique_pose_target_frame as _unique_pose_target_frame,
 )
 from dimos.manipulation.planning.spec.enums import IKStatus
-from dimos.manipulation.planning.spec.joint_space import JointSpace
 from dimos.manipulation.planning.spec.models import IKResult
 from dimos.manipulation.planning.spec.protocols import WorldSpec
 from dimos.manipulation.planning.utils.kinematics_utils import compute_pose_error
@@ -361,30 +361,6 @@ class PinkIK(_PinkSolverCore):
             )
             positions = np.random.uniform(lower, upper)
         return self._q_from_dimos_positions(context, positions)
-
-
-def _finite_retry_limits(
-    joint_space: JointSpace,
-    seed_positions: NDArray[np.float64],
-    lower_limits: NDArray[np.float64],
-    upper_limits: NDArray[np.float64],
-    movable_indices: Sequence[int],
-    attempt: int,
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Build finite retry bounds through the canonical joint-space policy."""
-    margin = float(2 ** (attempt - 1))
-    seed = joint_space.normalize_positions(seed_positions)
-    request_lower, request_upper = joint_space.finite_sampling_domain(seed, seed, margin)
-    lower = lower_limits.copy()
-    upper = upper_limits.copy()
-    for index in movable_indices:
-        lower[index] = request_lower[index]
-        upper[index] = request_upper[index]
-        if not np.isfinite(lower[index]) or not np.isfinite(upper[index]):
-            raise ValueError(
-                f"Cannot sample retry seed for unbounded joint '{joint_space.names[index]}'"
-            )
-    return lower, upper
 
 
 def _within_limits(
