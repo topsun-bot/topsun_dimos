@@ -3,6 +3,7 @@
 - [Setup your Dog](/docs/platforms/quadruped/go2/setup.md): requirements, install, connecting to your Go2, and agentic control
 - [Simulation](/docs/platforms/quadruped/go2/simulation.md): try it with no hardware via replay or MuJoCo
 - [Mapping & Navigation](/docs/capabilities/navigation/index.md): live nav, premap recording, and relocalization
+- [Holo integration](/docs/usage/holo_integration.md): optional Horizon HoloAgent/HoloMotion clones beside `unitree-go2-agentic`
 
 ## Available Blueprints
 

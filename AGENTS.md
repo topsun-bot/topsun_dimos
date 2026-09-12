@@ -49,6 +49,23 @@ dimos restart          # stop + re-run with same original args
 
 Run `dimos list` for the full list.
 
+### Horizon HoloAgent / HoloMotion (optional)
+
+Do **not** replace the blueprints above. The team forks stay external:
+
+- [yixinzhangagent/HoloAgent](https://github.com/yixinzhangagent/HoloAgent)
+- [yixinzhangagent/HoloMotion](https://github.com/yixinzhangagent/HoloMotion)
+
+Print DimOS demo commands or clone/status helpers (no robot motion):
+
+```bash
+uv run python scripts/holo_bridge.py list-demos
+uv run python scripts/holo_bridge.py print-clone
+uv run python scripts/holo_bridge.py status
+```
+
+How the stacks relate: [docs/usage/holo_integration.md](docs/usage/holo_integration.md). README Quick Start: [README.md](README.md#go2--g1-agent-demos).
+
 ---
 
 ## Tools available to you (MCP)

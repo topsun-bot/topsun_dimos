@@ -237,3 +237,5 @@ If the viewer keeps crashing for you, there are two options for now:
 - [Unitree Developer Docs](https://support.unitree.com/home/en/developer)
 - [Sport Mode Services](https://support.unitree.com/home/en/developer/sports_services)
 - [Unitree SDK2 Python](https://github.com/unitreerobotics/unitree_sdk2_python)
+- DimOS G1 agent demos: `dimos --simulation run unitree-g1-agentic-sim` and `dimos run unitree-g1-agentic --robot-ip 192.168.123.161` - [AGENTS.md](/AGENTS.md), [Holo integration](/docs/usage/holo_integration.md)
+- Optional Horizon G1 motion/agent: [HoloMotion](https://github.com/yixinzhangagent/HoloMotion), [HoloAgent](https://github.com/yixinzhangagent/HoloAgent)

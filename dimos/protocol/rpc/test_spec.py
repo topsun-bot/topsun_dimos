@@ -376,14 +376,16 @@ def test_multiple_services(rpc_context, impl_name: str) -> None:
         unsub3 = server.serve_rpc(lambda s: s.upper(), "service3")
 
         try:
-            # Call all services
-            result1, _ = client.call_sync("service1", ([3, 4], {}), rpc_timeout=1.0)
+            # LCM multicast subscribe can miss the first datagram on a loaded
+            # CI runner. Use the same 5s budget as test_basic_sync_call (1.0s
+            # timed out on ubuntu-3.10 only; 3.12+ passed).
+            result1, _ = client.call_sync("service1", ([3, 4], {}), rpc_timeout=5.0)
             assert result1 == 7
 
-            result2, _ = client.call_sync("service2", ([21], {}), rpc_timeout=1.0)
+            result2, _ = client.call_sync("service2", ([21], {}), rpc_timeout=5.0)
             assert result2 == 42
 
-            result3, _ = client.call_sync("service3", (["hello"], {}), rpc_timeout=1.0)
+            result3, _ = client.call_sync("service3", (["hello"], {}), rpc_timeout=5.0)
             assert result3 == "HELLO"
 
         finally:
