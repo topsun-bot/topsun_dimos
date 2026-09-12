@@ -322,8 +322,7 @@ function isRobotInfo(value: unknown): value is RobotInfo {
 // different: it spans all of JSON (null included), so only absence is
 // invalid. The manifest is only checked for record-ness here -- its
 // structure belongs to parseManifest (see RobotManifest above).
-const isFiniteNumber = (v: unknown): v is number =>
-  typeof v === "number" && Number.isFinite(v);
+const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const absentOrNumber = (v: unknown) => v === undefined || isFiniteNumber(v);
 const requestIdOk = (v: unknown) =>
   typeof v === "string" && v.length >= 1 && v.length <= MAX_REQUEST_ID_LEN;
@@ -580,3 +579,4 @@ export class DataFrameStreamReader {
     return out;
   }
 }
+
