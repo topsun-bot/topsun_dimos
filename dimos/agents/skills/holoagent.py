@@ -22,6 +22,7 @@ the request needs that scene graph / robot_bridge path.
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 from dimos.agents.annotation import skill
@@ -97,6 +98,8 @@ class HoloAgentNavSkillContainer(Module):
 
     _client: HoloAgentBridgeClient | None = None
     _nav_hold_open: bool = False
+    _bridge_lock_init: threading.Lock = threading.Lock()
+    _bridge_lock: threading.Lock | None = None
 
     @rpc
     def start(self) -> None:
@@ -112,6 +115,15 @@ class HoloAgentNavSkillContainer(Module):
         if self._client is None:
             self._client = HoloAgentBridgeClient.from_global_config(self.config.g)
         return self._client
+
+    def _get_bridge_lock(self) -> threading.Lock:
+        lock = self._bridge_lock
+        if lock is not None:
+            return lock
+        with self._bridge_lock_init:
+            if self._bridge_lock is None:
+                self._bridge_lock = threading.Lock()
+            return self._bridge_lock
 
     def _begin_nav_hold(self) -> bool:
         """Open or rebind the nav tool stream.
@@ -137,20 +149,21 @@ class HoloAgentNavSkillContainer(Module):
         worker/CLI teardown. Shutdown still proceeds if the bridge call
         fails. ``super().stop()`` errors are not swallowed.
         """
-        client = self._client
-        if client is not None:
-            try:
-                client.stop_navigation(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
-            except HoloAgentBridgeError as exc:
-                logger.warning("HoloAgent bridge stop during shutdown failed: %s", exc)
-            except Exception:
-                logger.exception("HoloAgent bridge stop during shutdown failed")
-            try:
-                client.close()
-            except Exception:
-                logger.exception("HoloAgent HTTP client close during shutdown failed")
-        self._release_nav_hold()
-        self._client = None
+        with self._get_bridge_lock():
+            client = self._client
+            if client is not None:
+                try:
+                    client.stop_navigation(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
+                except HoloAgentBridgeError as exc:
+                    logger.warning("HoloAgent bridge stop during shutdown failed: %s", exc)
+                except Exception:
+                    logger.exception("HoloAgent bridge stop during shutdown failed")
+                try:
+                    client.close()
+                except Exception:
+                    logger.exception("HoloAgent HTTP client close during shutdown failed")
+            self._release_nav_hold()
+            self._client = None
 
     @skill
     def holoagent_health(self) -> str:
@@ -190,25 +203,26 @@ class HoloAgentNavSkillContainer(Module):
             floor: Floor label such as "1F", or "unknown" if not specified.
             room: Room name such as "pantry" or "meeting room", or "unknown".
         """
-        keep_hold = self._begin_nav_hold()
-        try:
+        with self._get_bridge_lock():
+            keep_hold = self._begin_nav_hold()
             try:
-                HoloAgentBridgeContract.format_semantic_cmd(floor, room, object_name)
-            except HoloAgentBridgeError as exc:
-                return f"HoloAgent semantic_nav refused: {exc}"
-            try:
-                result = self._bridge().semantic_nav(floor, room, object_name)
-            except HoloAgentBridgeError as exc:
-                logger.warning("HoloAgent semantic_nav failed: %s", exc)
-                return f"HoloAgent semantic_nav failed: {exc}"
-            keep_hold = True
-            return _format_bridge_result(
-                f"semantic_nav({floor},{room},{object_name})",
-                result,
-            )
-        finally:
-            if not keep_hold:
-                self._release_nav_hold()
+                try:
+                    HoloAgentBridgeContract.format_semantic_cmd(floor, room, object_name)
+                except HoloAgentBridgeError as exc:
+                    return f"HoloAgent semantic_nav refused: {exc}"
+                try:
+                    result = self._bridge().semantic_nav(floor, room, object_name)
+                except HoloAgentBridgeError as exc:
+                    logger.warning("HoloAgent semantic_nav failed: %s", exc)
+                    return f"HoloAgent semantic_nav failed: {exc}"
+                keep_hold = True
+                return _format_bridge_result(
+                    f"semantic_nav({floor},{room},{object_name})",
+                    result,
+                )
+            finally:
+                if not keep_hold:
+                    self._release_nav_hold()
 
     @skill(uses=[CAP_MOVEMENT], lifecycle="background")
     def holoagent_relative_move(
@@ -234,25 +248,26 @@ class HoloAgentNavSkillContainer(Module):
                 Magnitude must be finite and at most
                 ``HoloAgentBridgeContract.MAX_RELATIVE_ROTATION_DEG`` (180).
         """
-        keep_hold = self._begin_nav_hold()
-        try:
+        with self._get_bridge_lock():
+            keep_hold = self._begin_nav_hold()
             try:
-                HoloAgentBridgeContract.check_relative_nav(forward, left, rotation)
-            except HoloAgentBridgeError as exc:
-                return f"HoloAgent relative_move refused: {exc}"
-            try:
-                result = self._bridge().relative_nav(forward, left, rotation)
-            except HoloAgentBridgeError as exc:
-                logger.warning("HoloAgent relative_nav failed: %s", exc)
-                return f"HoloAgent relative_move failed: {exc}"
-            keep_hold = True
-            return _format_bridge_result(
-                f"relative_nav({forward},{left},{rotation})",
-                result,
-            )
-        finally:
-            if not keep_hold:
-                self._release_nav_hold()
+                try:
+                    HoloAgentBridgeContract.check_relative_nav(forward, left, rotation)
+                except HoloAgentBridgeError as exc:
+                    return f"HoloAgent relative_move refused: {exc}"
+                try:
+                    result = self._bridge().relative_nav(forward, left, rotation)
+                except HoloAgentBridgeError as exc:
+                    logger.warning("HoloAgent relative_nav failed: %s", exc)
+                    return f"HoloAgent relative_move failed: {exc}"
+                keep_hold = True
+                return _format_bridge_result(
+                    f"relative_nav({forward},{left},{rotation})",
+                    result,
+                )
+            finally:
+                if not keep_hold:
+                    self._release_nav_hold()
 
     @skill
     def holoagent_stop_nav(self) -> str:
@@ -262,13 +277,14 @@ class HoloAgentNavSkillContainer(Module):
         and releases the CAP_MOVEMENT hold. Does not stop native DimOS
         navigation; use stop_all_motion for that.
         """
-        try:
-            result = self._bridge().stop_navigation()
-        except HoloAgentBridgeError as exc:
-            logger.warning("HoloAgent stop_nav failed: %s", exc)
-            return f"HoloAgent stop_nav failed: {exc}"
-        self._release_nav_hold()
-        return _format_bridge_result("stop_nav", result)
+        with self._get_bridge_lock():
+            try:
+                result = self._bridge().stop_navigation()
+            except HoloAgentBridgeError as exc:
+                logger.warning("HoloAgent stop_nav failed: %s", exc)
+                return f"HoloAgent stop_nav failed: {exc}"
+            self._release_nav_hold()
+            return _format_bridge_result("stop_nav", result)
 
     @skill(uses=[CAP_MOVEMENT], lifecycle="background")
     def holoagent_navigation_signal(self, name: str) -> str:
@@ -289,18 +305,19 @@ class HoloAgentNavSkillContainer(Module):
                 "holoagent_stop_nav. MCP cannot start this skill while "
                 "another HoloAgent nav skill holds movement."
             )
-        keep_hold = self._begin_nav_hold()
-        try:
+        with self._get_bridge_lock():
+            keep_hold = self._begin_nav_hold()
             try:
-                result = self._bridge().navigation_signal(name)
-            except HoloAgentBridgeError as exc:
-                logger.warning("HoloAgent navigation signal failed: %s", exc)
-                return f"HoloAgent navigation signal failed: {exc}"
-            keep_hold = True
-            return _format_bridge_result(f"navigation_signal({name})", result)
-        finally:
-            if not keep_hold:
-                self._release_nav_hold()
+                try:
+                    result = self._bridge().navigation_signal(name)
+                except HoloAgentBridgeError as exc:
+                    logger.warning("HoloAgent navigation signal failed: %s", exc)
+                    return f"HoloAgent navigation signal failed: {exc}"
+                keep_hold = True
+                return _format_bridge_result(f"navigation_signal({name})", result)
+            finally:
+                if not keep_hold:
+                    self._release_nav_hold()
 
 
 class HoloAgentSkillContainer(HoloAgentNavSkillContainer):

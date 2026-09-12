@@ -140,6 +140,15 @@ def test_unsafe_path_token_rejected(bad: str) -> None:
         client.navigation_signal(bad)
 
 
+@pytest.mark.parametrize("bad", [".", ".."])
+def test_dot_path_segments_rejected(bad: str) -> None:
+    client = HoloAgentBridgeClient("http://127.0.0.1:8000", session=MagicMock())
+    with pytest.raises(HoloAgentBridgeError, match=r"must not be '\.' or '\.\.'"):
+        client.arm_skill(bad)
+    with pytest.raises(HoloAgentBridgeError, match=r"must not be '\.' or '\.\.'"):
+        client.navigation_signal(bad)
+
+
 def test_http_error_is_wrapped() -> None:
     session = MagicMock()
     session.request.side_effect = requests.ConnectionError("down")

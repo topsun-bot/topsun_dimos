@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -198,6 +199,52 @@ def test_module_shutdown_still_drops_client_if_bridge_stop_fails() -> None:
     client.stop_navigation.assert_called_once_with(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
     client.close.assert_called_once()
     assert skills._client is None
+    assert skills.stopped_tools == ["holoagent_nav"]
+
+
+def test_stop_waits_for_in_flight_nav_then_releases() -> None:
+    skills, client = _container()
+    nav_entered = threading.Event()
+    release_nav = threading.Event()
+    order: list[str] = []
+
+    def semantic_nav(*_args: object, **_kwargs: object) -> dict[str, bool]:
+        order.append("nav")
+        nav_entered.set()
+        assert release_nav.wait(timeout=2.0)
+        return {"success": True}
+
+    def stop_navigation(*_args: object, **_kwargs: object) -> dict[str, bool]:
+        order.append("stop")
+        return {"success": True}
+
+    client.semantic_nav.side_effect = semantic_nav
+    client.stop_navigation.side_effect = stop_navigation
+
+    nav_result: list[str] = []
+    stop_result: list[str] = []
+
+    def run_nav() -> None:
+        nav_result.append(skills.holoagent_semantic_nav("chair"))
+
+    def run_stop() -> None:
+        assert nav_entered.wait(timeout=2.0)
+        stop_result.append(skills.holoagent_stop_nav())
+
+    nav_thread = threading.Thread(target=run_nav)
+    stop_thread = threading.Thread(target=run_stop)
+    nav_thread.start()
+    stop_thread.start()
+    assert nav_entered.wait(timeout=2.0)
+    assert client.stop_navigation.call_count == 0
+    release_nav.set()
+    nav_thread.join(timeout=2.0)
+    stop_thread.join(timeout=2.0)
+    assert not nav_thread.is_alive()
+    assert not stop_thread.is_alive()
+    assert order == ["nav", "stop"]
+    assert "published" in nav_result[0]
+    assert "published" in stop_result[0]
     assert skills.stopped_tools == ["holoagent_nav"]
 
 

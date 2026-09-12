@@ -115,6 +115,8 @@ class HoloAgentBridgeContract:
         token = value.strip()
         if not token:
             raise HoloAgentBridgeError(f"{kind} name must be non-empty")
+        if token in {".", ".."}:
+            raise HoloAgentBridgeError(f"{kind} name must not be '.' or '..'")
         if not HoloAgentBridgeContract._PATH_TOKEN_RE.fullmatch(token):
             raise HoloAgentBridgeError(
                 f"{kind} name must be a single token "
