@@ -104,3 +104,10 @@ optuna.db
 # 个人/工具目录, 非业务模块, 不纳入版本管理
 .cursor/
 jiangtao/
+.omx/
+
+# Local LFS extraction, generated evaluation data, and visualization scratch files
+/data/.lfs/extracted/
+/data/.lfs/distill/
+/data/.lfs/_viz_output/
+/data/.lfs/_viz_scripts/

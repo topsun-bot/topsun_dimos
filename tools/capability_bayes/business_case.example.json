@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "\u7f29\u77ed\u673a\u5668\u4eba\u6545\u969c\u5b9a\u4f4d\u65f6\u95f4",
+  "problem": "\u4eba\u5de5\u5206\u6790\u8fd0\u884c\u65e5\u5fd7\u8017\u65f6\u8fc7\u957f",
+  "sponsor": "\u673a\u5668\u4eba\u5e73\u53f0\u8d1f\u8d23\u4eba",
+  "metric": {
+    "name": "\u6bcf\u6b21\u6545\u969c\u5b9a\u4f4d\u5206\u949f\u6570",
+    "direction": "decrease",
+    "baseline": 120.0,
+    "target": 30.0,
+    "unit_value": 2.0,
+    "volume_per_period": 20.0,
+    "horizon_periods": 3
+  },
+  "success_probability": 0.6,
+  "implementation_cost": 2000.0,
+  "failure_cost": 500.0,
+  "acceptance_criteria": "\u8fde\u7eed20\u6b21\u8bca\u65ad\u7684\u4e2d\u4f4d\u65f6\u95f4\u5c0f\u4e8e30\u5206\u949f",
+  "attribution_method": "\u540c\u4e00\u6279\u56de\u653e\u6570\u636e\u8fdb\u884cA/B\u6d4b\u8bd5",
+  "permission_ask": "\u4e24\u5468\u6c99\u7bb1\u548c\u53ea\u8bfb\u65e5\u5fd7\u6743\u9650",
+  "income_ask": "\u4ef7\u503c\u9636\u6bb5\u6bd5\u4e1a\u540e\u7533\u8bf7\u804c\u8d23\u548c\u85aa\u916c\u8c03\u6574"
+}
