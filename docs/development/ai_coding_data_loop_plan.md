@@ -208,6 +208,15 @@ uv run dimos \
 `unitree_go2_memory` 只能记录 `color_image/lidar/odom`。建议新增一个 recorder，目标是把 AI 验证要用的数据一次记录全：
 
 ```python
+from dimos.core.stream import In
+from dimos.memory.module import Recorder
+from dimos.msgs.geometry_msgs.PointStamped import PointStamped
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.nav_msgs.Path import Path as NavPath
+from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
 class Go2TruthRecorder(Recorder):
     color_image: In[Image]
     lidar: In[PointCloud2]

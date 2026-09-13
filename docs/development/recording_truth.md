@@ -1,4 +1,4 @@
-# 人工遥控采集 Go2 真值 DB —— 小白级操作指南
+# 人工遥控采集 Go2 真值 DB：小白级操作指南
 
 > 本指南适用于：拿着 Unitree Go2 原装手柄，绕楼走一圈，把传感器和轨迹数据落成可作为 AI 闭环基准的 `.db` 文件。
 > 工具：`dimos go2tool truth`（仓库里已有，不用自己写）。
@@ -71,9 +71,9 @@ uv run dimos go2tool truth capture \
 
 执行后，你会看到三段输出：
 
-1. **Underlying command** ——告诉你它实际拉起了什么 `dimos run ...` 命令（看一眼，心里有数）
-2. **Capture is running** ——三步提示（等流稳定 → 遥控走一圈 → Ctrl+C 停）
-3. **Rerun 窗口** ——可视化弹窗（看到机器狗在地图上走）
+1. **Underlying command**：告诉你它实际拉起了什么 `dimos run ...` 命令（看一眼，心里有数）
+2. **Capture is running**：三步提示（等流稳定 → 遥控走一圈 → Ctrl+C 停）
+3. **Rerun 窗口**：可视化弹窗（看到机器狗在地图上走）
 
 ### 期望看到的 Rerun 画面
 
@@ -221,7 +221,7 @@ git commit -m "chore: 加入 office_loop 真值采集 (zhang, 2026-05-25)"
 - `cmd_vel` 流：手柄走 WebRTC SDK 直连狗内部，dimos 这边的 `cmd_vel` topic 拿不到手柄指令
 - `path / goal / waypoint`：你没启动 nav stack 去规划路径，所以这些字段是空的
 
-如果将来要用 KeyboardTeleop（键盘 WASD 走 dimos pipeline）采集，可以做"全栈采集"补这些字段——届时新增一个 `unitree-go2-truth` blueprint。**当前手柄场景下没意义，YAGNI 不做**。
+如果将来要用 KeyboardTeleop（键盘 WASD 走 dimos pipeline）采集，可以做"全栈采集"补这些字段；届时新增一个 `unitree-go2-truth` blueprint。**当前手柄场景下没意义，YAGNI 不做**。
 
 ---
 
