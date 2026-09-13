@@ -57,7 +57,22 @@ class DetectionNavigation:
             Twist command to navigate towards the detection's 3D position.
         """
 
-        # Get transform from world frame to camera optical frame
+        estimate = self.estimate_target_position_3d(pointcloud, detection, image)
+        if estimate is None:
+            return None
+        target_position, robot_transform = estimate
+        return self._compute_twist_from_3d(target_position, robot_transform)
+
+    def estimate_target_position_3d(
+        self, pointcloud: PointCloud2, detection: Detection2DBBox, image: Image
+    ) -> tuple[Vector3, Transform] | None:
+        """Estimate the tracked target and robot pose in the point-cloud frame.
+
+        The public result lets higher-level waypoint planners reuse the same
+        calibrated RGB-to-LiDAR projection without duplicating geometry.
+        """
+
+        # Get transform from the point-cloud frame to camera optical frame
         world_to_optical = self._tf.get(
             "camera_optical", pointcloud.frame_id, image.ts, time_tolerance=1.0
         )
@@ -83,8 +98,8 @@ class DetectionNavigation:
             logger.warning("3D projection failed")
             return None
 
-        # Get robot position to compute robust target
-        robot_transform = self._tf.get("world", "base_link", time_tolerance=1.0)
+        # Get robot position in the same frame as the point cloud.
+        robot_transform = self._tf.get(pointcloud.frame_id, "base_link", time_tolerance=1.0)
         if robot_transform is None:
             logger.warning("Could not get robot transform")
             return None
@@ -97,7 +112,7 @@ class DetectionNavigation:
             logger.warning("Could not compute robust target position")
             return None
 
-        return self._compute_twist_from_3d(target_position, robot_transform)
+        return target_position, robot_transform
 
     def _compute_robust_target_position(
         self, pointcloud: PointCloud2, robot_pos: Vector3

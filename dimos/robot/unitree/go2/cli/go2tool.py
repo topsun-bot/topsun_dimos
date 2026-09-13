@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""`dimos go2tool` — Go2 setup utilities (BLE wifi provisioning, network discovery)."""
+"""`dimos go2tool` — Go2 setup and truth-data utilities."""
 
 from __future__ import annotations
 
@@ -20,10 +20,13 @@ import asyncio
 
 import typer
 
+from dimos.robot.unitree.go2.cli.truth_capture import app as truth_app
+
 app = typer.Typer(
-    help="Go2 setup utilities (BLE wifi provisioning, network discovery)",
+    help="Go2 setup utilities, network discovery, and truth-data capture",
     no_args_is_help=True,
 )
+app.add_typer(truth_app, name="truth")
 
 
 _HEADER = f"{'SOURCE':<6} {'NAME':<14} {'IP':<15} {'MAC':<19} SERIAL"
