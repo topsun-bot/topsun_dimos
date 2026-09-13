@@ -31,6 +31,7 @@ from dimos.models.segmentation.edge_tam import EdgeTAMProcessor
 from dimos.models.vl.base import VlModel
 from dimos.models.vl.create import create
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -38,6 +39,14 @@ from dimos.navigation.patrolling.patrolling_module_spec import PatrollingModuleS
 from dimos.navigation.visual.query import get_object_bbox_from_image
 from dimos.navigation.visual_servoing.detection_navigation import DetectionNavigation
 from dimos.navigation.visual_servoing.visual_servoing_2d import VisualServoing2D
+from dimos.navigation.visual_servoing.vlx_waypoint_following import (
+    Pose2D,
+    TargetObservation,
+    VlxPurePursuitController,
+    VlxWaypointPlanner,
+    reference_points_to_body,
+)
+from dimos.perception.detection.type.detection2d.bbox import Detection2DBBox
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -46,6 +55,7 @@ logger = setup_logger()
 class Config(ModuleConfig):
     camera_info: CameraInfo
     use_3d_navigation: bool = False
+    use_vlx_waypoints: bool = False
 
 
 class PersonFollowSkillContainer(Module):
@@ -54,8 +64,8 @@ class PersonFollowSkillContainer(Module):
     This skill uses:
     - A VL model (QwenVlModel) to initially detect a person from a text description.
     - EdgeTAM for continuous tracking across frames.
-    - Visual servoing OR 3D navigation to control robot movement towards the person.
-    - Does not do obstacle avoidance; assumes a clear path.
+    - Visual servoing, direct 3D control, or VLX-style short-horizon waypoint planning.
+    - LiDAR elastic-band shaping and a hard stop gate in VLX waypoint mode.
     """
 
     config: Config
@@ -91,12 +101,16 @@ class PersonFollowSkillContainer(Module):
 
         self._visual_servo = VisualServoing2D(camera_info, bool(self.config.g.simulation))
         self._detection_navigation = DetectionNavigation(self.tf, camera_info)
+        self._vlx_waypoint_planner = VlxWaypointPlanner()
+        self._vlx_waypoint_controller = VlxPurePursuitController(
+            self._vlx_waypoint_planner.config
+        )
 
     @rpc
     def start(self) -> None:
         super().start()
         self.register_disposable(Disposable(self.color_image.subscribe(self._on_color_image)))
-        if self.config.use_3d_navigation:
+        if self.config.use_3d_navigation or self.config.use_vlx_waypoints:
             self.register_disposable(Disposable(self.global_map.subscribe(self._on_pointcloud)))
 
     @rpc
@@ -112,6 +126,7 @@ class PersonFollowSkillContainer(Module):
             if self._tracker is not None:
                 self._tracker.stop()
                 self._tracker = None
+        self._vlx_waypoint_planner.reset()
 
         self._vl_model.stop()
         super().stop()
@@ -123,10 +138,11 @@ class PersonFollowSkillContainer(Module):
         initial_bbox: list[float] | None = None,
         initial_image: str | None = None,
     ) -> str:
-        """Follow a person matching the given description using visual servoing.
+        """Follow a person matching the description using closed-loop visual navigation.
 
         The robot will continuously track and follow the person, while keeping
-        them centered in the camera view.
+        them centered in the camera view. On the Go2 agentic stack this uses
+        VLX-style short-horizon waypoints with LiDAR safety checks.
 
         Args:
             query: Description of the person to follow (e.g., "man with blue shirt")
@@ -195,6 +211,7 @@ class PersonFollowSkillContainer(Module):
         if self._thread is not None:
             self._thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
             self._thread = None
+        self._vlx_waypoint_planner.reset()
 
         return "Stopped following."
 
@@ -209,6 +226,7 @@ class PersonFollowSkillContainer(Module):
     def _follow_person(
         self, query: str, initial_bbox: BBox, detection_image: Image | None = None
     ) -> str:
+        self._vlx_waypoint_planner.reset()
         x1, y1, x2, y2 = initial_bbox
         box = np.array([x1, y1, x2, y2], dtype=np.float32)
 
@@ -282,7 +300,24 @@ class PersonFollowSkillContainer(Module):
                 lost_count = 0
                 best_detection = max(detections.detections, key=lambda d: d.bbox_2d_volume())
 
-                if self.config.use_3d_navigation:
+                if self.config.use_vlx_waypoints:
+                    with self._lock:
+                        pointcloud = self._latest_pointcloud
+                    if pointcloud is None:
+                        self._send_stop_reason(
+                            query,
+                            "no LiDAR map available for safe waypoint following",
+                        )
+                        return
+                    twist = self._compute_vlx_waypoint_twist(
+                        pointcloud,
+                        best_detection,
+                        latest_image,
+                    )
+                    if twist is None:
+                        self._send_stop_reason(query, "VLX waypoint planning failed")
+                        return
+                elif self.config.use_3d_navigation:
                     with self._lock:
                         pointcloud = self._latest_pointcloud
                     if pointcloud is None:
@@ -309,6 +344,68 @@ class PersonFollowSkillContainer(Module):
                 time.sleep(sleep_duration)
 
         self._send_stop_reason(query, "it was requested to stop following")
+
+    def _compute_vlx_waypoint_twist(
+        self,
+        pointcloud: PointCloud2,
+        detection: Detection2DBBox,
+        image: Image,
+    ) -> Twist | None:
+        estimate = self._detection_navigation.estimate_target_position_3d(
+            pointcloud,
+            detection,
+            image,
+        )
+        if estimate is None:
+            return None
+
+        target_position, robot_transform = estimate
+        robot_yaw = robot_transform.rotation.to_euler().z
+        robot_pose = Pose2D(
+            x=robot_transform.translation.x,
+            y=robot_transform.translation.y,
+            yaw=robot_yaw,
+        )
+        timestamp_s = float(image.ts) if image.ts is not None else time.time()
+        self._vlx_waypoint_planner.observe(
+            TargetObservation(
+                timestamp_s=timestamp_s,
+                x=target_position.x,
+                y=target_position.y,
+            )
+        )
+
+        points = pointcloud.points_f32()
+        if len(points) == 0:
+            return None
+        relative_height = points[:, 2] - robot_transform.translation.z
+        relative_x = points[:, 0] - robot_pose.x
+        relative_y = points[:, 1] - robot_pose.y
+        planar_distance = np.hypot(relative_x, relative_y)
+        local_mask = (
+            (relative_height > 0.05)
+            & (relative_height < 1.2)
+            & (planar_distance > 0.2)
+            & (np.abs(relative_x) < 3.0)
+            & (np.abs(relative_y) < 3.0)
+        )
+        obstacle_points_reference = points[local_mask, :2].astype(np.float64, copy=False)
+        if len(obstacle_points_reference) > 5_000:
+            stride = max(1, len(obstacle_points_reference) // 5_000)
+            obstacle_points_reference = obstacle_points_reference[::stride]
+        obstacle_points_body = reference_points_to_body(
+            obstacle_points_reference,
+            robot_pose,
+        )
+
+        plan = self._vlx_waypoint_planner.plan(robot_pose, obstacle_points_body)
+        if plan is None:
+            return None
+        command = self._vlx_waypoint_controller.compute(plan, obstacle_points_body)
+        return Twist(
+            linear=Vector3(command.linear_x_mps, 0.0, 0.0),
+            angular=Vector3(0.0, 0.0, command.angular_z_rps),
+        )
 
     def _stop_following(self) -> None:
         self._should_stop.set()

@@ -24,7 +24,10 @@ from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 
 _common_agentic = autoconnect(
     NavigationSkillContainer.blueprint(),
-    PersonFollowSkillContainer.blueprint(camera_info=GO2Connection.camera_info_static),
+    PersonFollowSkillContainer.blueprint(
+        camera_info=GO2Connection.camera_info_static,
+        use_vlx_waypoints=True,
+    ),
     UnitreeSkillContainer.blueprint(),
     OrbitObjectSkillContainer.blueprint(),
     WebInput.blueprint(),

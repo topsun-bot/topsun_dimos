@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "缩短机器人故障定位时间",
+  "problem": "人工分析运行日志耗时过长",
+  "sponsor": "机器人平台负责人",
+  "metric": {
+    "name": "每次故障定位分钟数",
+    "direction": "decrease",
+    "baseline": 120.0,
+    "target": 30.0,
+    "unit_value": 2.0,
+    "volume_per_period": 20.0,
+    "horizon_periods": 3
+  },
+  "success_probability": 0.6,
+  "implementation_cost": 2000.0,
+  "failure_cost": 500.0,
+  "acceptance_criteria": "连续20次诊断的中位时间小于30分钟",
+  "attribution_method": "同一批回放数据进行A/B测试",
+  "permission_ask": "两周沙箱和只读日志权限",
+  "income_ask": "价值阶段毕业后申请职责和薪酬调整"
+}

@@ -86,3 +86,10 @@ htmlcov/
 
 # Memory2 autorecord
 recording*.db
+.omx/
+
+# Local LFS extraction, generated evaluation data, and visualization scratch files
+/data/.lfs/extracted/
+/data/.lfs/distill/
+/data/.lfs/_viz_output/
+/data/.lfs/_viz_scripts/
