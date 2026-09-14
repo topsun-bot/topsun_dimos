@@ -172,7 +172,6 @@ all_blueprints = {
     "unitree-go2-relocalization": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2:unitree_go2_relocalization",
     "unitree-go2-patrol": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_patrol:unitree_go2_patrol",
     "unitree-go2-patrol-mcp": "dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_patrol_mcp:unitree_go2_patrol_mcp",
-
     "unitree-go2-ros": "dimos.robot.unitree.go2.blueprints.smart.unitree_go2_ros:unitree_go2_ros",
     "unitree-go2-rpp-benchmark": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_rpp_benchmark:unitree_go2_rpp_benchmark",
     "unitree-go2-rpp-controller": "dimos.robot.unitree.go2.blueprints.basic.unitree_go2_rpp_controller:unitree_go2_rpp_controller",
@@ -374,5 +373,4 @@ all_modules = {
     "world-belief-recorder": "dimos.experimental.world_belief.worldbelief_recorder.WorldBeliefRecorder",
     "wrist-camera": "dimos.teleop.hosted.blueprints.cloudflare.WristCamera",
     "zed-camera": "dimos.hardware.sensors.camera.zed.camera.ZEDCamera",
-
 }

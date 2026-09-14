@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from datetime import datetime
 import json
+from pathlib import Path
 import threading
 import time
-from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 from reactivex.disposable import Disposable
@@ -25,10 +25,10 @@ from dimos.agents.annotation import skill
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs import PoseStamped
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
-from dimos.msgs.nav_msgs import OccupancyGrid
-from dimos.msgs.sensor_msgs import PointCloud2
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -177,7 +177,7 @@ class PatrolMapManager(Module):
             with open(map_dir / "metadata.json") as f:
                 metadata = json.load(f)
 
-            from dimos.msgs.geometry_msgs import Pose
+            from dimos.msgs.geometry_msgs.Pose import Pose
 
             costmap = OccupancyGrid(
                 grid=grid,
@@ -295,7 +295,11 @@ class PatrolMapManager(Module):
         if costmap is None:
             return "No map data available."
 
-        quality = "good" if costmap.free_percent >= self._min_coverage_percent else "needs more exploration"
+        quality = (
+            "good"
+            if costmap.free_percent >= self._min_coverage_percent
+            else "needs more exploration"
+        )
         return (
             f"Map coverage: {costmap.free_percent:.1f}% free, "
             f"{costmap.occupied_percent:.1f}% obstacles, "

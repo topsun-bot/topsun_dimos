@@ -15,7 +15,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
-from dimos.msgs.geometry_msgs import PoseStamped
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 
 class PatrolStateEnum(Enum):

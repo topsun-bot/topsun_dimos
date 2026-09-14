@@ -1,15 +1,42 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright 2025-2026 Dimensional Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-
-import json
 
 import numpy as np
 import pytest
 
 from dimos.mapping.patrol_map_manager import PatrolMapManager
-from dimos.msgs.geometry_msgs import Pose
-from dimos.msgs.nav_msgs import OccupancyGrid
+from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+
+
+@pytest.fixture(autouse=True)
+def _close_created_modules(monkeypatch, monitor_threads):
+    modules = []
+    original_init = PatrolMapManager.__init__
+
+    def tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        modules.append(self)
+
+    monkeypatch.setattr(PatrolMapManager, "__init__", tracked_init)
+    yield
+    for module in reversed(modules):
+        module.stop()
 
 
 def _make_costmap(free_pct: float = 80.0, resolution: float = 0.05) -> OccupancyGrid:

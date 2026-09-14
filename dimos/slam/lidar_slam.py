@@ -22,9 +22,10 @@ from dimos.agents.annotation import skill
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs import PoseStamped, Quaternion, Vector3
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
-from dimos.msgs.sensor_msgs import PointCloud2
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.slam.types import PoseGraphNode, ScanMatchResult
 from dimos.utils.logging_config import setup_logger
 
@@ -216,7 +217,9 @@ class LidarSlamModule(Module):
             transformation=corrected_transform,
         )
 
-    def _attempt_loop_closure(self, scan: "o3d.geometry.PointCloud", current_transform: np.ndarray) -> None:
+    def _attempt_loop_closure(
+        self, scan: "o3d.geometry.PointCloud", current_transform: np.ndarray
+    ) -> None:
         try:
             older_nodes = self._pose_graph_nodes[:-3]
             if not older_nodes:
@@ -239,9 +242,11 @@ class LidarSlamModule(Module):
                     best_transform = result.transformation
 
             if best_transform is not None and best_fitness > 0.8:
-                drift = current_transform - best_transform
+                current_transform - best_transform
                 correction = np.eye(4)
-                correction[:3, :3] = best_transform[:3, :3] @ np.linalg.inv(current_transform[:3, :3])
+                correction[:3, :3] = best_transform[:3, :3] @ np.linalg.inv(
+                    current_transform[:3, :3]
+                )
                 correction[:3, 3] = best_transform[:3, 3] - current_transform[:3, 3]
                 self._current_transform = best_transform.copy()
                 logger.info(f"Loop closure accepted, fitness={best_fitness:.3f}")
@@ -305,7 +310,9 @@ class LidarSlamModule(Module):
         submap_pts = metrics["submap_points"]
 
         if not O3D_AVAILABLE:
-            return "SLAM: running in passthrough mode (open3d not available). Using raw odometry only."
+            return (
+                "SLAM: running in passthrough mode (open3d not available). Using raw odometry only."
+            )
 
         if fitness > 0.8:
             quality = "excellent"

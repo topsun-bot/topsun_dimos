@@ -13,9 +13,9 @@
 # limitations under the License.
 
 import json
+from pathlib import Path
 import threading
 import time
-from pathlib import Path
 
 from dimos_lcm.std_msgs import Bool, String
 from reactivex.disposable import Disposable
@@ -24,9 +24,10 @@ from dimos.agents.annotation import skill
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs import PoseStamped, Quaternion
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
-from dimos.msgs.nav_msgs import OccupancyGrid
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.navigation.patrol.types import PatrolRoute, PatrolState, PatrolStateEnum, Waypoint
 from dimos.utils.logging_config import setup_logger
 
@@ -290,7 +291,9 @@ class PatrolExecutor(Module):
             self._state.state = PatrolStateEnum.NAVIGATING
 
         self._publish_status()
-        self._publish_event("patrol_started", route=self._state.route.name if self._state.route else None)
+        self._publish_event(
+            "patrol_started", route=self._state.route.name if self._state.route else None
+        )
 
         try:
             while not self._stop_event.is_set():
@@ -544,9 +547,7 @@ class PatrolExecutor(Module):
         current = state.current_waypoint_index
         visited = len(state.visited_waypoints)
         wp_name = (
-            route.waypoints[current].name
-            if route and current < len(route.waypoints)
-            else "none"
+            route.waypoints[current].name if route and current < len(route.waypoints) else "none"
         )
         elapsed = time.time() - state.start_time if state.start_time else 0
         minutes = int(elapsed // 60)

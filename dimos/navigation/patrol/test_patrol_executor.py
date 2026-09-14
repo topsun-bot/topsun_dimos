@@ -1,17 +1,45 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright 2025-2026 Dimensional Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 
-import json
 import sys
-import time
 
 import pytest
 
-from dimos.msgs.geometry_msgs import PoseStamped, Quaternion
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 from dimos.navigation.patrol.patrol_executor import PatrolExecutor
 from dimos.navigation.patrol.types import PatrolRoute, PatrolState, PatrolStateEnum, Waypoint
+
+
+@pytest.fixture(autouse=True)
+def _close_created_modules(monkeypatch, monitor_threads):
+    modules = []
+    original_init = PatrolExecutor.__init__
+
+    def tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        modules.append(self)
+
+    monkeypatch.setattr(PatrolExecutor, "__init__", tracked_init)
+    yield
+    for module in reversed(modules):
+        module.stop()
 
 
 def _make_pose(x: float, y: float) -> PoseStamped:
@@ -102,6 +130,7 @@ class TestPatrolExecutor:
         ex.add_waypoint("save_test", _make_waypoint("wp2", 3.0, 4.0))
 
         import dimos.navigation.patrol.patrol_executor as _pe_mod
+
         pe = sys.modules.get("dimos.navigation.patrol.patrol_executor", _pe_mod)
 
         original_dir = pe._ROUTES_DIR

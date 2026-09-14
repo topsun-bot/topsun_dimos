@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import deque
 import json
 import math
 import threading
 import time
-from collections import deque
 
 from dimos_lcm.std_msgs import String
 from reactivex.disposable import Disposable
@@ -25,8 +25,9 @@ from dimos.agents.annotation import skill
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In
-from dimos.msgs.geometry_msgs import PoseStamped
-from dimos.msgs.nav_msgs import OccupancyGrid, Path
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+from dimos.msgs.nav_msgs.Path import Path
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -115,11 +116,14 @@ class PatrolVisModule(Module):
         qw = pose.orientation.w
         heading = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
 
-        self._emit("patrol_position", {
-            "x": pose.position.x,
-            "y": pose.position.y,
-            "heading": heading,
-        })
+        self._emit(
+            "patrol_position",
+            {
+                "x": pose.position.x,
+                "y": pose.position.y,
+                "heading": heading,
+            },
+        )
 
     def _on_status(self, status_json: String) -> None:
         try:
@@ -130,7 +134,7 @@ class PatrolVisModule(Module):
         with self._lock:
             self._current_route_data = data
 
-        route_name = data.get("route_name")
+        data.get("route_name")
         visited = len(data.get("visited_waypoints", []))
         total = data.get("total_waypoints", 0)
         current_wp = ""
@@ -146,13 +150,16 @@ class PatrolVisModule(Module):
         if data.get("start_time"):
             elapsed = time.time() - data["start_time"]
 
-        self._emit("patrol_progress", {
-            "visited": visited,
-            "total": total,
-            "current_waypoint": current_wp,
-            "elapsed_seconds": int(elapsed),
-            "state": data.get("state", "idle"),
-        })
+        self._emit(
+            "patrol_progress",
+            {
+                "visited": visited,
+                "total": total,
+                "current_waypoint": current_wp,
+                "elapsed_seconds": int(elapsed),
+                "state": data.get("state", "idle"),
+            },
+        )
 
     def _on_event(self, event_json: String) -> None:
         try:

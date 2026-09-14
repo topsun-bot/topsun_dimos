@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from dimos.msgs.geometry_msgs import PoseStamped
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 
 @dataclass

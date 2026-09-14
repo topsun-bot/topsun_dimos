@@ -13,17 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dimos.agents.mcp.mcp_client import mcp_client
+from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.mcp.mcp_server import McpServer
 from dimos.agents.skills.patrol_system_prompt import PATROL_SYSTEM_PROMPT
-from dimos.core.blueprints import autoconnect
+from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.go2.blueprints.agentic._common_agentic import _common_agentic
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_patrol import unitree_go2_patrol
 
 unitree_go2_patrol_mcp = autoconnect(
     unitree_go2_patrol,
     McpServer.blueprint(),
-    mcp_client(system_prompt=PATROL_SYSTEM_PROMPT),
+    McpClient.blueprint(system_prompt=PATROL_SYSTEM_PROMPT),
     _common_agentic,
 )
 
