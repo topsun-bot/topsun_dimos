@@ -173,7 +173,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           prune-cache: true
@@ -225,7 +225,7 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-features --locked
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           prune-cache: true
@@ -349,7 +349,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libturbojpeg portaudio19-dev
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           prune-cache: true
@@ -466,7 +466,7 @@ jobs:
 
       # ---- Browser e2e: dimos run --local-relay + Playwright on the dist ----
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           prune-cache: true
@@ -530,7 +530,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           prune-cache: true
@@ -679,7 +679,7 @@ jobs:
         if: matrix.os == 'Linux'
         run: echo "UV_CACHE_DIR=$(dirname "$RUNNER_WORKSPACE")/uv-cache" >> "$GITHUB_ENV"
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           # We persist on disk above, cache would clean some of this up.
           enable-cache: false
@@ -849,7 +849,7 @@ jobs:
           git lfs pull --include="misc/DimSim/**"
           git config --local --unset-all http.https://github.com/.extraheader
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           # We persist on disk, cache would clean some of this up.
           enable-cache: false
