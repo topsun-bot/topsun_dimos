@@ -38,6 +38,6 @@ MCP_CLIENT_KWARGS: dict[str, Any] = {
     "supports_vision": False,
 }
 
-GREETER_REMAPPINGS: list[tuple[type[ModuleBase], str, str | type[ModuleBase] | type[Spec]]] = [
+GREETER_REMAPPINGS: list[tuple[type[ModuleBase], str, type[ModuleBase | Spec] | str]] = [
     (McpClient, "human_input", "llm_human_input"),
 ]

@@ -452,8 +452,7 @@ MVP 推荐 8-neighbor，能更自然表示走廊和斜向连通区域。
 新增 helper：
 
 ```python skip
-def _connected_blindspot_regions(mask: np.ndarray) -> list[list[tuple[int, int]]]:
-    ...
+def _connected_blindspot_regions(mask: np.ndarray) -> list[list[tuple[int, int]]]: ...
 ```
 
 ### Step 4: 区域内选目标
@@ -461,8 +460,7 @@ def _connected_blindspot_regions(mask: np.ndarray) -> list[list[tuple[int, int]]
 新增 helper：
 
 ```python skip
-def _select_region_goal_cell(region_cells, robot_pose, costmap, target_type) -> tuple[int, int]:
-    ...
+def _select_region_goal_cell(region_cells, robot_pose, costmap, target_type) -> tuple[int, int]: ...
 ```
 
 初版策略：
@@ -480,8 +478,7 @@ def _wait_for_new_memory_frame(
     after_timestamp: float,
     previous_frame_count: int,
     timeout_sec: float,
-) -> bool:
-    ...
+) -> bool: ...
 ```
 
 `patrol_memory_blindspots()` 到达后：

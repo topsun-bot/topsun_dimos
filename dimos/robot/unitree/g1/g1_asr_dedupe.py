@@ -103,9 +103,7 @@ def is_valid_user_utterance(text: str) -> bool:
         letters = re.sub(r"[^a-z]", "", cleaned.lower())
         if letters not in _ASCII_GREETINGS:
             return False
-    if looks_like_robot_echo(cleaned):
-        return False
-    return True
+    return not looks_like_robot_echo(cleaned)
 
 
 def should_publish_asr(
