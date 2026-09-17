@@ -209,9 +209,7 @@ def _match_identity_faq_fuzzy(cleaned: str, norm: str) -> bool:
         return True
     if "是谁" in norm and len(norm) <= 8:
         return True
-    if "叫什么" in norm or "叫啥" in norm:
-        return True
-    return False
+    return bool("叫什么" in norm or "叫啥" in norm)
 
 
 def match_faq_answer(text: str, config: GreeterIntentRouterConfig) -> str | None:
