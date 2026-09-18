@@ -564,6 +564,7 @@ def test_webxr_body_reader_is_served_as_javascript(
         assert response.headers["content-type"].startswith("text/javascript")
         assert "export function captureBody" in response.text
         assert "body.joints" in response.text
+        assert "jointSpace" in response.text
         assert "jointName" in response.text
         assert "getJointPose" in response.text
         assert "getPose(" in response.text

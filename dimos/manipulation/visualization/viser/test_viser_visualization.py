@@ -23,10 +23,12 @@ pytest.importorskip("viser", reason="Viser optional dependency is not installed"
 
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
+from dimos.manipulation.planning.spec.joint_space import JointSpace
 from dimos.manipulation.planning.spec.models import (
     PlanningSceneInfo,
     VisualizationStateFrame,
 )
+from dimos.manipulation.planning.spec.validation import PreparedRobotModel
 from dimos.manipulation.visualization.viser.animation import (
     PreviewAnimation,
     PreviewFrame,
@@ -37,7 +39,21 @@ from dimos.manipulation.visualization.viser.visualizer import ViserManipulationV
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
-from dimos.robot.assets.model import RobotModel
+from dimos.robot.assets.model import LoadedRobotModel, RobotModel
+
+
+def _prepared_model() -> PreparedRobotModel:
+    config = _model()
+    return PreparedRobotModel(
+        config=config,
+        description=LoadedRobotModel(
+            xml="<robot name='fake'><link name='base_link'/></robot>",
+            source_path=Path(config.model.source_path),
+            package_paths={},
+        ),
+        joint_space=JointSpace(()),
+        planning_groups=(),
+    )
 
 
 def _model() -> RobotModelConfig:
@@ -93,7 +109,7 @@ def test_visualizer_initializes_and_updates_one_scene_model() -> None:
     scene = MagicMock()
     visualizer._scene = scene
     visualizer._runtime = MagicMock()
-    visualizer._initialize_scene(PlanningSceneInfo(model=_model()))
+    visualizer._initialize_scene(PlanningSceneInfo(model=_prepared_model()))
     scene.register_model.assert_called_once()
 
     state = JointState(name=["left/j1", "right/j1"], position=[0.1, 0.2])

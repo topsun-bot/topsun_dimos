@@ -26,7 +26,10 @@ function bodyEntries(body) {
     if (typeof body[Symbol.iterator] === "function") {
         return body;
     }
-    return (body.joints ?? []).map((space) => [space.jointName, space]);
+    return (body.joints ?? []).map((entry) => {
+        const space = entry.jointSpace ?? entry;
+        return [entry.jointName ?? space.jointName, space];
+    });
 }
 
 // XRBodySpace is an XRSpace, so getPose is the spec method. getJointPose is
