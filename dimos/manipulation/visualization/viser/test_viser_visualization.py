@@ -23,12 +23,11 @@ pytest.importorskip("viser", reason="Viser optional dependency is not installed"
 
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.spec.config import RobotModelConfig
-from dimos.manipulation.planning.spec.joint_space import JointSpace
 from dimos.manipulation.planning.spec.models import (
     PlanningSceneInfo,
     VisualizationStateFrame,
 )
-from dimos.manipulation.planning.spec.validation import PreparedRobotModel
+from dimos.manipulation.planning.spec.validation import PreparedRobotModel, prepare_robot_model
 from dimos.manipulation.visualization.viser.animation import (
     PreviewAnimation,
     PreviewFrame,
@@ -39,32 +38,69 @@ from dimos.manipulation.visualization.viser.visualizer import ViserManipulationV
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
-from dimos.robot.assets.model import LoadedRobotModel, RobotModel
+from dimos.robot.assets.model import RobotModel
 
 
-def _prepared_model() -> PreparedRobotModel:
-    config = _model()
-    return PreparedRobotModel(
-        config=config,
-        description=LoadedRobotModel(
-            xml="<robot name='fake'><link name='base_link'/></robot>",
-            source_path=Path(config.model.source_path),
-            package_paths={},
-        ),
-        joint_space=JointSpace(()),
-        planning_groups=(),
-    )
+class ViserTestModels:
+    """Canonical preview-config vs loadable prepared-model fixtures."""
 
+    @staticmethod
+    def config() -> RobotModelConfig:
+        return RobotModelConfig(
+            model=RobotModel.from_file(Path("/model.urdf")),
+            joint_names=["left/j1", "right/j1"],
+            planning_groups=[
+                PlanningGroupDefinition("left_arm", ("left/j1",), "base", "left/tool"),
+                PlanningGroupDefinition("right_arm", ("right/j1",), "base", "right/tool"),
+            ],
+        )
 
-def _model() -> RobotModelConfig:
-    return RobotModelConfig(
-        model=RobotModel.from_file(Path("/model.urdf")),
-        joint_names=["left/j1", "right/j1"],
-        planning_groups=[
-            PlanningGroupDefinition("left_arm", ("left/j1",), "base", "left/tool"),
-            PlanningGroupDefinition("right_arm", ("right/j1",), "base", "right/tool"),
-        ],
-    )
+    @staticmethod
+    def write_urdf(path: Path) -> Path:
+        path.write_text(
+            """
+<robot name="canonical">
+  <link name="world"/>
+  <link name="left/base"/>
+  <link name="left/tool"/>
+  <link name="right/base"/>
+  <link name="right/tool"/>
+  <joint name="left/mount" type="fixed">
+    <parent link="world"/><child link="left/base"/>
+  </joint>
+  <joint name="left/j1" type="revolute">
+    <parent link="left/base"/><child link="left/tool"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+  <joint name="right/mount" type="fixed">
+    <parent link="world"/><child link="right/base"/>
+  </joint>
+  <joint name="right/j1" type="revolute">
+    <parent link="right/base"/><child link="right/tool"/>
+    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+"""
+        )
+        return path
+
+    @staticmethod
+    def loadable_config(urdf: Path) -> RobotModelConfig:
+        return RobotModelConfig(
+            model=RobotModel.from_file(urdf).with_default_joint_acceleration_limit(2.0),
+            joint_names=["left/j1", "right/j1"],
+            base_link="world",
+            planning_groups=[
+                PlanningGroupDefinition("left_arm", ("left/j1",), "left/base", "left/tool"),
+                PlanningGroupDefinition("right_arm", ("right/j1",), "right/base", "right/tool"),
+            ],
+        )
+
+    @staticmethod
+    def prepared(tmp_path: Path) -> PreparedRobotModel:
+        return prepare_robot_model(
+            ViserTestModels.loadable_config(ViserTestModels.write_urdf(tmp_path / "model.urdf"))
+        )
 
 
 def test_preview_timing_uses_one_model_track() -> None:
@@ -82,7 +118,7 @@ def test_preview_timing_uses_one_model_track() -> None:
 
 def test_visualizer_builds_full_model_preview_from_selected_canonical_joints() -> None:
     visualizer = ViserManipulationVisualizer()
-    visualizer._model_config = _model()
+    visualizer._model_config = ViserTestModels.config()
     visualizer._current_state = JointState(name=["left/j1", "right/j1"], position=[0.1, 0.2])
     trajectory = JointTrajectory(
         joint_names=["right/j1"],
@@ -94,7 +130,7 @@ def test_visualizer_builds_full_model_preview_from_selected_canonical_joints() -
 
 def test_visualizer_rejects_unknown_or_duplicate_trajectory_joints() -> None:
     visualizer = ViserManipulationVisualizer()
-    visualizer._model_config = _model()
+    visualizer._model_config = ViserTestModels.config()
     visualizer._current_state = JointState(name=["left/j1", "right/j1"], position=[0.1, 0.2])
     for names in (["unknown"], ["left/j1", "left/j1"]):
         trajectory = JointTrajectory(
@@ -104,12 +140,12 @@ def test_visualizer_rejects_unknown_or_duplicate_trajectory_joints() -> None:
         assert visualizer._raw_preview_animation(trajectory) is None
 
 
-def test_visualizer_initializes_and_updates_one_scene_model() -> None:
+def test_visualizer_initializes_and_updates_one_scene_model(tmp_path: Path) -> None:
     visualizer = ViserManipulationVisualizer()
     scene = MagicMock()
     visualizer._scene = scene
     visualizer._runtime = MagicMock()
-    visualizer._initialize_scene(PlanningSceneInfo(model=_prepared_model()))
+    visualizer._initialize_scene(PlanningSceneInfo(model=ViserTestModels.prepared(tmp_path)))
     scene.register_model.assert_called_once()
 
     state = JointState(name=["left/j1", "right/j1"], position=[0.1, 0.2])
