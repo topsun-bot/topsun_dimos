@@ -3,6 +3,7 @@
 # web build needs. Only web/ is copied; skip build products and local secrets.
 *
 !web
+!web/**
 web/**/node_modules
 web/**/dist
 web/**/.dist-*

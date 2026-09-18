@@ -6,7 +6,8 @@ export function captureBody(frame, referenceSpace) {
 
     const joints = {};
     for (const [jointName, jointSpace] of body) {
-        const pose = frame.getPose(jointSpace, referenceSpace);
+        // Body joints are XRJointSpace values; resolve them like hand joints.
+        const pose = frame.getJointPose(jointSpace, referenceSpace);
         if (!pose) continue;
 
         const position = pose.transform.position;
