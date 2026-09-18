@@ -63,9 +63,18 @@ endif()
 if(ZENOHC_FOUND)
   add_library(zenohc::lib ALIAS PkgConfig::ZENOHC)
 else()
-  find_package(zenohc ${zenoh_min_version} REQUIRED)
+  find_package(zenohc ${zenoh_min_version} QUIET)
+  if(NOT zenohc_FOUND)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchZenohStandalone.cmake")
+    dimos_fetch_zenoh_standalone("${CMAKE_BINARY_DIR}/zenoh-standalone")
+    find_package(zenohc ${zenoh_min_version} REQUIRED)
+  endif()
 endif()
 find_package(zenohcxx ${zenoh_min_version} REQUIRED)
+if(DIMOS_ZENOH_STANDALONE_PREFIX)
+  # The standalone .so is not on the default loader path (/usr/local is).
+  list(APPEND CMAKE_BUILD_RPATH "${DIMOS_ZENOH_STANDALONE_PREFIX}/lib")
+endif()
 
 # Off in an upstream source build and on in every published binary, so it is
 # detected rather than assumed.
