@@ -20,6 +20,8 @@ import time
 from typing import Any
 import uuid
 
+import pytest
+
 from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory, SharedMemoryPubSubBase
 
 

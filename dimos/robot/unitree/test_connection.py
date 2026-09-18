@@ -247,8 +247,12 @@ def test_global_config_reads_unitree_aes_128_key_dotenv(
     monkeypatch.delenv("UNITREE_AES_128_KEY", raising=False)
     monkeypatch.delenv("UNITREE_AES_KEY", raising=False)
     monkeypatch.delenv("DIMOS_UNITREE_WEBRTC_AES_KEY", raising=False)
+    # Bypass pytest-detected dotenv skip for this test only; monkeypatch restores.
+    monkeypatch.delenv("PYTEST_VERSION", raising=False)
+    monkeypatch.delenv("DIMOS_PYTEST_RUN_ID", raising=False)
     (tmp_path / ".env").write_text(f"UNITREE_AES_128_KEY={'ab' * 16}\n")
 
+    assert not GlobalConfig.pytest_detected()
     config = GlobalConfig()
 
     assert config.unitree_aes_128_key == "ab" * 16
