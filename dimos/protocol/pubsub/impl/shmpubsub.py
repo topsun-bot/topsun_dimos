@@ -243,6 +243,10 @@ class SharedMemoryPubSubBase(PubSub[str, Any]):
         st = self._ensure_topic(topic)
         gate = SubscriptionGate(callback)
         st.subs.append(gate)
+        starting = st.thread is None or not st.thread.is_alive()
+        if starting and isinstance(st.channel, CpuShmChannel):
+            # Frames already in the segment predate this subscriber.
+            st.last_seq = st.channel.current_seq()
         ShmFanout.start(self._fanout_loop, topic, st)
 
         def _unsub() -> None:

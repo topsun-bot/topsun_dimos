@@ -20,12 +20,21 @@ Miss `--xarm7-ip` on hardware and the arm has no address to reach; leave
 `xarm-grasp-agent` and `xarm-grasp-graspgenx-agent` add an MCP agent over the
 top; drive those with `dimos agent-send "..."`.
 
-`xarm-grasp-graspgenx` needs the `graspgenx` extra and a CUDA GPU. Checkpoints
-download once from Hugging Face and cache under `~/.cache/huggingface`.
+GraspGenX requires Linux x86_64, a CUDA 12.8-compatible GPU, and `uv >=0.9.25`.
+The first launch prepares its isolated Python 3.12 environment and downloads the
+checkpoints. Runtime sources come from the development checkout or the shared
+repository clone used by installed dimOS.
+
+To show the MuJoCo window with Rerun disabled:
 
 ```bash
-uv sync --extra graspgenx
+MUJOCO_GL=glfw dimos --viewer none run xarm-grasp-graspgenx \
+  --simulation mujoco --headless false
 ```
+
+In another terminal, use `dimos shell` and follow [Driving it](#driving-it) to scan
+objects and request grasps. See the [isolated-runtime development guide](/dimos/experimental/isolated_python/README.md#runtime-development)
+for test and type-check commands.
 
 What differs between the arm and the sim is decided at import time: the hardware
 adapter, the base pose, the camera (RealSense plus its mount edge, versus the
@@ -40,6 +49,44 @@ where `/dev/dri` must be hidden from Mesa, run inside the team's existing
 MUJOCO_GL=egl LIBGL_ALWAYS_SOFTWARE=true MESA_LOADER_DRIVER_OVERRIDE=llvmpipe \
   dimos --viewer none run xarm-grasp --simulation mujoco
 ```
+
+## Voxel map obstacles
+
+The wrist camera feeds a live voxel map that the planner treats as one octree
+obstacle, so trajectories avoid whatever has actually been seen rather than only
+the registered objects:
+
+```
+camera pointcloud
+  -> PointCloudSelfFilter        drops the arm's own returns, emits a clear mask
+  -> RayTracingVoxelMap          accumulates occupied cells in the world frame
+  -> ManipulationModule.voxel_map   rebuilt as the "mapping/voxel-map" obstacle
+```
+
+`XARM_GRASP_VOXEL_SIZE` is the single resolution all three stages share; they
+must agree or the clear mask names cells the map does not hold and the octree
+does not line up with what was mapped. The blueprint also enables the camera's
+`pointcloud` output, which is off by default on both the RealSense and the
+MuJoCo camera, and publishes TF for every one of the arm's collision links. The
+self filter drops a whole cloud if any link transform is missing at capture time.
+
+Because the target object is itself mapped geometry, a collision-checked plan
+into it can only ever be rejected. The pregrasp-to-grasp leg and the retreat are
+therefore straight-line `move_linear` servos with collision checking off; only
+the approach to the pregrasp pose is a checked plan.
+
+## Seeing the proposals
+
+The viser scene draws the ranked proposals as pose glyphs: an approach axis with
+the closing axis across it, coloured best-green through worst-orange so the
+ordering reads at a glance, with the top three drawn thicker and labelled with
+their score. Only the leading twenty are drawn, because a hundred glyphs bury
+the ranking they exist to show. `manipulation.grasp-proposals` in the Scene panel
+toggles them.
+
+The markers are pose indicators, not a gripper: what they promise is where a
+grasp points and in what order the generator ranked it. To see what the arm will
+actually do with one, watch the plan preview.
 
 ## The scene
 
@@ -110,7 +157,7 @@ app.PickAndPlaceModule.place_at(0.45, -0.25, 0.25)
 ```
 
 `pick_object` generates the grasps itself, so there is no separate grasp call.
-It opens the gripper, plans to the pregrasp, moves in, closes, verifies, and
+It opens the gripper, plans to the pregrasp, servos in, closes, verifies, and
 retreats; with a learned provider it walks the ranked candidates until one is
 reachable, and the result metadata carries the winning rank, its score and the
 candidate count. To inspect grasps without moving the arm, call `propose_grasps`

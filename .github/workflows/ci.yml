@@ -61,7 +61,8 @@ jobs:
     env:
       CACHIX_CACHE_NAME: dimensionalos
     outputs:
-      needs-build: ${{ steps.decide.outputs.needs-build }}
+      needs-build-linux: ${{ steps.decide.outputs.linux }}
+      needs-build-macos: ${{ steps.decide.outputs.macos }}
       inputs-hash: ${{ steps.hash.outputs.inputs-hash }}
 
     steps:
@@ -70,32 +71,46 @@ jobs:
       - name: Compute native-module inputs hash
         id: hash
         run: python3 bin/build-native-modules --inputs-hash
-      - name: Probe publish marker
-        id: marker
+      - name: Probe Linux publish marker
+        id: marker-linux
         uses: actions/cache/restore@v6
         with:
           path: .cachix-marker
-          key: cachix-published-${{ runner.os }}-${{ runner.arch }}-${{ steps.hash.outputs.inputs-hash }}
+          key: cachix-published-Linux-X64-${{ steps.hash.outputs.inputs-hash }}
           lookup-only: true
-      - name: Decide whether a publish is needed
+      - name: Probe macOS publish marker
+        id: marker-macos
+        uses: actions/cache/restore@v6
+        with:
+          path: .cachix-marker
+          key: cachix-published-macOS-ARM64-${{ steps.hash.outputs.inputs-hash }}
+          lookup-only: true
+      - name: Decide which platforms need a publish
         id: decide
         env:
           FORCE: ${{ inputs.force-cachix-build }}
-          MARKER_HIT: ${{ steps.marker.outputs.cache-hit }}
+          LINUX_HIT: ${{ steps.marker-linux.outputs.cache-hit }}
+          MACOS_HIT: ${{ steps.marker-macos.outputs.cache-hit }}
         run: |
-          # This job has no `environment:`, so the PR workflow applies.
-          # environment-protected cachix-build still executes the base/main
-          # definition, whose if: needs-build == 'true' is the only skip
-          # signal a topsun PR can send. Only dimensionalOS/dimos can write
-          # dimensionalos.cachix.org; force needs-build=false everywhere else.
+          # Only dimensionalOS/dimos can write dimensionalos.cachix.org.
+          # Force both platform flags false everywhere else so environment-
+          # protected cachix-build jobs stay skipped. Org ruleset 16130185
+          # still evaluates this file from main until the skip lands there.
           echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
           if [ "${GITHUB_REPOSITORY}" != "dimensionalOS/dimos" ]; then
-            echo "::notice::Not dimensionalOS/dimos; forcing needs-build=false so environment-protected cachix-build is skipped."
-            echo "needs-build=false" >> "$GITHUB_OUTPUT"
-          elif [ "$FORCE" != "true" ] && [ "$MARKER_HIT" = "true" ]; then
-            echo "needs-build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not dimensionalOS/dimos; forcing linux=false macos=false so environment-protected cachix-build is skipped."
+            echo "linux=false" >> "$GITHUB_OUTPUT"
+            echo "macos=false" >> "$GITHUB_OUTPUT"
           else
-            echo "needs-build=true" >> "$GITHUB_OUTPUT"
+            emit() {  # $1=output name, $2=this platform's marker hit
+              if [ "$FORCE" != "true" ] && [ "$2" = "true" ]; then
+                echo "$1=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "$1=true" >> "$GITHUB_OUTPUT"
+              fi
+            }
+            emit linux "$LINUX_HIT"
+            emit macos "$MACOS_HIT"
           fi
 
   cachix-build:
@@ -115,7 +130,7 @@ jobs:
     if: |
       !cancelled() &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
-      needs.cachix-build-check.outputs.needs-build == 'true'
+      needs.cachix-build-check.outputs.needs-build-linux == 'true'
     needs: cachix-build-check
     timeout-minutes: 300
     environment: cachix
@@ -205,6 +220,71 @@ jobs:
           path: .cachix-marker
           key: cachix-published-${{ runner.os }}-${{ runner.arch }}-${{ needs.cachix-build-check.outputs.inputs-hash }}
 
+  cachix-build-macos:
+    # ⚠️ NEVER RUN ON UNTRUSTED (fork) CODE ⚠️ — holds CACHIX_AUTH_TOKEN, same
+    # as cachix-build; the `if:` guard below is the only thing keeping forks
+    # out. A separate job (not a matrix leg of cachix-build) for two reasons:
+    # its own job-level `if` must gate entry into the `cachix` environment on
+    # the macOS marker alone (matrix context isn't available in `if:`), and a
+    # macOS build failure must not fail cachix-build and block the Linux tests.
+    if: |
+      !cancelled() &&
+      (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      needs.cachix-build-check.outputs.needs-build-macos == 'true'
+    needs: cachix-build-check
+    timeout-minutes: 300
+    environment: cachix
+    runs-on: macos-14  # GitHub-hosted Apple silicon → runner.arch is ARM64
+    permissions:
+      contents: read  # For checkout
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Nix (with Cachix substituter)
+        env:
+          INPUT_EXTRA_NIX_CONFIG: |
+            extra-substituters = https://dimensionalos.cachix.org
+            extra-trusted-public-keys = dimensionalos.cachix.org-1:20ynj6TjpoD3qTxkdNoeHtgs2G2pNvgAq1EQYLTHJXI=
+          INPUT_SET_AS_TRUSTED_USER: "true"
+        run: bash docker/ros/install-nix.sh
+      - name: Cache Nix fetcher + eval cache
+        # Key includes runner.os, so this is a macOS-only entry, distinct from
+        # the Linux fetcher cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/nix
+            ~/.local/state/nix
+          key: nix-fetcher-build-${{ runner.os }}-${{ hashFiles('bin/build-native-modules', '**/flake.lock', '**/flake.nix') }}
+          restore-keys: nix-fetcher-build-${{ runner.os }}-
+      - name: Authenticate Cachix
+        uses: cachix/cachix-action@v17
+        with:
+          name: dimensionalos
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build native modules
+        env:
+          BUILD_WORKERS: "1"
+        run: python3 bin/build-native-modules
+      - name: Verify Cachix holds the built paths
+        env:
+          CACHIX_CACHE_NAME: dimensionalos
+        run: python3 bin/build-native-modules --verify-published
+      - name: Record the published inputs manifest
+        env:
+          CACHIX_CACHE_NAME: dimensionalos
+        run: |
+          mkdir -p .cachix-marker
+          python3 bin/build-native-modules --inputs-hash \
+            > .cachix-marker/inputs-hash.txt 2> .cachix-marker/manifest.txt
+          python3 bin/build-native-modules --record-links > .cachix-marker/links.txt
+      - name: Save publish marker
+        uses: actions/cache/save@v6
+        with:
+          path: .cachix-marker
+          key: cachix-published-${{ runner.os }}-${{ runner.arch }}-${{ needs.cachix-build-check.outputs.inputs-hash }}
+
   lint:
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -214,6 +294,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Reject Git sources in root pyproject.toml
+        run: |
+          python3 - <<'PY'
+          import sys
+          import tomllib
+
+          with open("pyproject.toml", "rb") as file:
+              config = tomllib.load(file)
+          sources = config.get("tool", {}).get("uv", {}).get("sources", {})
+          rejected = []
+          for name, source in sources.items():
+              entries = source if isinstance(source, list) else [source]
+              if any("git" in entry for entry in entries):
+                  rejected.append(name)
+          if rejected:
+              sys.exit(
+                  "::error file=pyproject.toml::Git sources are not allowed in root "
+                  "pyproject.toml. Use published packages instead: " + ", ".join(rejected)
+              )
+          PY
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
@@ -306,11 +406,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      # need liblcm installed for testing transport
+      # The SDK headers include both transports, so liblcm and zenoh are both
+      # needed to build at all. Zenoh has no apt package, so it comes from its
+      # release
       - name: Install system dependencies
+        env:
+          ZENOH_VERSION: 1.10.0
         run: |
           sudo apt-get update
-          sudo apt-get install -y liblcm-dev nlohmann-json3-dev
+          # lcm.pc carries `Requires: glib-2.0`, so pkg-config cannot resolve
+          # lcm at all without glib's own .pc file
+          sudo apt-get install -y liblcm-dev libglib2.0-dev nlohmann-json3-dev
+          base=https://github.com/eclipse-zenoh
+          curl -fsSL -o /tmp/zenoh-c.zip \
+            "$base/zenoh-c/releases/download/$ZENOH_VERSION/zenoh-c-$ZENOH_VERSION-x86_64-unknown-linux-gnu-standalone.zip"
+          curl -fsSL -o /tmp/zenoh-cpp.zip \
+            "$base/zenoh-cpp/releases/download/$ZENOH_VERSION/zenohcpp-$ZENOH_VERSION-standalone.zip"
+          # A release asset can be replaced in place, so the bytes are pinned too
+          printf '%s  /tmp/zenoh-c.zip\n%s  /tmp/zenoh-cpp.zip\n' \
+            1168b3dffa7f4f48ffabfd640a3878ec0527c0a612ce825aa6f93e2cd05762d1 \
+            7a50a74e98fd1e1e7ed8461b8490b30d67f878649f0727dea2cf0936501780af \
+            | sha256sum -c -
+          # The zips are laid out for /usr/local, where cmake and the loader
+          # already look
+          sudo unzip -q /tmp/zenoh-c.zip -d /usr/local
+          sudo unzip -q /tmp/zenoh-cpp.zip -d /usr/local
+          sudo ldconfig
       - name: Configure
         run: cmake -S native/cpp -B build/native-cpp -DDIMOS_NATIVE_BUILD_TESTS=ON
       - name: Build
@@ -535,10 +656,15 @@ jobs:
           uv run pytest -m web_browser dimos/e2e_tests/test_cockpit_browser.py
           dimos/e2e_tests/test_sdk_browser.py
           dimos/e2e_tests/test_custom_channel_browser.py
+          dimos/e2e_tests/test_lcm_channel_browser.py
           dimos/e2e_tests/test_publish_browser.py
           dimos/e2e_tests/test_voice_browser.py
           dimos/e2e_tests/test_stats_browser.py
-          dimos/e2e_tests/test_robot_picker_browser.py --no-cov
+          dimos/e2e_tests/test_robot_picker_browser.py
+          dimos/e2e_tests/test_relay_auth_browser.py --no-cov
+
+      - name: Relay image build  # docker/relay/Dockerfile must not rot silently
+        run: docker build -f docker/relay/Dockerfile .
 
   tests:
     if: |
@@ -685,7 +811,7 @@ jobs:
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.cachix-build-check.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.cachix-build.result)
-    needs: [compute-ros-pin, cachix-build-check, cachix-build]
+    needs: [compute-ros-pin, cachix-build-check, cachix-build, cachix-build-macos]
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -715,7 +841,8 @@ jobs:
             experimental: false
           - os: macOS
             container: null  # run on host — `container:` is Linux-only
-            markers: "self_hosted"
+            # web_browser: the cockpit browser e2e that Linux runs in the `web` job.
+            markers: "self_hosted or web_browser"
             experimental: true
     runs-on:
       - self-hosted
@@ -763,6 +890,12 @@ jobs:
           uv pip install --python .codecov-venv/bin/python codecov-cli==11.2.8
       - name: Install dependencies
         run: uv sync --group tests-self-hosted --frozen
+      - name: Install web_browser e2e dependencies (macOS)
+        if: matrix.os == 'macOS'
+        run: |
+          brew install ffmpeg
+          uv sync --group tests-self-hosted --group browser-tests --frozen
+          uv run playwright install chromium firefox
       - name: Build C++ extensions in-place
         run: uv run python setup.py build_ext --inplace
       - name: Source ROS environment
@@ -810,17 +943,25 @@ jobs:
           max-jobs = 0
           EOF
           echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
+      - name: Put Nix on PATH (macOS)
+        if: matrix.os == 'macOS'
+        run: |
+          bin=/nix/var/nix/profiles/default/bin
+          if [ ! -x "$bin/nix-store" ]; then
+            echo "::error::Nix is not installed on this macOS runner host — install multi-user Nix and add the dimensionalos substituter to /etc/nix/nix.conf (see this step's comment)"
+            exit 1
+          fi
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "NIX_CONFIG=experimental-features = nix-command flakes" >> "$GITHUB_ENV"
       - name: Restore publish marker
-        if: contains(matrix.markers, 'skipif_no_ros')
         id: native-marker
         uses: actions/cache/restore@v6
         with:
           path: .cachix-marker
           key: cachix-published-${{ runner.os }}-${{ runner.arch }}-${{ needs.cachix-build-check.outputs.inputs-hash }}
       - name: Provision native modules from Cachix
-        if: contains(matrix.markers, 'skipif_no_ros')
         # The marker records every result -> store path mapping, so the warm
-        # path is symlink recreation against the runner's persistent /nix plus
+        # path is symlink recreation against the persistent /nix plus
         # substitution of anything missing by exact path — no nix evaluation.
         # A missed marker (evicted) falls back to the full nix build.
         run: |
@@ -829,16 +970,18 @@ jobs:
           else
             python3 bin/build-native-modules
           fi
-          # Root the out paths (and thereby their closures) so the end-of-job
-          # GC keeps them warm: the workspace result links die in the next
-          # run's `git clean`, so they cannot serve as roots themselves.
-          # Replacing the directory unroots superseded paths for GC to reap.
-          sudo mkdir -p /nix/var/nix/gcroots/dimos-native
-          sudo find /nix/var/nix/gcroots/dimos-native -maxdepth 1 -type l -delete
-          python3 bin/build-native-modules --record-links | cut -d' ' -f2 | sort -u |
-            while read -r p; do
-              sudo ln -sfn "$p" "/nix/var/nix/gcroots/dimos-native/$(basename "$p")"
-            done
+          # Linux only: root the out paths so this job's end-of-GC keeps the
+          # closure warm in the CI-managed bind-mounted store (the workspace
+          # result links die in the next run's `git clean`, so they cannot
+          # serve as roots). The macOS host manages its own store and GC.
+          if [ "${{ matrix.os }}" = "Linux" ]; then
+            sudo mkdir -p /nix/var/nix/gcroots/dimos-native
+            sudo find /nix/var/nix/gcroots/dimos-native -maxdepth 1 -type l -delete
+            python3 bin/build-native-modules --record-links | cut -d' ' -f2 | sort -u |
+              while read -r p; do
+                sudo ln -sfn "$p" "/nix/var/nix/gcroots/dimos-native/$(basename "$p")"
+              done
+          fi
       - name: Point cargo at a persistent cache on the workspace mount
         if: contains(matrix.markers, 'self_hosted')
         run: |

@@ -86,6 +86,7 @@ def test_g1_blueprint_uses_shared_bimanual_teleop_task() -> None:
 
 @pytest.mark.self_hosted
 def test_g1_teleop_model_is_accepted_by_prepare_robot_model() -> None:
+    """The coordinator prepares this model at start; missing limits raise here."""
     prepared = prepare_robot_model(_G1_TELEOP_MODEL)
 
     assert prepared.joint_space.names == tuple(g1_arms)

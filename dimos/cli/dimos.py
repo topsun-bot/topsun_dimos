@@ -68,6 +68,7 @@ from dimos.cli.hardware_cli import app as hardware_app
 from dimos.cli.landmarks import app as landmarks_app
 from dimos.cli.shell import shell
 from dimos.cli.vqa import app as vqa_app
+from dimos.core.global_config import ENV_FILE
 from dimos.robot.unitree.go2.cli.go2tool import app as go2tool_app
 
 main = typer.Typer(
@@ -75,7 +76,8 @@ main = typer.Typer(
     no_args_is_help=True,
 )
 
-load_dotenv()
+if ENV_FILE is not None:
+    load_dotenv()
 
 SIMULATORS = ("mujoco", "dimsim")
 RECORDERS = ("sqlite", "mcap")

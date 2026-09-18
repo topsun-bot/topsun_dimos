@@ -36,6 +36,14 @@ ZenohMode: TypeAlias = Literal["peer", "client", "router"]
 # process can hold, so it is pinned on the one session that owns that port.
 ZenohProcessMode: TypeAlias = Literal["peer", "client"]
 
+# pytest exports PYTEST_VERSION to the whole process tree. Tests must not pick up
+# a developer's .env (ROBOT_IP, SIMULATION, ...); dimos/conftest.py exports the
+# LLM API keys itself.
+ENV_FILE = None if "PYTEST_VERSION" in os.environ else ".env"
+
+# Never expose these in config dumps or persist their CLI values in run metadata.
+SECRET_CONFIG_FIELDS = frozenset({"dimos_api_key", "relay_key", "unitree_aes_128_key"})
+
 
 def _get_all_numbers(s: str) -> list[float]:
     return [float(x) for x in re.findall(r"-?\d+\.?\d*", s)]
@@ -135,6 +143,10 @@ class GlobalConfig(BaseSettings):
     """PEM CA bundle that signed the relay_url relay's certificate (mkcert, a
     private CA); replaces the default trust stores. Unset for a relay with a
     public certificate."""
+    relay_key: str | None = None
+    """Key that identifies this robot to a relay started with --auth-file
+    (bound to its robot id there). Prefer RELAY_KEY in the environment or
+    .env over the --relay-key flag, which shows in the process list."""
     dimos_cloud_url: str = "https://api.dimensional.org"
     dimos_api_key: str | None = None
     dimos_upload_codec: str = "lz4"
@@ -148,7 +160,7 @@ class GlobalConfig(BaseSettings):
     unitree_webrtc_connect_timeout_sec: float = 30.0
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
@@ -200,9 +212,10 @@ class GlobalConfig(BaseSettings):
     @property
     def processed_robot_ips(self) -> tuple[str, ...]:
         ips = [x.strip() for x in (self.robot_ips or "").split(",") if x.strip()]
-        is_running_tests = "PYTEST_CURRENT_TEST" in os.environ
-        if not ips and not is_running_tests:
-            raise ValueError("No robot IPs specified. Must have at least one IP.")
+        if not ips:
+            raise ValueError(
+                "No robot IPs specified. Set ROBOT_IPS or --robot-ips to at least one IP."
+            )
         return tuple(ips)
 
 
