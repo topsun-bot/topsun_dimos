@@ -50,14 +50,7 @@ def _run_coro_that_stops_loop(coro: Awaitable[None], timeout_s: float = 2.0) -> 
     """
     loop = asyncio.new_event_loop()
     task = loop.create_task(coro)
-    timed_out = False
-
-    def _timeout() -> None:
-        nonlocal timed_out
-        timed_out = True
-        loop.stop()
-
-    handle = loop.call_later(timeout_s, _timeout)
+    handle = loop.call_later(timeout_s, loop.stop)
     try:
         loop.run_forever()
         handle.cancel()
