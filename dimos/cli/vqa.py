@@ -79,7 +79,7 @@ def run(
             load_agent(agent, overrides),
             provenance=run_provenance(source_record(dataset), agent, agent_kwargs(overrides)),
         )
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, ImportError, TypeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     for result in results:
         status = "ERROR" if result.error else ("PASS" if result.passed else "fail")

@@ -188,6 +188,25 @@ def test_vqa_run_cli_formats_dataset_errors(
     assert "Traceback" not in result.output
 
 
+@pytest.mark.parametrize(
+    ("agent", "needle"),
+    [
+        ("no.such.vqa_agent", "No module named"),
+        ("json", "defines 0 agents, expected one"),
+    ],
+)
+def test_vqa_run_cli_formats_agent_load_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent: str, needle: str
+) -> None:
+    monkeypatch.setattr(suite_module, "load_suite", lambda _dataset: ())
+
+    result = CliRunner().invoke(app, ["evals", "vqa", "run", str(tmp_path), "--agent", agent])
+
+    assert result.exit_code != 0
+    assert needle in result.output
+    assert "Traceback" not in result.output
+
+
 def test_vqa_run_cli_runs_shared_evaluator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assets = tmp_path / "assets"
     assets.mkdir()
