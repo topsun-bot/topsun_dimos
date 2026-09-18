@@ -70,5 +70,19 @@ def test_dotenv_is_ignored_under_pytest(tmp_path: Path, monkeypatch: pytest.Monk
     (tmp_path / ".env").write_text("ROBOT_IP=192.0.2.17\n")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ROBOT_IP", raising=False)
+    # conftest exports DIMOS_PYTEST_RUN_ID; do not require PYTEST_VERSION.
+    monkeypatch.delenv("PYTEST_VERSION", raising=False)
 
+    assert GlobalConfig.pytest_detected()
     assert GlobalConfig().robot_ip is None
+
+
+def test_dotenv_is_loaded_outside_pytest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / ".env").write_text("ROBOT_IP=192.0.2.17\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ROBOT_IP", raising=False)
+    monkeypatch.delenv("PYTEST_VERSION", raising=False)
+    monkeypatch.delenv("DIMOS_PYTEST_RUN_ID", raising=False)
+
+    assert not GlobalConfig.pytest_detected()
+    assert GlobalConfig().robot_ip == "192.0.2.17"

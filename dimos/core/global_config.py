@@ -18,7 +18,7 @@ import re
 from typing import Literal, TypeAlias
 
 from pydantic import AliasChoices, Field, ValidationInfo, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from dimos.constants import DEFAULT_BUILD_NATIVE
 from dimos.models.vl.types import VlModelName
@@ -35,11 +35,6 @@ ZenohMode: TypeAlias = Literal["peer", "client", "router"]
 # How every session in every process joins it. A router binds a port only one
 # process can hold, so it is pinned on the one session that owns that port.
 ZenohProcessMode: TypeAlias = Literal["peer", "client"]
-
-# pytest exports PYTEST_VERSION to the whole process tree. Tests must not pick up
-# a developer's .env (ROBOT_IP, SIMULATION, ...); dimos/conftest.py exports the
-# LLM API keys itself.
-ENV_FILE = None if "PYTEST_VERSION" in os.environ else ".env"
 
 # Never expose these in config dumps or persist their CLI values in run metadata.
 # Nested transport flags are matched by last segment: --transports.broker.api-key
@@ -170,12 +165,38 @@ class GlobalConfig(BaseSettings):
     unitree_webrtc_connect_timeout_sec: float = 30.0
 
     model_config = SettingsConfigDict(
-        env_file=ENV_FILE,
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
         validate_assignment=True,
     )
+
+    @staticmethod
+    def pytest_detected() -> bool:
+        """True inside the pytest runner.
+
+        ``dimos/conftest.py`` exports ``DIMOS_PYTEST_RUN_ID`` before any dimos
+        import. pytest 8.2+ may also set ``PYTEST_VERSION``.
+        """
+        return "DIMOS_PYTEST_RUN_ID" in os.environ or bool(os.environ.get("PYTEST_VERSION"))
+
+    @staticmethod
+    def dotenv_file() -> str | None:
+        return None if GlobalConfig.pytest_detected() else ".env"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        _settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        if cls.pytest_detected():
+            return (init_settings, env_settings, file_secret_settings)
+        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
 
     @field_validator("record_engine")
     @classmethod
@@ -228,5 +249,7 @@ class GlobalConfig(BaseSettings):
             )
         return tuple(ips)
 
+
+ENV_FILE = GlobalConfig.dotenv_file()
 
 global_config = GlobalConfig()
