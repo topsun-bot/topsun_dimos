@@ -57,9 +57,12 @@ pointlio_rust = autoconnect(
     vis_module("rerun"),
 ).global_config(n_workers=3, robot_model="mid360_pointlio_rust")
 
-# Replays the capture named by DIMOS_MID360_PCAP (required) at capture speed.
+# Replays the capture named by DIMOS_MID360_PCAP through the same driver
+# pipeline as the live sensor. Unset/empty must stay None so importing the
+# registered blueprint (dimos list, test_all_blueprints) does not construct
+# Mid360Config(pcap="") — the validator rejects that empty string.
 pointlio_rust_replay = autoconnect(
-    _mid360_for_pointlio(pcap=os.environ.get("DIMOS_MID360_PCAP", "")),
+    _mid360_for_pointlio(pcap=os.environ.get("DIMOS_MID360_PCAP") or None),
     PointLioRust.blueprint(),
     vis_module("rerun"),
 ).global_config(n_workers=3, robot_model="mid360_pointlio_rust_replay")

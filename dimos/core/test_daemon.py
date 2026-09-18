@@ -92,6 +92,8 @@ class TestRunEntryCRUD:
             "relay_key": "relay-key-0123456789abcdef",
             "dimos_api_key": "api-key-0123456789abcdef",
             "unitree_aes_128_key": "aes-key-0123456789abcdef",
+            "api_key": "broker-api-key-0123456789abcdef",
+            "app_secret": "cf-app-secret-0123456789abcdef",
         }
         entry = _make_entry(
             config_overrides={"viewer": "none", **secrets},
@@ -105,6 +107,9 @@ class TestRunEntryCRUD:
                 "--unitree-aes-128-key",
                 secrets["unitree_aes_128_key"],
                 "--g.relay-key=another-relay-key-0123456789abcdef",
+                "--transports.broker.api-key",
+                secrets["api_key"],
+                f"--transports.cloudflare.app-secret={secrets['app_secret']}",
                 "--viewer",
                 "none",
             ],

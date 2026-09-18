@@ -42,7 +42,17 @@ ZenohProcessMode: TypeAlias = Literal["peer", "client"]
 ENV_FILE = None if "PYTEST_VERSION" in os.environ else ".env"
 
 # Never expose these in config dumps or persist their CLI values in run metadata.
-SECRET_CONFIG_FIELDS = frozenset({"dimos_api_key", "relay_key", "unitree_aes_128_key"})
+# Nested transport flags are matched by last segment: --transports.broker.api-key
+# and --transports.cloudflare.app-secret both redact through this set.
+SECRET_CONFIG_FIELDS = frozenset(
+    {
+        "dimos_api_key",
+        "relay_key",
+        "unitree_aes_128_key",
+        "api_key",
+        "app_secret",
+    }
+)
 
 
 def _get_all_numbers(s: str) -> list[float]:

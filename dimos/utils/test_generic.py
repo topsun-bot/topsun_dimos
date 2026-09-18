@@ -39,7 +39,7 @@ def test_finite_number_coerces_to_float() -> None:
     assert isinstance(finite_number(2, "x"), float)
 
 
-@pytest.mark.parametrize("value", [None, "1.5", True, math.nan, math.inf, [1.0]])
+@pytest.mark.parametrize("value", [None, "1.5", True, math.nan, math.inf, [1.0], 10**400])
 def test_finite_number_rejects_non_numbers(value: object) -> None:
     with pytest.raises(ValueError, match="x must be a finite number"):
         finite_number(value, "x")
