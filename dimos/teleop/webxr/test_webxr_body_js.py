@@ -21,7 +21,9 @@ import pytest
 _TEST = Path(__file__).parent / "web" / "static" / "webxr_body.test.mjs"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is required to run captureBody tests")
+@pytest.mark.skipif(
+    shutil.which("node") is None, reason="node is required to run captureBody tests"
+)
 def test_capture_body_js_contract() -> None:
     completed = subprocess.run(
         ["node", "--test", str(_TEST)],
