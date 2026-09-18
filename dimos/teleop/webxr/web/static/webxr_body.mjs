@@ -5,9 +5,9 @@ export function captureBody(frame, referenceSpace) {
     if (!body) return null;
 
     const joints = {};
-    for (const [jointName, jointSpace] of body) {
-        // Body joints are XRJointSpace values; resolve them like hand joints.
-        const pose = frame.getJointPose(jointSpace, referenceSpace);
+    for (const [jointName, jointSpace] of bodyEntries(body)) {
+        if (!jointName || !jointSpace) continue;
+        const pose = resolveBodyPose(frame, jointSpace, referenceSpace);
         if (!pose) continue;
 
         const position = pose.transform.position;
@@ -18,4 +18,27 @@ export function captureBody(frame, referenceSpace) {
         };
     }
     return joints;
+}
+
+// Spec XRBody is iterable<XRBodyJoint, XRBodySpace>. Some runtimes instead
+// expose a joints array of spaces with jointName set.
+function bodyEntries(body) {
+    if (typeof body[Symbol.iterator] === "function") {
+        return body;
+    }
+    return (body.joints ?? []).map((space) => [space.jointName, space]);
+}
+
+// XRBodySpace is an XRSpace, so getPose is the spec method. getJointPose is
+// for XRJointSpace (hands); try it first when present, then fall back.
+function resolveBodyPose(frame, jointSpace, referenceSpace) {
+    if (typeof frame.getJointPose === "function") {
+        try {
+            const pose = frame.getJointPose(jointSpace, referenceSpace);
+            if (pose) return pose;
+        } catch {
+            // XRBodySpace is not an XRJointSpace on spec-compliant runtimes.
+        }
+    }
+    return frame.getPose(jointSpace, referenceSpace);
 }
