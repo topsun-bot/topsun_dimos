@@ -98,9 +98,35 @@ target_link_libraries(dimos_native INTERFACE zenohcxx::zenohc)
 # LCM transport. transport_factory.hpp includes lcm_transport.hpp
 # unconditionally, so liblcm is a compile dependency of the SDK headers, not
 # something a consumer opts into.
+#
+# Prefer pkg-config so runners with libglib2.0-dev keep today's PkgConfig::LCM
+# link. lcm.pc Requires: glib-2.0; a required-workflow pin may install
+# liblcm-dev without that .pc even though headers and liblcm.so are present.
+# Runtime glib is already a NEEDED of the LCM shared library.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(LCM REQUIRED IMPORTED_TARGET lcm)
-target_link_libraries(dimos_native INTERFACE PkgConfig::LCM)
+pkg_check_modules(LCM QUIET IMPORTED_TARGET lcm)
+if(LCM_FOUND)
+  target_link_libraries(dimos_native INTERFACE PkgConfig::LCM)
+else()
+  find_path(LCM_INCLUDE_DIR NAMES lcm/lcm.h)
+  find_library(LCM_LIBRARY NAMES lcm)
+  if(NOT LCM_INCLUDE_DIR OR NOT LCM_LIBRARY)
+    message(FATAL_ERROR "dimos_native: liblcm is required (lcm/lcm.h and liblcm). \
+pkg-config could not resolve lcm (often because glib-2.0.pc is missing) and \
+find_path/find_library also failed")
+  endif()
+  add_library(LCM::lcm INTERFACE IMPORTED)
+  set_target_properties(LCM::lcm PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${LCM_INCLUDE_DIR}"
+    INTERFACE_LINK_LIBRARIES "${LCM_LIBRARY}"
+  )
+  find_library(GLIB_LIBRARY NAMES glib-2.0)
+  if(GLIB_LIBRARY)
+    set_property(TARGET LCM::lcm APPEND PROPERTY INTERFACE_LINK_LIBRARIES "${GLIB_LIBRARY}")
+  endif()
+  message(STATUS "dimos_native: using LCM via ${LCM_LIBRARY} (pkg-config unavailable)")
+  target_link_libraries(dimos_native INTERFACE LCM::lcm)
+endif()
 
 option(DIMOS_NATIVE_BUILD_TESTS "Build the dimos native SDK tests" OFF)
 if(DIMOS_NATIVE_BUILD_TESTS)
