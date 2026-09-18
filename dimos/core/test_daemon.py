@@ -96,7 +96,12 @@ class TestRunEntryCRUD:
             "app_secret": "cf-app-secret-0123456789abcdef",
         }
         entry = _make_entry(
-            config_overrides={"viewer": "none", **secrets},
+            config_overrides={
+                "viewer": "none",
+                **secrets,
+                "transports.broker.api_key": secrets["api_key"],
+                "transports.cloudflare.app_secret": secrets["app_secret"],
+            },
             original_argv=[
                 "dimos",
                 "--relay-key",
