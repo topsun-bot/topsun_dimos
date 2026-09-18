@@ -18,7 +18,7 @@ import re
 from typing import Literal, TypeAlias
 
 from pydantic import AliasChoices, Field, ValidationInfo, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from dimos.constants import DEFAULT_BUILD_NATIVE
 from dimos.models.vl.types import VlModelName
@@ -35,6 +35,19 @@ ZenohMode: TypeAlias = Literal["peer", "client", "router"]
 # How every session in every process joins it. A router binds a port only one
 # process can hold, so it is pinned on the one session that owns that port.
 ZenohProcessMode: TypeAlias = Literal["peer", "client"]
+
+# Never expose these in config dumps or persist their CLI values in run metadata.
+# Nested transport flags are matched by last segment: --transports.broker.api-key
+# and --transports.cloudflare.app-secret both redact through this set.
+SECRET_CONFIG_FIELDS = frozenset(
+    {
+        "dimos_api_key",
+        "relay_key",
+        "unitree_aes_128_key",
+        "api_key",
+        "app_secret",
+    }
+)
 
 
 def _get_all_numbers(s: str) -> list[float]:
@@ -129,6 +142,16 @@ class GlobalConfig(BaseSettings):
     dimsim_headless: bool = True
     local_relay: bool = False
     relay_url: str | None = None
+    """HTTP URL of a relay started elsewhere (e.g. http://localhost:7780); the
+    bridge discovers its WebTransport endpoint through /api/info."""
+    relay_ca: str | None = None
+    """PEM CA bundle that signed the relay_url relay's certificate (mkcert, a
+    private CA); replaces the default trust stores. Unset for a relay with a
+    public certificate."""
+    relay_key: str | None = None
+    """Key that identifies this robot to a relay started with --auth-file
+    (bound to its robot id there). Prefer RELAY_KEY in the environment or
+    .env over the --relay-key flag, which shows in the process list."""
     dimos_cloud_url: str = "https://api.dimensional.org"
     dimos_api_key: str | None = None
     dimos_upload_codec: str = "lz4"
@@ -148,6 +171,32 @@ class GlobalConfig(BaseSettings):
         populate_by_name=True,
         validate_assignment=True,
     )
+
+    @staticmethod
+    def pytest_detected() -> bool:
+        """True inside the pytest runner.
+
+        ``dimos/conftest.py`` exports ``DIMOS_PYTEST_RUN_ID`` before any dimos
+        import. pytest 8.2+ may also set ``PYTEST_VERSION``.
+        """
+        return "DIMOS_PYTEST_RUN_ID" in os.environ or bool(os.environ.get("PYTEST_VERSION"))
+
+    @staticmethod
+    def dotenv_file() -> str | None:
+        return None if GlobalConfig.pytest_detected() else ".env"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        _settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        if cls.pytest_detected():
+            return (init_settings, env_settings, file_secret_settings)
+        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
 
     @field_validator("record_engine")
     @classmethod
@@ -194,10 +243,13 @@ class GlobalConfig(BaseSettings):
     @property
     def processed_robot_ips(self) -> tuple[str, ...]:
         ips = [x.strip() for x in (self.robot_ips or "").split(",") if x.strip()]
-        is_running_tests = "PYTEST_CURRENT_TEST" in os.environ
-        if not ips and not is_running_tests:
-            raise ValueError("No robot IPs specified. Must have at least one IP.")
+        if not ips:
+            raise ValueError(
+                "No robot IPs specified. Set ROBOT_IPS or --robot-ips to at least one IP."
+            )
         return tuple(ips)
 
+
+ENV_FILE = GlobalConfig.dotenv_file()
 
 global_config = GlobalConfig()
