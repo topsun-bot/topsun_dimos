@@ -127,9 +127,8 @@ class G1BuiltinVoiceInput(Module):
     def _subscribe_asr_when_dds_ready(self) -> None:
         """Wait for sibling ``G1HighLevelDdsSdk`` then subscribe (no duplicate DDS init)."""
         delay = self.config.dds_ready_delay_s
-        if delay > 0:
-            if self._stop_event.wait(delay):
-                return
+        if delay > 0 and self._stop_event.wait(delay):
+            return
 
         from unitree_sdk2py.core.channel import ChannelSubscriber  # type: ignore[import-not-found]
         from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_  # type: ignore[import-not-found]
