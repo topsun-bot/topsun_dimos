@@ -3,13 +3,17 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     # https://blog.yossarian.net/2025/11/21/We-should-all-be-using-dependency-cooldowns
     cooldown:
       default-days: 7
+    # Majors stay ungrouped so each lands as its own PR.
     groups:
-      actions:
+      actions-minor-and-patch:
         patterns: ["*"]
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "uv"
     directory: "/"
@@ -17,14 +21,18 @@ updates:
     allow:
       - dependency-type: "direct"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     # https://blog.yossarian.net/2025/11/21/We-should-all-be-using-dependency-cooldowns
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 10
+    # Room for the weekly minor/patch group plus several individual majors.
+    open-pull-requests-limit: 15
     groups:
-      python:
+      python-minor-and-patch:
         patterns: ["*"]
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "docker"
     directories: ["/docker/*/"]
@@ -34,16 +42,22 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      docker:
+      docker-minor-and-patch:
         patterns: ["*"]
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     # https://blog.yossarian.net/2025/11/21/We-should-all-be-using-dependency-cooldowns
     cooldown:
       default-days: 7
     groups:
-      cargo:
+      cargo-minor-and-patch:
         patterns: ["*"]
+        update-types:
+          - "minor"
+          - "patch"
