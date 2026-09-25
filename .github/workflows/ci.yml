@@ -78,7 +78,15 @@ jobs:
           FORCE: ${{ inputs.force-cachix-build }}
           MARKER_HIT: ${{ steps.marker.outputs.cache-hit }}
         run: |
-          if [ "$FORCE" != "true" ] && [ "$MARKER_HIT" = "true" ]; then
+          # This job has no `environment:`, so the PR workflow can skip
+          # environment-protected cachix-build by setting needs-build=false.
+          # Only dimensionalOS/dimos can publish to dimensionalos.cachix.org;
+          # on this fork the publish job 403s and then skips `tests`.
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          if [ "${GITHUB_REPOSITORY}" != "dimensionalOS/dimos" ]; then
+            echo "::notice::Not dimensionalOS/dimos; forcing needs-build=false so environment-protected cachix-build is skipped."
+            echo "needs-build=false" >> "$GITHUB_OUTPUT"
+          elif [ "$FORCE" != "true" ] && [ "$MARKER_HIT" = "true" ]; then
             echo "needs-build=false" >> "$GITHUB_OUTPUT"
           else
             echo "needs-build=true" >> "$GITHUB_OUTPUT"
