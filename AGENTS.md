@@ -1,8 +1,90 @@
 # Dimensional AGENTS.md
 
+Claude Code and other coding agents: also read [CLAUDE.md](CLAUDE.md). The **Agent PR workflow** section below is mandatory on this fork.
+
 ## What is DimOS
 
 The agentic operating system for generalist robotics. `Modules` communicate via typed streams over LCM, ROS2, DDS, or other transports. `Blueprints` compose modules into runnable robot stacks. `Skills` give agents the ability to execute physical on-hardware functions like `grab()`, `follow_object()`, or `jump()`.
+
+---
+
+## Agent PR workflow (mandatory)
+
+This fork (`topsun-bot/topsun_dimos`) follows a one-task-per-branch-per-PR workflow. Agents must verify locally before they push. Unrelated files, bundled features, skipped tests, and mega Dependabot bumps are why PRs here become unmergeable.
+
+### One concern per PR and per commit
+
+- **One task per branch per PR.** A PR does one thing: one feature, one bugfix, one docs page, one CI change, or one upstream sync. If you need two of those, open two PRs.
+- **One concern per commit.** Do not squash a skill, a README rewrite, a lockfile bump, and a `protocol.ts` drive-by into one commit.
+- **Do not touch unrelated files.** If pre-commit or deno fmt rewrites a file you did not mean to change (especially `web/shared/protocol.ts`), revert it before you push.
+- **Do not mix an upstream sync with feature work.** Keep `dimensionalOS/dimos` syncs in their own PR with no Topsun features, no CI timeout patches, and no test skips.
+
+### Branch from latest main
+
+```bash
+git fetch origin main
+git checkout -b <type>/<short-name> origin/main
+```
+
+Use the prefixes already required below (`feat/`, `fix/`, `docs/`, `chore/`, …). Rebase onto `origin/main` before you open the PR if main has moved. Do not force-push `main`. Do not rewrite history on `main`.
+
+### Verify before every commit
+
+These are the commands CI actually runs (see `.github/workflows/ci.yml` and `docs/development/testing.md`). Run them from a repo venv (`source .venv/bin/activate` if it exists):
+
+```bash
+# Type check (CI lint job)
+uv run mypy
+
+# Format / lint / license / LFS hooks (CI lint job; skip Rust hooks — those are the rust job)
+SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files
+
+# Fast tests (local default suite; excludes self_hosted / mujoco)
+./bin/pytest-fast
+# equivalent without the helper:
+# uv run pytest --numprocesses=auto dimos
+```
+
+If `./bin/pytest-fast` fails because `.venv` is missing, use `uv run pytest --numprocesses=auto dimos` instead.
+
+CI's `tests` job is the same default suite plus a marker exclude for heavier groups:
+
+```bash
+uv run pytest --numprocesses=logical -m 'not (self_hosted or mujoco or self_hosted_large or web_browser or bake_e2e)'
+```
+
+You do not need the full CI matrix (every Python version, rust, native, web, self-hosted) before every commit. You do need the three commands above, plus any test file that covers the code you changed.
+
+### Never fake a green build
+
+Do **not** do any of the following without an explicit justification in the PR body (what failed, why the change is correct, and why it is not hiding a regression):
+
+- skip, xfail, or delete a failing test to go green
+- retarget a test to `@pytest.mark.self_hosted` / `self_hosted_large` / `mujoco` so the default suite no longer runs it
+- raise job or test timeouts just to absorb slowness
+- set `continue-on-error: true` or skip a required CI job
+
+Fix the cause, or leave the PR red and say what is blocked.
+
+### Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(optional-scope): short summary
+```
+
+Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`, `ci`. Example: `docs(agents): add mandatory PR workflow rules`.
+
+Subject is imperative, ~72 characters, no trailing period. The body (if any) explains why, not a file list.
+
+### Opening the PR
+
+- Target `main`.
+- Fill `.github/pull_request_template.md`. Do not delete the template.
+- Name the AI tool and model under **AI assistance**.
+- If the change is not ready for review, keep it as a draft.
+- Batch local commits; push once. Every push starts ~1 hour of CI.
 
 ---
 
@@ -143,7 +225,7 @@ docs/
 
 ## For Coding Agents
 
-If you are a coding agent working on this dimos codebase, our coding agent focused docs are at `docs/coding-agents/index.md`
+If you are a coding agent working on this dimos codebase, start with **Agent PR workflow (mandatory)** above, then the coding-agent docs at `docs/coding-agents/index.md`.
 
 ---
 
@@ -380,10 +462,14 @@ CI asserts the file is current — if it's stale, CI fails. Externally packaged 
 
 ## Git Workflow
 
+See **Agent PR workflow (mandatory)** above. Short version:
+
 - Branch prefixes: `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/`, `perf/`
 - **PRs target `main`** — `main` is the unstable development branch. Work and PR off of `main`. Never push to `main` directly.
-- **Don't force-push** unless after a rebase with conflicts
+- **One concern per PR.** Upstream `dimensionalOS/dimos` syncs stay in their own PR.
+- **Don't force-push** unless after a rebase with conflicts. Never force-push `main`.
 - **Minimize pushes** — every push triggers CI (~1 hour on self-hosted runners). Batch commits locally, push once.
+- Run `uv run mypy`, `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`, and `./bin/pytest-fast` before each commit.
 
 ---
 
