@@ -44,7 +44,7 @@ mid360_pointlio_voxels = autoconnect(
 ).global_config(n_workers=3, robot_model="mid360_pointlio_voxels")
 
 
-def _mid360_for_pointlio(**kwargs: Any) -> Blueprint:
+def mid360_for_pointlio(**kwargs: Any) -> Blueprint:
     """Rust driver wired into PointLioRust: raw cloud renamed, stamped in the LIO's sensor frame."""
     return Mid360.blueprint(frame_id="mid360_link", **kwargs).remappings(
         [(Mid360, "lidar", "lidar_raw")]
@@ -52,7 +52,7 @@ def _mid360_for_pointlio(**kwargs: Any) -> Blueprint:
 
 
 pointlio_rust = autoconnect(
-    _mid360_for_pointlio(),
+    mid360_for_pointlio(),
     PointLioRust.blueprint(),
     vis_module("rerun"),
 ).global_config(n_workers=3, robot_model="mid360_pointlio_rust")
@@ -62,7 +62,7 @@ pointlio_rust = autoconnect(
 # registered blueprint (dimos list, test_all_blueprints) does not construct
 # Mid360Config(pcap="") — the validator rejects that empty string.
 pointlio_rust_replay = autoconnect(
-    _mid360_for_pointlio(pcap=os.environ.get("DIMOS_MID360_PCAP") or None),
+    mid360_for_pointlio(pcap=os.environ.get("DIMOS_MID360_PCAP") or None),
     PointLioRust.blueprint(),
     vis_module("rerun"),
 ).global_config(n_workers=3, robot_model="mid360_pointlio_rust_replay")

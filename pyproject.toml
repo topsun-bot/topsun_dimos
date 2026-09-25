@@ -100,7 +100,7 @@ classifiers = [
 
 dependencies = [
     # Transport Protocols
-    "dimos-lcm>=0.1.3",
+    "dimos-lcm>=0.1.4",
     "eclipse-zenoh>=1.10.1,<2.0",
     "PyTurboJPEG==1.8.2",
     "imagecodecs>=2024.6.1", # JPEG-XL for CompressedImage
@@ -652,6 +652,8 @@ module = [
     "lz4",
     "lz4.*",
     "dimos_mls_planner",
+    "dimos_local_planner",
+    "dimos_trajectory_follower",
     "dimos_voxel_ray_tracing",
     "etils",
     "faster_whisper",
@@ -756,8 +758,9 @@ exclude_also = [
 max_size_kb = 75
 ignore = [
     "uv.lock",
-    "native/python/example/uv.lock",
-    "native/python/graspgenx/uv.lock",
+    # an evolved planner: one generated rust file, not hand-edited source
+    "dimos/navigation/local_planner/rust/src/planner.rs",
+    "*/uv.lock",
     "*/package-lock.json",
     "Cargo.lock",
     "*/Cargo.lock",

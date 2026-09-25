@@ -23,8 +23,8 @@ stack and LCM transports, so this blueprint composes that plus sim + A*.
 """
 
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.navigation.go2.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.navigation.movement_manager.movement_manager import MovementManager
-from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.g1.blueprints.primitive.unitree_g1_primitive_no_nav import (
     unitree_g1_primitive_no_nav,
 )

@@ -12,15 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Protocol
+"""Public Topsun navigation Spec (re-export after upstream go2 move)."""
 
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.navigation.base import NavigationState
-from dimos.spec.utils import Spec
-
-
-class NavigationInterfaceSpec(Spec, Protocol):
-    def set_goal(self, goal: PoseStamped) -> bool: ...
-    def get_state(self) -> NavigationState: ...
-    def is_goal_reached(self) -> bool: ...
-    def cancel_goal(self) -> bool: ...
+from dimos.navigation.go2.replanning_a_star.spec import (
+    NavigationInterfaceSpec as NavigationInterfaceSpec,
+)
