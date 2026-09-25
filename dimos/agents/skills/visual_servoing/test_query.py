@@ -16,7 +16,6 @@ from typing import Any
 
 import numpy as np
 
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.agents.skills.visual_servoing.query import (
     _label_matches_query,
     _sanitize_description,
@@ -24,6 +23,7 @@ from dimos.agents.skills.visual_servoing.query import (
     parse_object_bbox_from_vlm_response,
     vlm_object_present_in_view,
 )
+from dimos.msgs.sensor_msgs.Image import Image
 
 
 def _img(w: int = 1000, h: int = 800) -> Image:
