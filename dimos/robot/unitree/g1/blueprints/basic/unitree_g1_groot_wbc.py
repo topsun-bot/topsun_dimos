@@ -74,8 +74,8 @@ from dimos.msgs.nav_msgs.Path import Path as NavPath
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.MotorCommandArray import MotorCommandArray
+from dimos.navigation.go2.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.navigation.movement_manager.movement_manager import MovementManager
-from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.g1.config import G1
 from dimos.robot.unitree.g1.g1_rerun import (
     G1_RERUN_ROOT,
@@ -384,7 +384,7 @@ _G1_ROOT = G1_RERUN_ROOT if global_config.simulation == "mujoco" else "world/odo
 
 _G1_URDF_PATH = Path(__file__).resolve().parents[2] / "g1.urdf"
 _G1_TELEOP_MODEL = RobotModelConfig(
-    model=G1_TELEOP_ARM_MODEL,
+    model=G1_TELEOP_ARM_MODEL.with_default_joint_acceleration_limit(2.0),
     joint_names=list(g1_arms),
     base_link="pelvis",
 )
@@ -524,7 +524,7 @@ _coordinator = _G1GrootCoordinator.blueprint(
             },
         ),
         _arm_trajectory_task,
-        # Shared bimanual Quest task with G1-only model and objective tuning.
+        # Shared bimanual WebXR task with G1-only model and objective tuning.
         TaskConfig(
             name="teleop_g1",
             type="teleop_ik",
@@ -552,7 +552,7 @@ _coordinator = _G1GrootCoordinator.blueprint(
         ("cmd_vel", Twist): LCMTransport(_cmd_vel_topic, Twist),
         # Real-hw only: the transport_lcm adapter speaks to
         # G1WholeBodyConnection over these topics. autoconnect already
-        # matches by (name, type) so sim doesn't need them -- they're
+        # matches by (name, type) so sim doesn't need them; they're
         # harmless when the sim engine doesn't expose those ports.
         ("motor_states", JointState): LCMTransport("/g1/motor_states", JointState),
         ("imu", Imu): LCMTransport("/g1/imu", Imu),

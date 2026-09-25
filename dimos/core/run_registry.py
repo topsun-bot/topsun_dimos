@@ -26,6 +26,7 @@ import time
 
 from dimos.constants import STATE_DIR
 from dimos.core.coordination.process_lifecycle import kill_run_processes
+from dimos.core.global_config import SECRET_CONFIG_FIELDS
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -45,6 +46,42 @@ class RunEntry:
     cli_args: list[str] = field(default_factory=list)
     config_overrides: dict[str, object] = field(default_factory=dict)
     original_argv: list[str] = field(default_factory=list)
+
+    @staticmethod
+    def config_field_name(option: str) -> str:
+        """Last dotted CLI/config segment, normalized to a secret-set field name.
+
+        ``--transports.broker.api-key`` and ``transports.cloudflare.app-secret``
+        both reduce to names in ``SECRET_CONFIG_FIELDS`` (``api_key``,
+        ``app_secret``).
+        """
+        return option.removeprefix("--").rsplit(".", 1)[-1].replace("-", "_")
+
+    @staticmethod
+    def without_secret_options(argv: list[str]) -> list[str]:
+        """Drop flags whose last segment is in ``SECRET_CONFIG_FIELDS``."""
+        safe: list[str] = []
+        skip_value = False
+        for arg in argv:
+            if skip_value:
+                skip_value = False
+                continue
+            option, separator, _value = arg.partition("=")
+            if option.startswith("--") and (
+                RunEntry.config_field_name(option) in SECRET_CONFIG_FIELDS
+            ):
+                skip_value = separator == ""
+                continue
+            safe.append(arg)
+        return safe
+
+    def __post_init__(self) -> None:
+        self.config_overrides = {
+            key: value
+            for key, value in self.config_overrides.items()
+            if self.config_field_name(key) not in SECRET_CONFIG_FIELDS
+        }
+        self.original_argv = self.without_secret_options(self.original_argv)
 
     @property
     def registry_path(self) -> Path:

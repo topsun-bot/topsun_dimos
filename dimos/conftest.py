@@ -20,6 +20,7 @@ import os
 import pathlib
 import platform
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -84,7 +85,7 @@ with suppress(ImportError, ValueError, OSError):
     if soft < target:
         resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 import pytest
 import tqdm
 
@@ -97,7 +98,10 @@ from dimos.utils.testing.waiting import retry_until as _retry_until, wait_until 
 # monitor only re-tunes miniters for smooth interactive rendering, so disable it for tests.
 tqdm.tqdm.monitor_interval = 0
 
-load_dotenv()
+_dotenv = dotenv_values()
+for _key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ALIBABA_API_KEY"):
+    if _dotenv.get(_key):
+        os.environ.setdefault(_key, _dotenv[_key])
 
 
 def _has_ros() -> bool:
@@ -174,6 +178,13 @@ def pytest_sessionstart(session):
     _arm_crash_dumps()
 
 
+def pytest_ignore_collect(collection_path: pathlib.Path) -> bool | None:
+    # Nested Python projects own their dependencies and test invocation.
+    if collection_path.is_dir() and (collection_path / "pyproject.toml").is_file():
+        return True
+    return None
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -185,11 +196,16 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "web_browser: cockpit browser e2e (playwright chromium); runs in the CI web job",
+        "web_browser: cockpit browser e2e (playwright chromium + firefox); "
+        "runs in the CI web job and the macOS self-hosted-tests job",
     )
     config.addinivalue_line(
         "markers",
         "bake_e2e: dimos bake e2e (builds rust); runs in the CI rust job",
+    )
+    config.addinivalue_line(
+        "markers",
+        "native_e2e: native module e2e (builds rust); runs in the CI rust job",
     )
     config.addinivalue_line("markers", "skipif_in_ci: skip when CI env var is set")
     config.addinivalue_line("markers", "skipif_no_openai: skip when OPENAI_API_KEY is not set")
@@ -202,6 +218,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "skipif_no_deno: skip when the Deno runtime is not on PATH or in cache",
+    )
+    config.addinivalue_line(
+        "markers", "skipif_no_ffmpeg: skip when the ffmpeg binary is missing, except in CI"
     )
     config.addinivalue_line("markers", "skipif_macos_bug: skip known-buggy tests on macOS")
     config.addinivalue_line("markers", "skipif_macos: skip tests not intended to run on macOS")
@@ -220,20 +239,36 @@ def pytest_configure(config):
         )
 
 
-@pytest.fixture(autouse=True)
-def _restore_global_config():
-    """Undo global_config mutations after every test.
-
-    A build from a parsed config resets the singleton to the parse's full
-    resolution. With a hermetic parse (environ={}) that reverts mcp_port to
-    its schema default, and every later test on the worker then binds the
-    port every other worker also defaults to.
-    """
+def _global_config_guard():
     from dimos.core.global_config import global_config
 
     snapshot = global_config.model_dump()
     yield
     global_config.update(**snapshot)
+
+
+# Undo global_config mutations when the scope that made them ends. Without
+# the class and module guards, a class-scoped fixture's
+# `global_config.update(viewer="none", n_workers=1)` stays in effect for
+# every later test in the session.
+#
+# A build from a parsed config resets the singleton to the parse's full
+# resolution. With a hermetic parse (environ={}) that reverts mcp_port to
+# its schema default, and every later test on the worker then binds the
+# port every other worker also defaults to.
+@pytest.fixture(autouse=True)
+def _restore_global_config():
+    yield from _global_config_guard()
+
+
+@pytest.fixture(autouse=True, scope="class")
+def _restore_global_config_class():
+    yield from _global_config_guard()
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _restore_global_config_module():
+    yield from _global_config_guard()
 
 
 @pytest.fixture(scope="session")
@@ -278,6 +313,10 @@ def pytest_collection_modifyitems(config, items):
             "native libturbojpeg unavailable",
         ),
         "skipif_no_deno": (not _has_deno(), "deno is not available"),
+        "skipif_no_ffmpeg": (
+            shutil.which("ffmpeg") is None and not os.getenv("CI"),
+            "ffmpeg not installed",
+        ),
         "skipif_macos_bug": (_is_macos(), "Some tests are buggy on Mac OS"),
         "skipif_macos": (_is_macos(), "Not intended to run on macOS"),
         "skipif_aarch64": (

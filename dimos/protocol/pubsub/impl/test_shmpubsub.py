@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared-memory pubsub: self-unsubscribe from the fanout thread."""
+"""Shared-memory pubsub: self-unsubscribe and stale-frame skip."""
 
 from collections.abc import Iterator
 import threading
+import time
+from typing import Any
 import uuid
 
 import pytest
 
-from dimos.protocol.pubsub.impl.shmpubsub import SharedMemoryPubSubBase
+from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory, SharedMemoryPubSubBase
 
 
 @pytest.fixture
@@ -125,3 +127,49 @@ def test_local_publish_does_not_start_sibling_after_unsubscribe() -> None:
         assert not second_ran.is_set()
     finally:
         bus.stop()
+
+
+def test_new_subscriber_ignores_frame_left_in_segment(wait_until: Any) -> None:
+    topic = "/shm_stale_frame"
+    owner = PickleSharedMemory(prefer="cpu")
+    owner.start()
+    owner.publish(topic, b"stale")
+
+    reader = PickleSharedMemory(prefer="cpu")
+    reader.start()
+    got: list[bytes] = []
+    reader.subscribe(topic, lambda msg, _topic: got.append(msg))
+    try:
+        time.sleep(0.2)
+        assert got == []
+
+        owner.publish(topic, b"fresh")
+        wait_until(lambda: got == [b"fresh"], timeout=2.0)
+    finally:
+        reader.stop()
+        owner.stop()
+
+
+def test_resubscribe_ignores_frames_published_while_unsubscribed(wait_until: Any) -> None:
+    topic = "/shm_resubscribe"
+    owner = PickleSharedMemory(prefer="cpu")
+    owner.start()
+    reader = PickleSharedMemory(prefer="cpu")
+    reader.start()
+    got: list[bytes] = []
+    try:
+        unsubscribe = reader.subscribe(topic, lambda msg, _topic: got.append(msg))
+        owner.publish(topic, b"first")
+        wait_until(lambda: got == [b"first"], timeout=2.0)
+        unsubscribe()
+
+        owner.publish(topic, b"missed")
+        reader.subscribe(topic, lambda msg, _topic: got.append(msg))
+        time.sleep(0.2)
+        assert got == [b"first"]
+
+        owner.publish(topic, b"second")
+        wait_until(lambda: got == [b"first", b"second"], timeout=2.0)
+    finally:
+        reader.stop()
+        owner.stop()
