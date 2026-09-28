@@ -15,6 +15,8 @@ This fork (`topsun-bot/topsun_dimos`) follows a one-task-per-branch-per-PR workf
 ### One concern per PR and per commit
 
 - **One task per branch per PR.** A PR does one thing: one feature, one bugfix, one docs page, one CI change, or one upstream sync. If you need two of those, open two PRs.
+- **Size cap.** At most **400 changed lines** or **15 files**. Do not count lockfiles (`uv.lock`, `Cargo.lock`, `flake.lock`) or generated files (`dimos/robot/all_blueprints.py`). Count every other file you touch, including docs.
+- **Split larger work.** If it cannot meet the size cap, split it. The usual case is an upstream `dimensionalOS/dimos` sync: land it as a weekly sync of about 10-15 commits, still with no feature work mixed in. Do not open a mega-PR and ask reviewers to absorb it.
 - **One concern per commit.** Do not squash a skill, a README rewrite, a lockfile bump, and a `protocol.ts` drive-by into one commit.
 - **Do not touch unrelated files.** If pre-commit or deno fmt rewrites a file you did not mean to change (especially `web/shared/protocol.ts`), revert it before you push.
 - **Do not mix an upstream sync with feature work.** Keep `dimensionalOS/dimos` syncs in their own PR with no Topsun features, no CI timeout patches, and no test skips.
@@ -27,6 +29,10 @@ git checkout -b <type>/<short-name> origin/main
 ```
 
 Use the prefixes already required below (`feat/`, `fix/`, `docs/`, `chore/`, …). Rebase onto `origin/main` before you open the PR if main has moved. Do not force-push `main`. Do not rewrite history on `main`.
+
+### When main is red
+
+If `main` CI is red, the only PR you may open or mark ready is one that **fixes `main`**. Leave feature work as a draft (or do not open it) until `main` is green. A fix-main PR still follows one concern and the size cap.
 
 ### Verify before every commit
 
@@ -55,6 +61,8 @@ uv run pytest --numprocesses=logical -m 'not (self_hosted or mujoco or self_host
 
 You do not need the full CI matrix (every Python version, rust, native, web, self-hosted) before every commit. You do need the three commands above, plus any test file that covers the code you changed.
 
+**Before you mark a PR ready for review**, run those same commands again (docs-only changes still need `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`; they may skip mypy and pytest when no Python changed). Under **How to Test** in the PR description, list the exact commands you ran. Do not mark ready if you have not run them.
+
 ### Never fake a green build
 
 Do **not** do any of the following without an explicit justification in the PR body (what failed, why the change is correct, and why it is not hiding a regression):
@@ -66,9 +74,9 @@ Do **not** do any of the following without an explicit justification in the PR b
 
 Fix the cause, or leave the PR red and say what is blocked.
 
-### Commit messages
+### Commit messages and PR titles
 
-Use [Conventional Commits](https://www.conventionalcommits.org/):
+Use [Conventional Commits](https://www.conventionalcommits.org/) for **commit messages and PR titles**:
 
 ```
 <type>(optional-scope): short summary
@@ -81,10 +89,16 @@ Subject is imperative, ~72 characters, no trailing period. The body (if any) exp
 ### Opening the PR
 
 - Target `main`.
+- **At most 3 open agent-authored PRs per person.** Drafts count. Do not open a fourth until one is merged or closed.
 - Fill `.github/pull_request_template.md`. Do not delete the template.
+- Under **How to Test**, state the exact commands you ran (see **Verify before every commit**).
 - Name the AI tool and model under **AI assistance**.
 - If the change is not ready for review, keep it as a draft.
 - Batch local commits; push once. Every push starts ~1 hour of CI.
+
+### Repeat mistakes become rules
+
+When the same mistake happens twice, add a rule for it to this section in the **same PR** that fixes the mistake. Do not wait for a follow-up docs PR.
 
 ---
 
@@ -466,10 +480,14 @@ See **Agent PR workflow (mandatory)** above. Short version:
 
 - Branch prefixes: `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/`, `perf/`
 - **PRs target `main`** — `main` is the unstable development branch. Work and PR off of `main`. Never push to `main` directly.
-- **One concern per PR.** Upstream `dimensionalOS/dimos` syncs stay in their own PR.
+- **One concern per PR**, at most 400 changed lines or 15 files (lockfiles and generated files do not count). Split larger work (weekly upstream syncs of about 10-15 commits).
+- **When `main` is red**, only a PR that fixes `main` may be opened or marked ready.
+- **At most 3 open agent-authored PRs per person.**
+- Conventional Commits for commit messages and PR titles.
 - **Don't force-push** unless after a rebase with conflicts. Never force-push `main`.
 - **Minimize pushes** — every push triggers CI (~1 hour on self-hosted runners). Batch commits locally, push once.
-- Run `uv run mypy`, `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`, and `./bin/pytest-fast` before each commit.
+- Run `uv run mypy`, `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`, and `./bin/pytest-fast` before each commit. List what you ran under **How to Test** before marking the PR ready.
+- When the same mistake happens twice, add a rule to **Agent PR workflow** in the same PR that fixes it.
 
 ---
 
