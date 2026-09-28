@@ -78,7 +78,14 @@ jobs:
           FORCE: ${{ inputs.force-cachix-build }}
           MARKER_HIT: ${{ steps.marker.outputs.cache-hit }}
         run: |
-          if [ "$FORCE" != "true" ] && [ "$MARKER_HIT" = "true" ]; then
+          # Only dimensionalOS/dimos can write dimensionalos.cachix.org.
+          # A failed publish skips `tests` (needs cachix-build success|skipped)
+          # and then fails ci-complete. Force-skip the publish everywhere else.
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          if [ "${GITHUB_REPOSITORY}" != "dimensionalOS/dimos" ]; then
+            echo "::notice::Not dimensionalOS/dimos; forcing needs-build=false so cachix-build is skipped."
+            echo "needs-build=false" >> "$GITHUB_OUTPUT"
+          elif [ "$FORCE" != "true" ] && [ "$MARKER_HIT" = "true" ]; then
             echo "needs-build=false" >> "$GITHUB_OUTPUT"
           else
             echo "needs-build=true" >> "$GITHUB_OUTPUT"
@@ -98,8 +105,11 @@ jobs:
     #
     # Gated on cachix-build-check so an entry into the `cachix` environment
     # always corresponds to a real publish — see that job for why.
+    # Also skip unless this is dimensionalOS/dimos: only upstream can write
+    # the cache, and a failed publish here skips `tests`.
     if: |
       !cancelled() &&
+      github.repository == 'dimensionalOS/dimos' &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.cachix-build-check.outputs.needs-build == 'true'
     needs: cachix-build-check
@@ -615,8 +625,11 @@ jobs:
     # Runs on push, merge_group (trusted — a maintainer must approve + queue the
     # PR), and same-repo PRs. Skipped on fork PRs, which would expose the
     # self-hosted runner to untrusted code from external contributors.
+    # Also skip unless this is dimensionalOS/dimos: non-upstream clones have
+    # no runners, so the job would sit queued until the 24h timeout.
     if: |
       !cancelled() &&
+      github.repository == 'dimensionalOS/dimos' &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.cachix-build-check.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.cachix-build.result)
@@ -806,8 +819,10 @@ jobs:
 
   self-hosted-large-tests:
     # Skip on PRs from forks which would expose the self-hosted runner to untrusted code from external contributors.
+    # Also skip unless this is dimensionalOS/dimos (no self-hosted runners here).
     if: |
       !cancelled() &&
+      github.repository == 'dimensionalOS/dimos' &&
       (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.cachix-build-check.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.cachix-build.result)
@@ -959,6 +974,9 @@ jobs:
         run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
   ci-complete:  # This is used for branch protection.
+    # On non-dimensionalOS clones, self-hosted-tests is skipped (no runners).
+    # alls-green must treat that skip as OK; do not add `tests` here — a
+    # skipped tests job still means a required github-hosted gate did not run.
     if: always()
 
     needs:
