@@ -47,8 +47,7 @@ result-*
 
 # AI dev tools
 .claude
-CLAUDE.md
-CLAUDE.MD
+# CLAUDE.md is tracked on this fork (pointer to AGENTS.md). Do not re-ignore it.
 /.mcp.json
 .opencode/
 .omo/
