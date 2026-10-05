@@ -9,7 +9,7 @@ The **Agent PR workflow (mandatory)** section is the working contract for this f
 - when `main` is red, only a PR that fixes `main` may be opened or marked ready
 - at most 3 open agent-authored PRs per person
 - branch from latest `origin/main` and rebase before opening a PR
-- run `uv run mypy`, `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`, and `./bin/pytest-fast` before every commit; list what you ran under How to Test before marking the PR ready
+- run `uv run mypy`, `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`, and `./bin/pytest-fast` before every commit (docs-only changes with no Python changed still run pre-commit; they may skip mypy and pytest-fast); list what you ran under How to Test before marking the PR ready
 - never skip tests, retarget them to `self_hosted`, or raise timeouts to go green without a written justification in the PR body
 - do not touch unrelated files
 - conventional commit messages and PR titles (`feat:`, `fix:`, `docs:`, `chore:`, …)

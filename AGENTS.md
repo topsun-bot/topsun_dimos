@@ -53,15 +53,17 @@ SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files
 
 If `./bin/pytest-fast` fails because `.venv` is missing, use `uv run pytest --numprocesses=auto dimos` instead.
 
+**Docs-only exception:** if no Python changed, still run `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`. You may skip `uv run mypy` and `./bin/pytest-fast`.
+
 CI's `tests` job is the same default suite plus a marker exclude for heavier groups:
 
 ```bash
 uv run pytest --numprocesses=logical -m 'not (self_hosted or mujoco or self_hosted_large or web_browser or bake_e2e)'
 ```
 
-You do not need the full CI matrix (every Python version, rust, native, web, self-hosted) before every commit. You do need the three commands above, plus any test file that covers the code you changed.
+You do not need the full CI matrix (every Python version, rust, native, web, self-hosted) before every commit. You do need the three commands above, plus any test file that covers the code you changed, unless the docs-only exception applies.
 
-**Before you mark a PR ready for review**, run those same commands again (docs-only changes still need `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`; they may skip mypy and pytest when no Python changed). Under **How to Test** in the PR description, list the exact commands you ran. Do not mark ready if you have not run them.
+**Before you mark a PR ready for review**, run those same commands again (same docs-only exception: still run pre-commit; you may skip mypy and pytest-fast when no Python changed). Under **How to Test** in the PR description, list the exact commands you ran. Do not mark ready if you have not run them.
 
 ### Never fake a green build
 
@@ -486,7 +488,7 @@ See **Agent PR workflow (mandatory)** above. Short version:
 - Conventional Commits for commit messages and PR titles.
 - **Don't force-push** unless after a rebase with conflicts. Never force-push `main`.
 - **Minimize pushes** — every push triggers CI (~1 hour on self-hosted runners). Batch commits locally, push once.
-- Run `uv run mypy`, `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`, and `./bin/pytest-fast` before each commit. List what you ran under **How to Test** before marking the PR ready.
+- Run `uv run mypy`, `SKIP=cargo-fmt,cargo-clippy pre-commit run --all-files`, and `./bin/pytest-fast` before each commit. Docs-only changes (no Python changed) still run pre-commit; they may skip mypy and pytest-fast. List what you ran under **How to Test** before marking the PR ready.
 - When the same mistake happens twice, add a rule to **Agent PR workflow** in the same PR that fixes it.
 
 ---
