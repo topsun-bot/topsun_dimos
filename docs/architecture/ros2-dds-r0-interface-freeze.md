@@ -94,7 +94,7 @@ Participants on 42 and 0 will not discover each other. Aligning domains is an R1
 
 **Behavior-unchanged applies only to the rows below.** Topics not listed here are **not** covered by any behavior-unchanged promise until a full `ros2 topic list` freeze.
 
-QoS in this table is the R0 contract for the navigation Fast-DDS path (Chain A). It is **not** the `DimosROS` / `RawROS` library default in [`rospubsub.py`](/dimos/protocol/pubsub/impl/rospubsub.py#L68) (that default is `RELIABLE`, `KEEP_LAST`, `VOLATILE`, `depth=5000`). Do not treat the library default as nav-path QoS.
+QoS in this table is the R0 contract for the navigation Fast-DDS path (Chain A). It is **not** the `DimosROS` / `RawROS` library default in [`rospubsub.py`](/dimos/protocol/pubsub/impl/rospubsub.py#L108) (that default is `RELIABLE`, `KEEP_LAST`, `VOLATILE`, `depth=5000`). Do not treat the library default as nav-path QoS.
 
 | Surface | Type / binding | QoS / notes (R0 contract) |
 |---------|----------------|---------------------------|
@@ -110,7 +110,7 @@ QoS in this table is the R0 contract for the navigation Fast-DDS path (Chain A).
 
 Go2 ROS bindings (verified):
 
-```python
+```python skip
 # dimos/robot/unitree/go2/blueprints/smart/unitree_go2_ros.py
 ("lidar", PointCloud2): ROSTransport("lidar", PointCloud2),
 ("global_map", PointCloud2): ROSTransport("global_map", PointCloud2),
@@ -124,12 +124,12 @@ Go2 ROS bindings (verified):
 
 This measures **Chain B** (native Cyclone `DDS` pubsub), not Chain A Fast-DDS.
 
-```bash
-cd <repo> && uv sync --extra dds
-uv run pytest dimos/protocol/pubsub/benchmark/test_benchmark.py -m tool -k dds -v
+```bash skip
+uv sync --extra dds
+uv run pytest dimos/protocol/pubsub/benchmark/tool_benchmark.py -k dds -v
 ```
 
-The `-k dds` filter selects the Cyclone cases in [`dimos/protocol/pubsub/benchmark/testdata.py`](/dimos/protocol/pubsub/benchmark/testdata.py#L207) (`dds_high_throughput_pubsub_channel`, `dds_reliable_pubsub_channel`). Pytest default `addopts` exclude the `tool` marker, so `-m tool` is required.
+The `-k dds` filter selects the Cyclone cases in [`dimos/protocol/pubsub/benchmark/testdata.py`](/dimos/protocol/pubsub/benchmark/testdata.py#L207) (`dds_high_throughput_pubsub_channel`, `dds_reliable_pubsub_channel`). Name `tool_benchmark.py` directly: pytest does not collect `tool_*.py` files in a normal run.
 
 Treat output as a **hypothesis**, not a root cause, until p50 / p95 / p99 are recorded.
 
