@@ -44,6 +44,7 @@ SECRET_CONFIG_FIELDS = frozenset(
         "dimos_api_key",
         "relay_key",
         "unitree_aes_128_key",
+        "typesafe_api_key",
         "api_key",
         "app_secret",
     }
@@ -106,6 +107,7 @@ class GlobalConfig(BaseSettings):
     viewer: ViewerBackend = "rerun"
     rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT
     rerun_web: bool = RERUN_ENABLE_WEB
+    rerun_save: bool = False  # also write the stream to recordings/<run-id>/rerun.rrd
     rerun_host: str | None = None
     rerun_websocket_server_port: int = 3030
     rerun_save: bool = False
@@ -149,6 +151,12 @@ class GlobalConfig(BaseSettings):
     dimsim_scene: str = "apartment"
     dimsim_port: int = 8090
     dimsim_headless: bool = True
+    # Seconds a headless DimSim gets to report server physics live (frontend
+    # built, Chromium up, scene snapshot delivered) before startup fails. A
+    # cold checkout also builds the frontend inside this window; CI avoids
+    # that with bin/dimsim-prepare.
+    dimsim_ready_timeout: float = 300.0
+    mujoco_scene: str | None = None
     local_relay: bool = False
     relay_url: str | None = None
     """HTTP URL of a relay started elsewhere (e.g. http://localhost:7780); the
@@ -163,6 +171,9 @@ class GlobalConfig(BaseSettings):
     .env over the --relay-key flag, which shows in the process list."""
     dimos_cloud_url: str = "https://api.dimensional.org"
     dimos_api_key: str | None = None
+    typesafe_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("TYPESAFE_API_KEY", "typesafe_api_key")
+    )
     dimos_upload_codec: str = "lz4"
     dimos_upload_retries: int = 2
     dimos_upload_chunk_mb: int | None = None

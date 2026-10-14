@@ -19,10 +19,10 @@ import pytest
 from dimos.hardware.sensors.lidar.pointlio import pointlio_blueprints
 
 
-def test_pointlio_rust_replay_imports_when_env_unset(
+def test_mid360_pointlio_replay_imports_when_env_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Registered blueprints must import without DIMOS_MID360_PCAP (dimos list / CI)."""
     monkeypatch.delenv("DIMOS_MID360_PCAP", raising=False)
     module = importlib.reload(pointlio_blueprints)
-    assert module.pointlio_rust_replay is not None
+    assert module.mid360_pointlio_replay is not None

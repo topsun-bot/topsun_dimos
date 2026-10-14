@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from dimos.protocol.rpc.pubsubrpc import LCMRPC, ShmRPC
+from dimos.protocol.rpc.pubsubrpc import LCMRPC
 from dimos.protocol.rpc.rpc_utils import RemoteError
 from dimos.protocol.rpc.spec import DEFAULT_RPC_TIMEOUT, RPCSpec
 from dimos.protocol.rpc.zenohrpc import ZenohRPC
@@ -62,25 +62,6 @@ def lcm_rpc_context():
 
 
 testdata.append((lcm_rpc_context, "lcm"))
-
-
-@contextmanager
-def shm_rpc_context():
-    """Context manager for Shared Memory RPC implementation."""
-    # Create two separate instances that communicate through shared memory segments
-    server = ShmRPC(rpc_timeouts={}, default_rpc_timeout=DEFAULT_RPC_TIMEOUT, prefer="cpu")
-    client = ShmRPC(rpc_timeouts={}, default_rpc_timeout=DEFAULT_RPC_TIMEOUT, prefer="cpu")
-    server.start()
-    client.start()
-
-    try:
-        yield server, client
-    finally:
-        server.stop()
-        client.stop()
-
-
-testdata.append((shm_rpc_context, "shm"))
 
 
 @contextmanager
@@ -332,7 +313,6 @@ def test_exception_handling_callback(rpc_context, impl_name: str) -> None:
 
 
 @pytest.mark.parametrize("rpc_context, impl_name", testdata)
-@pytest.mark.skipif_macos_bug
 def test_timeout(rpc_context, impl_name: str) -> None:
     """Test that RPC calls properly timeout."""
     with rpc_context() as (server, client):
@@ -366,7 +346,6 @@ def test_nonexistent_service(rpc_context, impl_name: str) -> None:
 
 
 @pytest.mark.parametrize("rpc_context, impl_name", testdata)
-@pytest.mark.skipif_macos_bug
 def test_multiple_services(rpc_context, impl_name: str) -> None:
     """Test serving multiple RPC functions simultaneously."""
     with rpc_context() as (server, client):
@@ -393,7 +372,6 @@ def test_multiple_services(rpc_context, impl_name: str) -> None:
 
 
 @pytest.mark.parametrize("rpc_context, impl_name", testdata)
-@pytest.mark.skipif_macos_bug
 def test_concurrent_calls(rpc_context, impl_name: str) -> None:
     """Test making multiple concurrent RPC calls."""
     with rpc_context() as (server, client):

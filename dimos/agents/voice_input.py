@@ -48,6 +48,7 @@ from dimos.stream.audio.decode import decode_audio_bytes, ffmpeg_requirement
 from dimos.stream.audio.node_normalizer import AudioNormalizer
 from dimos.stream.audio.pipeline import whisper_pipeline
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.threadpool import run_in_thread
 from dimos.web.relay_bridge.audio_codec import AudioChunk
 
 VOICE_PTT_TOPIC = "/voice_ptt_toggle"
@@ -305,7 +306,7 @@ class CockpitVoiceInput(Module):
     _queue: Queue[bytes]
     _thread: Thread
     _stop_event: Event
-    _audio_subject: rx.subject.Subject[AudioEvent] | None
+    _audio_subject: rx.subject.Subject[AudioEvent]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -318,7 +319,9 @@ class CockpitVoiceInput(Module):
             daemon=True,
         )
         self._stop_event = Event()
-        self._audio_subject = None
+        # Loading Whisper takes seconds; started here so it overlaps the deploy
+        # and start() waits only for whatever is left.
+        self._pipeline = run_in_thread(whisper_pipeline, "whisper-pipeline")
 
     def __reduce__(self) -> Any:
         return (self.__class__, (), {})
@@ -329,7 +332,7 @@ class CockpitVoiceInput(Module):
         if requirement_error is not None:
             raise RuntimeError(requirement_error)
         super().start()
-        self._audio_subject, transcripts = whisper_pipeline()
+        self._audio_subject, transcripts = self._pipeline.result()
         self.register_disposable(
             transcripts.subscribe(
                 on_next=self._publish_text,
@@ -418,7 +421,7 @@ class CockpitVoiceInput(Module):
                 continue
             try:
                 event = decode_audio_bytes(raw)
-                if event is not None and self._audio_subject is not None:
+                if event is not None:
                     self._audio_subject.on_next(event)
             except Exception:
                 # One bad clip must not end voice input for the process.

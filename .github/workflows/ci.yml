@@ -23,6 +23,35 @@ env:
   UV_NO_SYNC: "1"
 
 jobs:
+  commit-messages:
+    name: No AI co-authors
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check incoming commit messages
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          PRE_COMMIT_FROM_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          PRE_COMMIT_TO_REF: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          : "${PRE_COMMIT_FROM_REF:?Missing base SHA}"
+          : "${PRE_COMMIT_TO_REF:?Missing head SHA}"
+          policy_ref="$PRE_COMMIT_FROM_REF"
+          policy_path="dimos/utils/commit_message.py"
+          if ! git cat-file -e "${policy_ref}:${policy_path}" 2>/dev/null; then
+            echo "::error::Base commit $policy_ref has no $policy_path. Update this branch from main and retry." >&2
+            exit 1
+          fi
+          git show "${policy_ref}:${policy_path}" > "$RUNNER_TEMP/commit-message-policy.py"
+          python3 "$RUNNER_TEMP/commit-message-policy.py" --check
+
   compute-ros-pin:
     # Extracts the ros-dev image digest pinned in docker/ros-dev-pin/Dockerfile
     # so downstream jobs can reference it from their `container:` field.
@@ -315,7 +344,7 @@ jobs:
               )
           PY
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -367,7 +396,7 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-features --locked
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -516,7 +545,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libturbojpeg portaudio19-dev
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -633,7 +662,7 @@ jobs:
 
       # ---- Browser e2e: dimos run --local-relay + Playwright on the dist ----
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -704,7 +733,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
           prune-cache: true
@@ -828,6 +857,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ALIBABA_API_KEY: ${{ secrets.ALIBABA_API_KEY }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
       # See the `tests` job for why this is set.
       PYTHONFAULTHANDLER: "1"
     timeout-minutes: 45
@@ -854,8 +884,9 @@ jobs:
           - os: macOS
             container: null  # run on host — `container:` is Linux-only
             # web_browser: the cockpit browser e2e that Linux runs in the `web` job.
-            markers: "self_hosted or web_browser"
-            experimental: true
+            # native_e2e: livox live loopback that Linux runs in the rust job.
+            markers: "self_hosted or web_browser or native_e2e"
+            experimental: false
     runs-on:
       - self-hosted
       - ${{ matrix.os }}
@@ -888,7 +919,7 @@ jobs:
         if: matrix.os == 'Linux'
         run: echo "UV_CACHE_DIR=$(dirname "$RUNNER_WORKSPACE")/uv-cache" >> "$GITHUB_ENV"
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           # We persist on disk above, cache would clean some of this up.
           enable-cache: false
@@ -965,6 +996,18 @@ jobs:
           fi
           echo "$bin" >> "$GITHUB_PATH"
           echo "NIX_CONFIG=experimental-features = nix-command flakes" >> "$GITHUB_ENV"
+      - name: Configure LCM networking (macOS)
+        # LCM sends datagrams up to 64 KB; macOS caps UDP at 9216 bytes by default, so point clouds never leave the sender.
+        if: matrix.os == 'macOS'
+        run: |
+          raise() {
+            if [ "$(sysctl -n "$1")" -lt "$2" ]; then
+              sudo -n sysctl -w "$1=$2" || { echo "::error::$1 is below $2 on $RUNNER_NAME and sudo needs a password; set it in /etc/sysctl.conf on the host"; exit 1; }
+            fi
+          }
+          raise kern.ipc.maxsockbuf 6291456
+          raise net.inet.udp.recvspace 2097152
+          raise net.inet.udp.maxdgram 65535
       - name: Restore publish marker
         id: native-marker
         uses: actions/cache/restore@v6
@@ -1089,6 +1132,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ALIBABA_API_KEY: ${{ secrets.ALIBABA_API_KEY }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
       DIMSIM_RENDER: gpu
       # See the `tests` job for why this is set.
       PYTHONFAULTHANDLER: "1"
@@ -1122,7 +1166,7 @@ jobs:
           git lfs pull --include="misc/DimSim/**"
           git config --local --unset-all http.https://github.com/.extraheader
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           # We persist on disk, cache would clean some of this up.
           enable-cache: false
@@ -1155,6 +1199,9 @@ jobs:
         run: uv sync --group tests-self-hosted --frozen
       - name: Build C++ extensions in-place
         run: uv run python setup.py build_ext --inplace
+      - name: Build DimSim and install its headless Chromium
+        # Without this, it gets built in the test, creating race conditions.
+        run: ./bin/dimsim-prepare
       - name: Run tests
         # The runner must have an Xorg server with NVIDIA GPU access running
         # on DISPLAY=:0 — dimsim's headless Chromium needs real WebGL for the
@@ -1218,7 +1265,8 @@ jobs:
 
   benchmark:
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    # The hosted runner that exposes a PMU, for the instruction counts.
+    runs-on: ubuntu-24.04-arm
     permissions:  # Restricted to run untested code. Reporting in next job.
       contents: read  # For checkout
     steps:
@@ -1245,8 +1293,19 @@ jobs:
       # in-process configurator (64MB) skips under pytest, so do it here.
       - name: Raise UDP receive buffers for LCM
         run: sudo sysctl -w net.core.rmem_max=67108864 net.core.rmem_default=67108864
+      # Hardware counters don't move with the core's clock or idle state, unlike
+      # CPU time.
+      - name: Install perf
+        run: |
+          sudo apt-get install -y linux-tools-common "linux-tools-$(uname -r)" ||
+            sudo apt-get install -y linux-tools-generic
+          # The wrapper wants a build for the running kernel; any build can count.
+          sudo ln -sfn "$(ls /usr/lib/linux-tools/*/perf | head -1)" /usr/local/bin/perf
+          # Ubuntu's default forbids unprivileged perf; 2 allows counting one's
+          # own processes in user space.
+          sudo sysctl -w kernel.perf_event_paranoid=2
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - name: Install dependencies
@@ -1254,6 +1313,9 @@ jobs:
         env:
           # Compile bytecode at install rather than at first import.
           UV_COMPILE_BYTECODE: "1"
+      # The above skips dimos itself, as it's an editable install.
+      - name: Compile the dimos bytecode
+        run: uv run python -m compileall -q -j 0 dimos
       - name: Pre-extract the replay database
         run: uv run python -c "from dimos.utils.data import get_data; print(get_data('go2_short.db'))"
       - name: Precompile the numba kernels
@@ -1270,6 +1332,7 @@ jobs:
         run: uv run pytest -m '' --no-cov dimos/robot/unitree/go2/test_replay_benchmark.py
         env:
           DIMOS_BENCH_METRICS: benchmark.json
+          DIMOS_BENCH_PERF_EVENTS: instructions:u
           # Hash randomization is per-process; pin it so the processes don't
           # each bring their own dict-ordering jitter.
           PYTHONHASHSEED: "0"
@@ -1277,7 +1340,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-metrics
-          path: benchmark.json
+          # The perf intervals too: they show whether counts were multiplexed
+          # and where in the run the instructions went.
+          path: |
+            benchmark.json
+            benchmark.perf.csv
 
   benchmark-track:
     needs: benchmark
@@ -1305,32 +1372,63 @@ jobs:
             --jq '[.labels[].name] | contains(["benchmark-ack"])')
           echo "acked=$acked" >> "$GITHUB_OUTPUT"
       - name: Track results
-        id: track
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: go2 replay realtime
+          # A new series: the arm runner's numbers don't continue the x86 ones.
+          # bin/benchmark-analysis reads it by this name (SERIES).
+          name: go2 replay realtime (arm64)
           tool: customSmallerIsBetter
           output-file-path: benchmark.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Append to the tracked series on main; PRs only compare against it.
           auto-push: ${{ github.event_name == 'push' }}
           save-data-file: ${{ github.event_name == 'push' }}
-          alert-threshold: 108%
+          # The gate below does the alerting, on the stable series only; this
+          # step tracks every series and posts the comparison table.
+          comment-on-alert: false
+          fail-on-alert: false
           # Fork PRs run with a read-only token that can't post comments;
           # there the numbers land in the job summary and the step log only.
-          comment-on-alert: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           comment-always: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           summary-always: true
           max-items-in-chart: 200
-          fail-on-alert: ${{ github.event_name == 'pull_request' && steps.ack.outputs.acked != 'true' }}
-      - name: Explain how to acknowledge the regression
-        if: failure() && steps.track.outcome == 'failure'
+      # Fails the PR with the comparison and the way out in its own output.
+      - name: Gate on the stable series
+        if: github.event_name == 'pull_request'
+        env:
+          ACKED: ${{ steps.ack.outputs.acked }}
         run: |
-          {
-            echo 'If this regression is expected, a maintainer can add the `benchmark-ack`'
-            echo 'label to the PR and re-run this job in order to merge.'
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error title=Benchmark regression::If expected, add the 'benchmark-ack' label and re-run."
+          git fetch --depth=1 origin gh-pages
+          git show FETCH_HEAD:dev/bench/data.js > data.js
+          python3 bin/benchmark-analysis data.js --gate benchmark.json --threshold 1.08 \
+            $([ "$ACKED" = true ] && echo --acknowledged)
+
+  benchmark-analysis:
+    if: github.event_name == 'push'
+    needs: benchmark-track
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # For checkout and the gh-pages series
+      issues: write  # To file regressions
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Fetch the benchmark series
+        run: |
+          git fetch --depth=1 origin gh-pages
+          git show FETCH_HEAD:dev/bench/data.js > data.js
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          # Nothing worth caching: Otava's dependencies are all prebuilt wheels.
+          enable-cache: false
+      - name: Install Otava
+        run: uv sync --project .github/benchmark-analysis --frozen
+      - name: Analyse the series and file regressions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run --project .github/benchmark-analysis python bin/benchmark-analysis data.js --create-issues
 
   # Cross-job fail-fast: GitHub Actions only fail-fasts within a matrix,
   # not across sibling jobs. This watcher fires the moment `tests` fails
@@ -1351,6 +1449,7 @@ jobs:
     if: always()
 
     needs:
+    - commit-messages
     - lint
     - rust
     - native

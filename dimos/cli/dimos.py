@@ -57,6 +57,7 @@ from dimos.cli.commands.dataprep import dataprep_app
 from dimos.cli.commands.docs import docs
 from dimos.cli.commands.global_options import create_dynamic_callback
 from dimos.cli.commands.graph import graph
+from dimos.cli.commands.host import host_app
 from dimos.cli.commands.info import list_blueprints, show_config
 from dimos.cli.commands.lifecycle import log_cmd, restart, run, status, stop
 from dimos.cli.commands.map import map_app
@@ -119,6 +120,7 @@ main.command()(status)
 main.command()(stop)
 main.command("log")(log_cmd)
 main.add_typer(mcp_app, name="mcp")
+main.add_typer(host_app, name="host")
 main.command("agent-send")(agent_send_cmd)
 main.command()(restart)
 main.command()(show_config)
@@ -142,9 +144,6 @@ main.add_typer(topic_app, name="topic")
 main.add_typer(map_app, name="map")
 main.add_typer(landmarks_app, name="landmarks")
 
-from dimos.navigation.global_planner.evaluator.cli import app as nav_eval_app
-
-main.add_typer(nav_eval_app, name="nav-eval")
 main.add_typer(dataprep_app, name="dataprep")
 
 from dimos.memory.cli.app import mem_app

@@ -108,3 +108,6 @@ optuna.db
 # 个人/工具目录, 非业务模块, 不纳入版本管理
 .cursor/
 jiangtao/
+
+# policy blobs are loaded from outside the repository
+*.bin

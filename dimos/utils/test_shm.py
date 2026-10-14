@@ -23,7 +23,7 @@ import uuid
 
 import pytest
 
-from dimos.utils.shm import ShmNotReadyError, _try_attach, attach_shm, create_or_attach_shm
+from dimos.utils.shm import ShmNotReadyError, _try_attach, attach_shm
 
 SIZE = 1 << 16
 
@@ -129,6 +129,7 @@ def test_a_wrongly_sized_segment_attaches_immediately(name):
         owner.close()
 
 
+
 def test_try_attach_treats_zero_size_mmap_as_not_ready(monkeypatch):
     """Some platforms mmap the empty creation window as size 0, not ValueError."""
     closed: list[bool] = []
@@ -148,26 +149,3 @@ def test_try_attach_treats_zero_size_mmap_as_not_ready(monkeypatch):
     assert reason == "creator has not sized the segment yet"
     assert closed == [True]
 
-
-def test_create_or_attach_splits_owner_and_reader(name, slow_ftruncate):
-    """Concurrent symmetric callers: exactly one owns, the other waits and attaches."""
-    out: list[tuple[bool, int]] = []
-    lock = threading.Lock()
-    barrier = threading.Barrier(2)
-
-    def racer() -> None:
-        barrier.wait()
-        shm, owner = create_or_attach_shm(name, SIZE, timeout=5.0)
-        with lock:
-            out.append((owner, shm.size))
-        shm.close()
-
-    threads = [threading.Thread(target=racer, daemon=True) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=8)
-
-    assert len(out) == 2, f"a racer did not finish: {out}"
-    assert sorted(owner for owner, _ in out) == [False, True]
-    assert {size for _, size in out} == {SIZE}

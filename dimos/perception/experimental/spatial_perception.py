@@ -92,8 +92,6 @@ def _create_persistent_chroma_client(db_path: str) -> Any:
 
 class SpatialConfig(ModuleConfig):
     collection_name: str = "spatial_memory"
-    embedding_model: str = "clip"
-    embedding_dimensions: int = 512
     min_distance_threshold: float = 0.01  # Min distance in meters to store a new frame
     min_time_threshold: float = 1.0  # Min time in seconds to record a new frame
     max_stored_frames: int = 500  # FIFO cap on stored frames (0 = unlimited)
@@ -131,8 +129,6 @@ class SpatialMemory(Module):
 
         Args:
             collection_name: Name of the vector database collection
-            embedding_model: Model to use for image embeddings ("clip", "resnet", etc.)
-            embedding_dimensions: Dimensions of the embedding vectors
             min_distance_threshold: Minimum distance in meters to record a new frame
             min_time_threshold: Minimum time in seconds to record a new frame
             chroma_client: Optional ChromaDB client for persistent storage
@@ -142,8 +138,6 @@ class SpatialMemory(Module):
         super().__init__(**kwargs)
 
         self.collection_name = self.config.collection_name
-        self.embedding_model = self.config.embedding_model
-        self.embedding_dimensions = self.config.embedding_dimensions
         self.min_distance_threshold = self.config.min_distance_threshold
         self.min_time_threshold = self.config.min_time_threshold
         self.db_path = self.config.db_path
@@ -169,9 +163,7 @@ class SpatialMemory(Module):
                     logger.error(f"Error loading visual memory: {e}")
                     self._visual_memory = VisualMemory(output_dir=self.config.output_dir)
 
-        self.embedding_provider = ImageEmbeddingProvider(
-            model_name=self.embedding_model, dimensions=self.embedding_dimensions
-        )
+        self.embedding_provider = ImageEmbeddingProvider()
 
         self._chroma_lock = RLock()
         self._chroma_recover_cooldown_until: float = 0.0
@@ -474,7 +466,11 @@ class SpatialMemory(Module):
 
             current_time = time.time()
 
-            frame_embedding = self.embedding_provider.get_embedding(frame)
+            try:
+                frame_embedding = self.embedding_provider.get_embedding(frame)
+            except Exception as e:
+                logger.error(f"Error embedding frame, skipping it: {e}")
+                return None
 
             frame_id = f"frame_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 

@@ -139,26 +139,6 @@ testdata.append(
 )
 
 
-from dimos.protocol.pubsub.impl.shmpubsub import PickleSharedMemory
-
-
-@contextmanager
-def shared_memory_cpu_context() -> Generator[PickleSharedMemory, None, None]:
-    shared_mem_pubsub = PickleSharedMemory(prefer="cpu")
-    shared_mem_pubsub.start()
-    yield shared_mem_pubsub
-    shared_mem_pubsub.stop()
-
-
-testdata.append(
-    (
-        shared_memory_cpu_context,
-        "/shared_mem_topic_cpu",
-        [b"shared_mem_value1", b"shared_mem_value2", b"shared_mem_value3"],
-    )
-)
-
-
 from dimos.protocol.pubsub.impl.webrtc.test_transport import MockProvider
 from dimos.protocol.pubsub.impl.webrtc.webrtcpubsub import WebRTCPubSub
 
@@ -353,7 +333,6 @@ def test_unsubscribe_from_callback(
 
 
 @pytest.mark.parametrize("pubsub_context, topic, values", testdata)
-@pytest.mark.skipif_macos_bug
 def test_multiple_messages(
     pubsub_context: Callable[[], Any], topic: Any, values: list[Any]
 ) -> None:
@@ -426,7 +405,6 @@ async def test_async_iterator(
 
 
 @pytest.mark.self_hosted
-@pytest.mark.skipif_macos_bug
 @pytest.mark.parametrize("pubsub_context, topic, values", testdata)
 def test_high_volume_messages(
     pubsub_context: Callable[[], Any], topic: Any, values: list[Any]

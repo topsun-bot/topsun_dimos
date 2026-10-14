@@ -81,7 +81,7 @@ jobs:
     secrets: inherit
     with:
       should-run: true
-      from-image: ubuntu:22.04
+      from-image: ubuntu:26.04
       to-image: ghcr.io/topsun-bot/ros:${{ needs.check-changes.outputs.branch-tag }}
       dockerfile:  ros
 
