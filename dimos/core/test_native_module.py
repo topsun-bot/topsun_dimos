@@ -533,7 +533,12 @@ def test_json_mode_missing_level_falls_back_to_stream_default() -> None:
 
 
 def _spawn_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
-    fixture = SimpleNamespace(config=SimpleNamespace(extra_env=extra_env or {}))
+    fixture = SimpleNamespace(
+        config=SimpleNamespace(extra_env=extra_env or {}, session=None),
+        inputs=(),
+        outputs=(),
+        ios=(),
+    )
     return NativeModule._spawn_env(fixture)  # type: ignore[arg-type]
 
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""VoiceInput: audio_in chunks -> decode -> STT pipeline -> human_input text.
+"""CockpitVoiceInput: audio_in chunks -> decode -> STT pipeline -> human_input text.
 
 The real normalizer and WhisperNode wiring run against a fake Whisper model;
 the ffmpeg boundary runs for real in the container test and is otherwise
@@ -33,7 +33,7 @@ import numpy as np
 import pytest
 
 from dimos.agents import voice_input as voice_input_module
-from dimos.agents.voice_input import VoiceInput
+from dimos.agents.voice_input import CockpitVoiceInput
 from dimos.stream.audio.base import AudioEvent
 from dimos.stream.audio.decode import ffmpeg_requirement
 from dimos.stream.audio.node_normalizer import AudioNormalizer
@@ -65,7 +65,7 @@ def _wav_bytes(seconds: float = 0.25) -> bytes:
 
 @dataclass
 class _Harness:
-    module: VoiceInput
+    module: CockpitVoiceInput
     texts: list[str] = field(default_factory=list)
     events: list[AudioEvent] = field(default_factory=list)
     decoded: list[bytes] = field(default_factory=list)
@@ -85,7 +85,7 @@ _MakeVoice = Callable[..., _Harness]
 
 @pytest.fixture
 def make_voice(monkeypatch: pytest.MonkeyPatch) -> Iterator[_MakeVoice]:
-    modules: list[VoiceInput] = []
+    modules: list[CockpitVoiceInput] = []
     normalize_audio = AudioNormalizer._normalize_audio
 
     def make(*, real_decode: bool = False, start: bool = True, **config: Any) -> _Harness:
@@ -119,7 +119,7 @@ def make_voice(monkeypatch: pytest.MonkeyPatch) -> Iterator[_MakeVoice]:
 
             monkeypatch.setattr(voice_input_module, "decode_audio_bytes", fake_decode)
         # The pipeline builds from the constructor, so the patches come first.
-        module = VoiceInput(**config)
+        module = CockpitVoiceInput(**config)
         modules.append(module)
         harness = _Harness(module)
         # In ports deliver through a transport; the test thread plays LCM.
@@ -346,7 +346,7 @@ def test_pipeline_build_failure_fails_start(monkeypatch: pytest.MonkeyPatch) -> 
         raise RuntimeError("no whisper backend")
 
     monkeypatch.setattr(voice_input_module, "whisper_pipeline", broken_pipeline)
-    module = VoiceInput()
+    module = CockpitVoiceInput()
     try:
         with pytest.raises(RuntimeError, match="no whisper backend"):
             module.start()
