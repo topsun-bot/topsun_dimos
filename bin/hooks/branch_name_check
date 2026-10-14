@@ -24,13 +24,14 @@ TYPES = (
     "revert",
 )
 
-# Branches no person named: base branches, bots, GitHub's own machinery.
+# Branches no person named: base branches, bots, Cursor cloud agents, GitHub's own machinery.
 EXEMPT_NAMES = ("HEAD", "main")
 EXEMPT_PREFIXES = (
     "release/",
     "dependabot/",
     "backport/",
     "copilot/",
+    "cursor/",
     "revert-",
     "gh-readonly-queue/",
 )

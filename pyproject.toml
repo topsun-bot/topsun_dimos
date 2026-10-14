@@ -613,6 +613,7 @@ ignore = [
 "dimos/agents/skills/navigation.py" = ["RUF001"]
 "dimos/agents/skills/follow_me.py" = ["RUF001", "RUF002"]
 "dimos/agents/system_prompt.py" = ["RUF001"]
+"dimos/agents/skills/visual_servoing/query.py" = ["RUF001"]
 "dimos/navigation/visual/query.py" = ["RUF001"]
 "dimos/robot/unitree/go2/blueprints/agentic/unitree_go2_qwen_follow.py" = ["RUF001", "RUF002"]
 # Chinese greeter templates/prompts intentionally use full-width punctuation.
