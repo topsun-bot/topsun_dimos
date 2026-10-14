@@ -198,4 +198,4 @@ uv pip install --reinstall \
 ## Related
 
 - [mapping-go2](../mapping-go2/) — exploration + occupancy saving
-- `dimos/navigation/replanning_a_star/` — A* planner on gradient costmaps
+- `dimos/navigation/go2/replanning_a_star/` — A* planner on gradient costmaps

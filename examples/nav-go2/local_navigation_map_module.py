@@ -28,7 +28,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
+from dimos.navigation.go2.replanning_a_star.navigation_map import NavigationMap
 from dimos.spec.utils import Spec
 from dimos.utils.logging_config import setup_logger
 
