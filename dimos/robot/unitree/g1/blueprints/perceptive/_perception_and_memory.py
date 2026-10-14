@@ -15,9 +15,9 @@
 
 """Perception and memory modules used by higher-level G1 blueprints."""
 
+from dimos.agents.skills.visual_servoing.bbox_navigation import BBoxNavigationModule
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
-from dimos.navigation.bbox_navigation import BBoxNavigationModule
 from dimos.perception.detection.door.door_spatial_memory_module import SpatialLandmarkMemoryModule
 from dimos.perception.experimental.object_tracker_2d import ObjectTracker2D
 from dimos.perception.spatial_perception import SpatialMemory

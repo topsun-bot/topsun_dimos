@@ -110,7 +110,6 @@ class GlobalConfig(BaseSettings):
     rerun_save: bool = False  # also write the stream to recordings/<run-id>/rerun.rrd
     rerun_host: str | None = None
     rerun_websocket_server_port: int = 3030
-    rerun_save: bool = False
     rerun_save_dir: str = "~/.local/share/dimos/rrd"
     n_workers: int = 2
     memory_limit: str = "auto"

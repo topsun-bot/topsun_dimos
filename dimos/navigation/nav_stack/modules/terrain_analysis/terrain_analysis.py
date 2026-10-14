@@ -22,7 +22,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
 
 class TerrainAnalysisConfig(NativeModuleConfig):
-    cwd: str | None = "."
+    source_dir: str | None = "dimos/navigation/nav_stack/modules/terrain_analysis"
     executable: str = "result/bin/terrain_analysis"
     build_command: str | None = (
         "nix build github:dimensionalOS/dimos-module-terrain-analysis/v0.1.1 --no-write-lock-file"

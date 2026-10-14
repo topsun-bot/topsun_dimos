@@ -39,7 +39,7 @@ logger = setup_logger()
 
 
 class PGOConfig(NativeModuleConfig):
-    cwd: str | None = "cpp"
+    source_dir: str | None = "dimos/navigation/nav_stack/modules/pgo/cpp"
     executable: str = "result/bin/pgo"
     build_command: str | None = "nix build .#default --no-write-lock-file"
 

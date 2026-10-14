@@ -186,7 +186,7 @@ class SpatialMemory(Module):
         self._latest_video_frame: np.ndarray | None = None
         self._process_interval = 1
 
-        logger.info(f"SpatialMemory initialized with model {self.embedding_model}")
+        logger.info("SpatialMemory initialized with CLIP embedding provider")
 
     def _setup_chromadb(self, *, wipe: bool = False) -> None:
         """Create or recreate Chroma client, vector DB, and room collection."""

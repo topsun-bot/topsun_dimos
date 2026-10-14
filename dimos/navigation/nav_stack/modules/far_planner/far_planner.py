@@ -29,7 +29,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
 
 class FarPlannerConfig(NativeModuleConfig):
-    cwd: str | None = None
+    source_dir: str | None = "dimos/navigation/nav_stack/modules/far_planner"
     executable: str = "result/bin/far_planner_native"
     build_command: str | None = (
         "nix build github:dimensionalOS/dimos-module-far-planner/v0.5.0 --no-write-lock-file"
