@@ -56,7 +56,7 @@ from dimos.utils.safe_thread_map import safe_thread_map
 
 if TYPE_CHECKING:
     from dimos.core.coordination.blueprint_config.parsed import ParsedBlueprintConfig
-    from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
+    from dimos.core.coordination.blueprints import Blueprint
     from dimos.core.rpc_client import ModuleProxy, ModuleProxyProtocol, RPCClient
 
 logger = setup_logger()
@@ -775,7 +775,6 @@ class DeployedAtoms:
 def _rpc_name(instance_key: str, cls: type[ModuleBase]) -> str:
     """The module's RPC topic prefix: class name unless an instance name is set."""
     return cls.__name__ if instance_key == cls.name else instance_key
-
 
 
 def stream_name_types(blueprint: Blueprint) -> set[tuple[str, type]]:

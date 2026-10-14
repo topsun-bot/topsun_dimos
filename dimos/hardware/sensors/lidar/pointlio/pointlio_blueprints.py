@@ -81,6 +81,5 @@ mid360_pointlio_ray_trace = autoconnect(
 mid360_pointlio_replay = autoconnect(
     mid360_for_pointlio(pcap=os.environ.get("DIMOS_MID360_PCAP") or None),
     PointLio.blueprint(),
-
     vis_module("rerun"),
 ).global_config(n_workers=3, robot_model="mid360_pointlio_replay")
