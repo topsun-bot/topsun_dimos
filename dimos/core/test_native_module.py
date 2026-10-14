@@ -533,6 +533,7 @@ def test_json_mode_missing_level_falls_back_to_stream_default() -> None:
 
 
 def _spawn_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    # _spawn_env reads session + wired streams via NativeProcessTransport.env_name.
     fixture = SimpleNamespace(
         config=SimpleNamespace(extra_env=extra_env or {}, session=None),
         inputs=(),

@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CockpitVoiceInput: audio_in chunks -> decode -> STT pipeline -> human_input text.
+"""CockpitVoiceInput: audio_in chunks -> decode -> STT pipeline -> human_input.
 
 The real normalizer and WhisperNode wiring run against a fake Whisper model;
 the ffmpeg boundary runs for real in the container test and is otherwise
 replaced with a byte-mirroring stub.
+
+Topsun's local-mic ``VoiceInput`` is a separate module (Enter-to-talk / VAD).
+These tests cover the cockpit push-to-talk path only.
 """
 
 from collections.abc import Callable, Iterator

@@ -118,11 +118,11 @@ private:
         if (running_.compare_exchange_strong(expected, true)) {
             recv_thread_ = std::thread([this] {
                 while (running_.load(std::memory_order_relaxed)) {
-                    int rc = 0;
-                    {
-                        std::lock_guard<std::recursive_mutex> lock(lcm_mu_);
-                        rc = lcm_.handleTimeout(HANDLE_TIMEOUT_MS);
-                    }
+                    // Do not hold lcm_mu_ across handleTimeout. LCM publish is
+                    // thread-safe with handle(); taking the same lock here
+                    // deadlocks memq:// because handleTimeout waits for a
+                    // message that publish cannot send while the lock is held.
+                    const int rc = lcm_.handleTimeout(HANDLE_TIMEOUT_MS);
                     if (rc < 0) {
                         DIMOS_ERROR_THROTTLED(log::from_secs(1), "lcm handleTimeout error",
                                               log::Field("rc", static_cast<std::int64_t>(rc)));
