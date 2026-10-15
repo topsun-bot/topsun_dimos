@@ -14,6 +14,8 @@
 
 from pathlib import Path
 import subprocess
+import threading
+import time
 
 import pytest
 from pytest_mock import MockerFixture
@@ -115,10 +117,11 @@ def test_uv_lock_enables_frozen_commands(project):
             "-c",
             "pass",
         ]
-        assert module._launch_command(7)[:5] == [
+        assert module._launch_command(7)[:6] == [
             "uv",
             "run",
             "--frozen",
+            "--no-sync",
             "--with-editable",
             str(project.parents[2]),
         ]
@@ -214,10 +217,12 @@ def test_preparation_warms_the_launch_environment(project: Path, mocker: MockerF
     try:
         module._run_prepare()
 
-        assert [call.args[0] for call in run.call_args_list] == [
-            isolated_python_run_command(project, "python", "-c", "pass"),
-        ]
-        assert module._launch_command(7)[:5] == run.call_args.args[0][:5]
+        prepare = isolated_python_run_command(project, "python", "-c", "pass")
+        launch = module._launch_command(7)
+        assert [call.args[0] for call in run.call_args_list] == [prepare]
+        assert "--no-sync" not in prepare
+        assert launch[:4] == ["uv", "run", "--frozen", "--no-sync"]
+        assert launch[4:6] == prepare[3:5]
         for call in run.call_args_list:
             assert call.kwargs["cwd"] == project
             assert call.kwargs["env"] == module._runtime_env()
@@ -238,3 +243,38 @@ def test_preparation_failure_prevents_launch(project: Path, mocker: MockerFixtur
         spawn.assert_not_called()
     finally:
         module.stop()
+
+
+def test_launch_reuses_prepared_environment_without_resync(project: Path) -> None:
+    module = Contract()
+    try:
+        prepare = module._prepare_command()
+        launch = module._launch_command(7)
+        assert "--no-sync" not in prepare
+        assert "--no-sync" in launch
+        assert isolated_python_run_command(project, "python", sync=False)[:4] == [
+            "uv",
+            "run",
+            "--frozen",
+            "--no-sync",
+        ]
+    finally:
+        module.stop()
+
+
+def test_host_stop_kills_process_when_runtime_rpc_stop_hangs(
+    mocker: MockerFixture,
+) -> None:
+    module = Contract()
+    module.config.shutdown_timeout = 0.2
+    client = mocker.Mock()
+    release = threading.Event()
+    client.stop.side_effect = lambda: release.wait(timeout=5)
+    module._runtime_client = client
+    started = time.monotonic()
+    try:
+        module.stop()
+        assert time.monotonic() - started < 2.0
+        client.stop.assert_called_once()
+    finally:
+        release.set()
