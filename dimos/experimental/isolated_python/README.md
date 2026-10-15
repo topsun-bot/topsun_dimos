@@ -68,8 +68,6 @@ a contract stub or changes its signature or classification.
 During `build()`, dimOS uses `uv run` to sync the declared project and prepare a
 cached overlay containing dimOS from the shared checkout and its dependencies.
 The first build can take minutes to download; later builds reuse the cache.
-Launch then uses `uv run --no-sync` so the READY wait is not spent re-resolving
-that overlay (or waiting on a leftover lock from a previous runtime).
 If `pixi.toml` exists, Pixi supplies `uv`. If `uv.lock` exists, dimOS uses
 `--frozen` and treats the lockfile as the source of truth.
 
