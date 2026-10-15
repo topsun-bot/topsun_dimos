@@ -212,11 +212,10 @@ pair.
 
 ## Notes
 
-- Everything in a container runs as root; the entrypoint sets `umask 0000`
-  so whatever a run writes, even one stopped midway, is readable and
-  deletable by the host user. It is so for every other local account too,
-  prompts and trajectories included: on a shared multi-user machine, keep
-  `EVAL_RUNS_DIR` somewhere only you can reach.
+- Everything in a container runs as root. On exit (including `docker stop`)
+  the entrypoint `chmod`s the `/state` bind-mount so the host user can read
+  and delete whatever the run wrote. Keep `EVAL_RUNS_DIR` somewhere only you
+  can reach on a shared machine.
 - One Xorg display per host means one GPU per host. Multi-GPU instances need
   one X screen per GPU and a per-container `DISPLAY`, which the compose files
   do not do yet.

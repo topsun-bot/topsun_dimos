@@ -1,15 +1,24 @@
 # Replaces the repo-root .dockerignore for docker/evals/Dockerfile (BuildKit
 # prefers <Dockerfile>.dockerignore). The root one drops package.json and *.png,
 # which the DimSim frontend build needs. Allowlist what the image uses.
+# `*` excludes descendants, so each directory needs a parent-chain un-ignore
+# plus a `/**` exception (same pattern as docker/relay/Dockerfile.dockerignore).
 *
 !dimos
+!dimos/**
+!misc
 !misc/DimSim
+!misc/DimSim/**
+!docker
 !docker/evals
+!docker/evals/**
 !pyproject.toml
 !uv.lock
 !setup.py
 !README.md
 !default.env
+!assets
+!assets/agent
 !assets/agent/prompt.txt
 **/__pycache__
 **/.venv

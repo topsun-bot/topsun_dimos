@@ -11,13 +11,11 @@
 using namespace dimos::native;
 
 TEST_CASE("lcm is a supported transport") {
-    require_supported_transport("lcm");  // must not throw
-    CHECK(true);
+    CHECK_NOTHROW(require_supported_transport("lcm"));
 }
 
 TEST_CASE("zenoh is a supported transport") {
-    require_supported_transport("zenoh");  // must not throw
-    CHECK(true);
+    CHECK_NOTHROW(require_supported_transport("zenoh"));
 }
 
 TEST_CASE("an unknown transport is rejected and names the offending value") {
