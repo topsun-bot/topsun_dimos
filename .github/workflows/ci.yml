@@ -996,6 +996,14 @@ jobs:
                 sudo ln -sfn "$p" "/nix/var/nix/gcroots/dimos-native/$(basename "$p")"
               done
           fi
+      - name: Kill processes left over from earlier jobs (macOS)
+        # Not needed on Linux, as it uses a fresh container on every run.
+        if: matrix.os == 'macOS'
+        run: |
+          pgrep -fl "$GITHUB_WORKSPACE/" || exit 0
+          pkill -f "$GITHUB_WORKSPACE/" || true
+          for _ in $(seq 30); do pgrep -qf "$GITHUB_WORKSPACE/" || exit 0; sleep 0.1; done
+          pkill -KILL -f "$GITHUB_WORKSPACE/" || true
       - name: Run tests
         run: uv run pytest --cov=dimos/ --junitxml=junit.xml -m '${{ matrix.markers }}'
       - name: Re-run the failing tests with maximum verbosity
