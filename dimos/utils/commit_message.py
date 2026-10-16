@@ -72,8 +72,7 @@ class CommitMessagePolicy:
             return from_ref
         if CommitMessagePolicy.blob_exists(to_ref):
             print(
-                f"Base commit {from_ref} has no {CommitMessagePolicy.PATH}; "
-                f"using HEAD {to_ref}.",
+                f"Base commit {from_ref} has no {CommitMessagePolicy.PATH}; using HEAD {to_ref}.",
                 file=sys.stderr,
             )
             return to_ref
