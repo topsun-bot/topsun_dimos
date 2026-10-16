@@ -125,7 +125,13 @@ def test_range_reports_earlier_bot_commit_even_with_clean_head(monkeypatch, mock
     )
     assert commit_message.check_commits() == 1
     assert "badcommit: AI co-author:" in capsys.readouterr().err
-    assert run.call_args_list[0].args[0] == ["git", "rev-list", "--reverse", "base..head"]
+    assert run.call_args_list[0].args[0] == [
+        "git",
+        "rev-list",
+        "--reverse",
+        "--first-parent",
+        "base..head",
+    ]
 
 
 @pytest.mark.parametrize("base, head", [(None, None), ("base", None), (None, "head")])
@@ -149,6 +155,55 @@ def test_git_failure_is_reported(monkeypatch, mocker, capsys):
     )
     assert commit_message.check_commits() == 1
     assert "unknown revision" in capsys.readouterr().err
+
+
+def test_policy_prefers_base_blob_when_present(mocker, capsys):
+    mocker.patch.object(
+        commit_message.CommitMessagePolicy,
+        "blob_exists",
+        side_effect=lambda ref: ref == "base",
+    )
+    assert commit_message.CommitMessagePolicy.resolve_ref("base", "head") == "base"
+    assert capsys.readouterr().err == ""
+
+
+def test_policy_falls_back_to_head_when_base_lacks_blob(mocker, capsys):
+    mocker.patch.object(
+        commit_message.CommitMessagePolicy,
+        "blob_exists",
+        side_effect=lambda ref: ref == "head",
+    )
+    assert commit_message.CommitMessagePolicy.resolve_ref("base", "head") == "head"
+    assert "using HEAD head" in capsys.readouterr().err
+
+
+def test_policy_fails_when_neither_ref_has_blob(mocker, capsys):
+    mocker.patch.object(commit_message.CommitMessagePolicy, "blob_exists", return_value=False)
+    assert commit_message.CommitMessagePolicy.resolve_ref("base", "head") is None
+    assert "Neither base base nor HEAD head" in capsys.readouterr().err
+
+
+def test_print_resolved_ref_requires_range(monkeypatch, mocker, capsys):
+    monkeypatch.delenv("PRE_COMMIT_FROM_REF", raising=False)
+    monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+    exists = mocker.patch.object(commit_message.CommitMessagePolicy, "blob_exists")
+    assert commit_message.CommitMessagePolicy.print_resolved_ref() == 1
+    exists.assert_not_called()
+    assert "PRE_COMMIT_FROM_REF" in capsys.readouterr().err
+
+
+def test_print_resolved_ref_writes_head_fallback(monkeypatch, mocker, capsys):
+    monkeypatch.setenv("PRE_COMMIT_FROM_REF", "base")
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "head")
+    mocker.patch.object(
+        commit_message.CommitMessagePolicy,
+        "blob_exists",
+        side_effect=lambda ref: ref == "head",
+    )
+    assert commit_message.CommitMessagePolicy.print_resolved_ref() == 0
+    captured = capsys.readouterr()
+    assert captured.out == "head\n"
+    assert "using HEAD head" in captured.err
 
 
 def test_clean_range_passes(monkeypatch, mocker, capsys):
