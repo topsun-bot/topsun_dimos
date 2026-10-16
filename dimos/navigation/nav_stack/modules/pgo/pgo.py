@@ -41,7 +41,7 @@ logger = setup_logger()
 class PGOConfig(NativeModuleConfig):
     source_dir: str | None = "dimos/navigation/nav_stack/modules/pgo/cpp"
     executable: str = "result/bin/pgo"
-    build_command: str | None = "nix build .#default --no-write-lock-file"
+    build_command: str | None = "nix build path:.#default --no-write-lock-file"
 
     # Frame names
     world_frame: str = FRAME_MAP

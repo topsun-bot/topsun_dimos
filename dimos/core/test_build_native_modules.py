@@ -240,9 +240,14 @@ def test_every_module_builds_from_its_own_directory() -> None:
     for module in modules:
         assert module.build_dir != ".", f"{module.qualname}: builds from the repository root"
         ref = _SCRIPT._flake_ref_of(module)
-        assert ref == "path:." or ref.startswith("path:.#"), (
-            f"{module.qualname}: flake ref {ref!r} is not the `path:.#<package>` convention"
-        )
+        if _SCRIPT._is_local_flake(module):
+            assert ref == "path:." or ref.startswith("path:.#"), (
+                f"{module.qualname}: flake ref {ref!r} is not the `path:.#<package>` convention"
+            )
+        else:
+            assert ref.startswith("github:"), (
+                f"{module.qualname}: remote flake ref {ref!r} is not a pinned github: input"
+            )
         inputs = _SCRIPT._collect_input_paths(module)
         assert inputs == {module.build_dir}, (
             f"{module.qualname}: hashed inputs {sorted(inputs)} are not just "
@@ -516,7 +521,12 @@ def test_every_module_flake_builds_against_one(input_name: str) -> None:
     """
     by_rev: dict[str, list[str]] = {}
     for lock in sorted(DIMOS_PROJECT_ROOT.rglob("flake.lock")):
+        rel = lock.relative_to(DIMOS_PROJECT_ROOT)
         if ".git" in lock.parts or lock.parent == DIMOS_PROJECT_ROOT:
+            continue
+        # Topsun leftover nav_stack flakes are not in the official DimOS
+        # native-module set and keep historical pins (not relocked with #4187).
+        if rel.parts[:3] == ("dimos", "navigation", "nav_stack"):
             continue
         rev = _root_input(lock, input_name)
         if rev:
