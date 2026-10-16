@@ -29,7 +29,11 @@ from typing import Any, ClassVar
 from dimos.constants import CACHE_DIR
 from dimos.core.core import rpc
 from dimos.core.module import Module
-from dimos.core.native_module import NativeModule, NativeModuleConfig
+from dimos.core.native_module import (
+    NativeModule,
+    NativeModuleConfig,
+    _set_process_to_die_when_parent_dies,
+)
 from dimos.core.rpc_client import RPCClient
 from dimos.utils.data import get_project_root
 from dimos.utils.generic import short_id
@@ -38,11 +42,19 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 
-def isolated_python_run_command(project: Path, *command: str) -> list[str]:
-    """Run a project with dimOS from the shared source checkout."""
+def isolated_python_run_command(project: Path, *command: str, sync: bool = True) -> list[str]:
+    """Run a project with dimOS from the shared source checkout.
+
+    ``sync=False`` is for launch after :meth:`IsolatedPythonModule._run_prepare`
+    has already built the cached overlay. A second ``uv run --with-editable``
+    otherwise re-resolves the host DimOS tree (and can wait on a leftover
+    overlay lock) inside the READY deadline.
+    """
     args = ["uv", "run"]
     if (project / "uv.lock").is_file():
         args.append("--frozen")
+    if not sync:
+        args.append("--no-sync")
     args.extend(("--with-editable", str(get_project_root())))
     args.extend(command)
     if (project / "pixi.toml").is_file():
@@ -57,6 +69,8 @@ class IsolatedPythonModuleConfig(NativeModuleConfig):
     executable: str = "uv"
     # Cold `uv run --with-editable` on ubuntu CI downloads the host DimOS
     # tree (opencv, scipy, …) before READY. 30s expired mid-import there.
+    # Launch uses ``--no-sync`` so this budget is for interpreter start +
+    # handshake, not a second overlay download.
     startup_timeout: float = 180.0
     output_limit: int = 64 * 1024
 
@@ -141,6 +155,7 @@ class IsolatedPythonModule(NativeModule):
             self._new_runtime_name(),
             "--handshake-fd",
             str(handshake_fd),
+            sync=False,
         )
 
     def _new_runtime_name(self) -> str:
@@ -195,6 +210,7 @@ class IsolatedPythonModule(NativeModule):
                 stderr=subprocess.PIPE,
                 pass_fds=(child_write,),
                 start_new_session=True,
+                preexec_fn=_set_process_to_die_when_parent_dies,
             )
             os.close(child_write)
             child_write = -1
@@ -229,9 +245,10 @@ class IsolatedPythonModule(NativeModule):
                             "Isolated Python runtime exited before becoming ready "
                             f"(returncode={self._process.returncode})"
                         )
+            pid = self._process.pid if self._process is not None else None
             raise RuntimeError(
                 "Isolated Python runtime did not become ready within "
-                f"{self.config.startup_timeout:.0f}s"
+                f"{self.config.startup_timeout:.0f}s (pid={pid})"
             )
         except BaseException:
             if self._process is not None:
@@ -296,6 +313,14 @@ class IsolatedPythonModule(NativeModule):
         if self._runtime_client is not None:
             self._runtime_client.set_module_ref(name, module_ref)
 
+    def _stop_runtime_client(self, client: RPCClient) -> None:
+        try:
+            client.stop()
+        except Exception:
+            logger.exception("Failed to stop isolated Python runtime module")
+        finally:
+            client.stop_rpc_client()
+
     @rpc
     def stop(self) -> None:
         if self._isolated_python_runtime:
@@ -304,10 +329,21 @@ class IsolatedPythonModule(NativeModule):
         client = self._runtime_client
         self._runtime_client = None
         if client is not None:
-            try:
-                client.stop()
-            except Exception:
-                logger.exception("Failed to stop isolated Python runtime module")
-            finally:
-                client.stop_rpc_client()
+            # Default RPC stop can wait 120s. A wedged runtime LCM shutdown
+            # (or leftover uv overlay lock) must not delay killpg that long —
+            # the next spawn's READY wait starts only after this returns.
+            rpc_stop = threading.Thread(
+                target=self._stop_runtime_client,
+                args=(client,),
+                daemon=True,
+                name=f"isolated-python-rpc-stop-{type(self).__name__}",
+            )
+            rpc_stop.start()
+            rpc_stop.join(timeout=self.config.shutdown_timeout)
+            if rpc_stop.is_alive():
+                logger.warning(
+                    "Isolated Python runtime RPC stop exceeded "
+                    f"{self.config.shutdown_timeout:.1f}s; killing process",
+                    module=type(self).__name__,
+                )
         NativeModule.stop(self)

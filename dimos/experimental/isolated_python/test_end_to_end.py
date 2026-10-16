@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from pathlib import Path
 import subprocess
 import sys
@@ -84,16 +86,28 @@ def test_isolated_python_rpc_refs_and_restart() -> None:
         coordinator.stop()
 
 
-def test_example_script_exits_after_printing_results() -> None:
-    repository = Path(__file__).parents[3]
+_EXAMPLE_COMMAND = [sys.executable, "-m", "dimos.experimental.isolated_python.example.run"]
+_READY_TIMEOUT_MARK = "Isolated Python runtime did not become ready"
 
-    result = subprocess.run(
-        [sys.executable, "-m", "dimos.experimental.isolated_python.example.run"],
+
+def _run_example_script(repository: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        _EXAMPLE_COMMAND,
         cwd=repository,
         capture_output=True,
         text=True,
         timeout=300,
     )
+
+
+def test_example_script_exits_after_printing_results() -> None:
+    repository = Path(__file__).parents[3]
+
+    result = _run_example_script(repository)
+    # Hosted xdist can leave a uv overlay lock from the previous isolated
+    # runtime; one retry still requires a clean exit and the printed results.
+    if result.returncode != 0 and _READY_TIMEOUT_MARK in result.stderr:
+        result = _run_example_script(repository)
 
     assert result.returncode == 0, result.stderr
     assert "external multiplier: 3" in result.stdout
