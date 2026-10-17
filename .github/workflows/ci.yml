@@ -354,6 +354,8 @@ jobs:
           prune-cache: true
       - name: Install lint dependencies
         run: uv sync --only-group lint --frozen
+      - name: Check declared dependencies
+        run: uv run --no-sync deptry dimos --config pyproject.toml --github-output
       - name: Mypy
         run: uv run mypy
 
