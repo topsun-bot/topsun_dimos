@@ -10,12 +10,19 @@ set -euo pipefail
 python setup.py build_ext --inplace
 
 # PyO3 Rust extension modules (separate distributions installed into the venv).
+# The rust native-module binaries the livox e2e tests spawn are nix builds, below.
 if command -v cargo &>/dev/null; then
-  maturin develop --uv -m dimos/mapping/ray_tracing/rust/py/Cargo.toml
-  maturin develop --uv -m dimos/navigation/nav_3d/mls_planner/rust/py/Cargo.toml
+  python bin/pyo3-extensions --build
 else
-  echo "warning: cargo not found; skipping Rust extension builds, their tests will skip." >&2
+  echo "warning: cargo not found; skipping Rust builds, their tests will skip or fail." >&2
   echo "         Install Rust via https://rustup.rs" >&2
+fi
+
+# Pi and dimcode CLIs for the agent eval tests; pytest-slow puts them on PATH.
+if command -v npm &>/dev/null; then
+  bin/install-test-clis
+else
+  echo "warning: npm not found; the Pi and dimcode eval tests will skip." >&2
 fi
 
 # pyzed (ZED camera wrapper). Not on PyPI: the wheel is downloaded from
@@ -34,7 +41,7 @@ fi
 # Nix-built native modules (lidar drivers, voxel ray tracing, …). Nix
 # content-hashes all inputs, so unchanged modules rebuild near-instantly.
 if command -v nix &>/dev/null; then
-  bin/build-native-modules
+  bin/native-modules --build
 else
   echo "warning: nix not found; skipping nix native-module builds, their tests will skip." >&2
   echo "         Install Nix via https://nixos.org/download. Cold builds are slow; see" >&2

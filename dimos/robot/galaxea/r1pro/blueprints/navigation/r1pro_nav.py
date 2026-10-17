@@ -15,9 +15,7 @@
 
 """R1 Pro click-to-drive navigation: raytracing costmap + A* replanning.
 
-Mirrors ``unitree_g1_nav_simple``, fed by the connection's chassis lidar
-and wheel odometry. Wheel odometry drifts with slip — good enough for
-room-scale click-to-drive; swap in a LIO source for anything larger.
+Mirrors ``unitree_g1_nav_simple``, fed by the chassis Mid-360 and Point-LIO.
 
 Usage:
     dimos run r1pro-nav        # click a goal in the rerun viewer
@@ -29,8 +27,8 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.mapping.costmapper import CostMapper
 from dimos.mapping.pointclouds.occupancy import HeightCostConfig
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
+from dimos.navigation.go2.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.navigation.movement_manager.movement_manager import MovementManager
-from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.galaxea.r1pro.blueprints.basic.r1pro_coordinator import r1pro_coordinator
 
 # First-pass R1 Pro clearances — tune on the robot.

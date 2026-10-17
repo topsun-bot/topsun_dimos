@@ -198,6 +198,23 @@ class TestOnJointState:
         assert state.position == [0.1, 0.2, 0.3]
         assert state.velocity == [1.0, 2.0, 3.0]
 
+    def test_aliases_coordinator_names_onto_model_joints(
+        self, canonical_model_config, module_factory
+    ):
+        module = _make_module_with_monitor(module_factory)
+        module.config.model = canonical_model_config
+        module.config.joint_state_aliases = {"chassis/vx": "left/joint1"}
+
+        msg = JointState(
+            name=["left/joint3", "chassis/vx", "left/joint2"],
+            position=[0.3, 0.1, 0.2],
+        )
+        module._on_joint_state(msg)
+
+        state = module._world_monitor.on_joint_state.call_args.args[0]
+        assert state.name == canonical_model_config.joint_names
+        assert state.position == [0.1, 0.2, 0.3]
+
     def test_skips_incomplete_model_state(self, canonical_model_config, module_factory):
         module = _make_module_with_monitor(module_factory)
         module.config.model = canonical_model_config
@@ -249,7 +266,7 @@ class TestWorldMonitorVisualization:
         viz = FakeVisualization()
         monitor = _make_world_monitor_with_viz(viz)
         state_monitor = MagicMock()
-        state_monitor.get_current_positions.return_value = None
+        state_monitor.get_current_joint_state.return_value = None
         obstacle_monitor = MagicMock()
         monitor._state_monitor = state_monitor
         monitor._obstacle_monitor = obstacle_monitor

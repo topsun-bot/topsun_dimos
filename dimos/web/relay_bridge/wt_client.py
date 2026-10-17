@@ -12,26 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""WebTransport client for the DimOS relay (robot leg, plus a test viewer)."""
+"""WebTransport client for the DimOS relay (robot leg, plus a test viewer),
+and /api/info discovery of its WebTransport endpoint."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
 import contextlib
+from dataclasses import dataclass, replace
 import itertools
+import json
+import socket
+import ssl
 import time
 from types import TracebackType
-from typing import Any, cast
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import urljoin, urlparse
+import urllib.request
 
-from aioquic.asyncio.client import connect as aioquic_connect
+from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.connection import QuicConnection
 
 from dimos.utils.logging_config import setup_logger
 from dimos.web.relay_bridge._wt_session import SessionProtocol, make_quic_configuration
 from dimos.web.relay_bridge.protocol import (
     CONTROL_CHANNEL,
     MAX_CONTROL_PAYLOAD_BYTES,
+    MAX_TOKEN_LEN,
     PROTOCOL_VERSION,
     DataFrame,
     Delivery,
@@ -83,18 +91,104 @@ class RelayRejectedError(ProtocolError):
         super().__init__(f"relay rejected hello: {code}: {message}")
 
 
+@dataclass(frozen=True)
+class RelayInfo:
+    """What GET /api/info advertises."""
+
+    wt_url: str
+    """WebTransport base URL (no path); clients append /robot or /viewer."""
+    cert_hash: str | None
+    """SHA-256 of the relay's ephemeral certificate; None once a relay serves
+    a real certificate."""
+    v: int
+    rtc: bool = False
+    """True when the relay brokers video.webrtc.v1 track channels through
+    its Cloudflare Realtime SFU (protocol v7)."""
+
+
+def resolve_info_url(base_url: str) -> str:
+    """`<base_url>/api/info`, keeping a path prefix ("https://x/relay" ->
+    "https://x/relay/api/info"); mirror of the SDK's resolveInfoUrl."""
+    return urljoin(base_url if base_url.endswith("/") else base_url + "/", "api/info")
+
+
+def _get_json(url: str, timeout: float, cafile: str | None) -> Any:
+    context = ssl.create_default_context(cafile=cafile) if cafile is not None else None
+    with urllib.request.urlopen(url, timeout=timeout, context=context) as response:
+        body = response.read()
+    try:
+        return json.loads(body)
+    except ValueError:
+        return None  # reported as a shape problem by the caller
+
+
+async def fetch_relay_info(
+    base_url: str, *, timeout: float = 5.0, cafile: str | None = None
+) -> RelayInfo:
+    """Discover the relay's WebTransport endpoint through GET /api/info (the
+    mirror of the SDK's fetchRelayInfo). A relay restart means a new QUIC
+    port and certificate behind the same HTTP URL, so callers fetch on every
+    connect. For an https base, `cafile` (a PEM CA bundle: mkcert, a private
+    CA) replaces the system trust store. Raises OSError when the relay is
+    unreachable, answers an HTTP error, or fails certificate verification
+    (transient), ProtocolError for a non-relay answer or a protocol version
+    mismatch.
+    """
+    url = resolve_info_url(base_url)
+    data = await asyncio.to_thread(_get_json, url, timeout, cafile)
+    if not isinstance(data, dict):
+        raise ProtocolError(f"{url} returned an unexpected shape")
+    wt_url, cert_hash, v = data.get("wtUrl"), data.get("certHash"), data.get("v")
+    rtc = data.get("rtc", False)
+    if (
+        not isinstance(wt_url, str)
+        or not (cert_hash is None or isinstance(cert_hash, str))
+        or not isinstance(v, int)
+        or isinstance(v, bool)
+        or not isinstance(rtc, bool)
+    ):
+        raise ProtocolError(f"{url} returned an unexpected shape")
+    if v != PROTOCOL_VERSION:
+        raise ProtocolError(f"relay speaks protocol v{v}, this bridge speaks v{PROTOCOL_VERSION}")
+    return RelayInfo(wt_url=wt_url, cert_hash=cert_hash, v=v, rtc=rtc)
+
+
+@contextlib.asynccontextmanager
+async def _quic_connect(
+    host: str, port: int, *, configuration: QuicConfiguration
+) -> AsyncIterator[SessionProtocol]:
+    """aioquic.asyncio.client.connect() with a socket of the server's address family.
+
+    aioquic's dual-stack [::]:0 socket can get a port an IPv4 UDP socket holds
+    on macOS, and that socket then receives the IPv4 server's replies."""
+    loop = asyncio.get_running_loop()
+    family, _, _, _, addr = (await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM))[0]
+    connection = QuicConnection(configuration=replace(configuration, server_name=host))
+    transport, protocol = await loop.create_datagram_endpoint(
+        lambda: SessionProtocol(connection), family=family
+    )
+    try:
+        protocol.connect(addr)
+        await protocol.wait_connected()
+        yield protocol
+    finally:
+        protocol.close()
+        await protocol.wait_closed()
+        transport.close()
+
+
 class RelayClient:
     """One WebTransport session with the relay.
 
-    Use :meth:`connect` (or :func:`connect_with_backoff`); the constructor is
-    internal. All methods must be called from the event loop that connected.
+    Use :meth:`connect`; the constructor is internal. All methods must be
+    called from the event loop that connected.
     """
 
     def __init__(self, url: str, role: Role, session: SessionProtocol, ctx: Any) -> None:
         self.url = url
         self.role = role
         self._session = session
-        self._ctx = ctx  # aioquic.asyncio.connect() context manager
+        self._ctx = ctx  # _quic_connect() context manager
         self._ping_n = itertools.count(1)
         self._seq: dict[str, itertools.count[int]] = {}
         self._writers: list[LatestChannelWriter] = []
@@ -108,23 +202,33 @@ class RelayClient:
         *,
         insecure: bool | None = None,
         timeout: float = 10.0,
+        cafile: str | None = None,
     ) -> RelayClient:
-        """Connect to `url` (the relay's wtUrl, e.g. https://127.0.0.1:4433).
+        """Connect to `url` (the relay's wtUrl, e.g. https://127.0.0.1:4433;
+        the port defaults to 443).
 
         `insecure` skips certificate verification and defaults to True for
         loopback hosts only (the local relay uses an ephemeral self-signed
         cert). Passing insecure=True for a non-loopback host is refused.
+        Otherwise aioquic checks the certificate against the URL host (DNS or
+        IP SANs) and its chain against `cafile` (a PEM CA bundle: mkcert, a
+        private CA), or certifi's bundle without one. `timeout` bounds the
+        QUIC handshake and the WebTransport session setup separately.
         """
         parsed = urlparse(url)
         host = parsed.hostname
-        port = parsed.port
-        if parsed.scheme != "https" or host is None or port is None:
-            raise ValueError(f"relay URL must look like https://host:port, got {url!r}")
+        if parsed.scheme != "https" or host is None:
+            raise ValueError(f"relay URL must look like https://host[:port], got {url!r}")
+        port = parsed.port if parsed.port is not None else 443
         is_loopback = host in _LOOPBACK_HOSTS
         if insecure is None:
             insecure = is_loopback
         if insecure and not is_loopback:
-            raise ValueError(f"insecure=True is only allowed for loopback hosts, got {host!r}")
+            raise ValueError(
+                "insecure=True (trusting the relay's ephemeral self-signed certificate) is "
+                f"only allowed for loopback hosts, got {host!r}; attaching from another host "
+                "needs a relay with a real certificate"
+            )
         expected_path = f"/{role}"
         if parsed.path in ("", "/"):
             path = expected_path
@@ -135,13 +239,12 @@ class RelayClient:
                 f"relay URL path must be {expected_path!r} for role={role}, got {parsed.path!r}"
             )
 
-        ctx = aioquic_connect(
-            host,
-            port,
-            configuration=make_quic_configuration(insecure),
-            create_protocol=SessionProtocol,
-        )
-        session = cast("SessionProtocol", await ctx.__aenter__())
+        ctx = _quic_connect(host, port, configuration=make_quic_configuration(insecure, cafile))
+        # Bounded: aioquic gives up on an endpoint nobody listens on only at
+        # its 60 s idle timeout (UDP surfaces no ICMP), and a stale wtUrl
+        # after a relay restart must fail fast so the caller rediscovers.
+        # _quic_connect's finally closes the socket on cancellation.
+        session = await asyncio.wait_for(ctx.__aenter__(), timeout)
         # The robot leg's only incoming uni stream is the relay-opened control
         # carrier: corruption, reset, or an end of it must fail the whole
         # session (the bridge reconnects) instead of leaving it alive without
@@ -188,6 +291,7 @@ class RelayClient:
         *,
         robot: RobotInfo | None = None,
         manifest: RobotManifest | None = None,
+        token: str | None = None,
     ) -> None:
         """Register with the relay; returns once its welcome datagram arrives.
 
@@ -196,12 +300,17 @@ class RelayClient:
         datagrams (the test viewer's control plane). The welcome datagram is
         lossy either way, so the hello repeats every 200 ms; a robot resend
         first retires the previous hello stream if it is still in flight.
+        `token` is the robot key or viewer token for a relay started with
+        --auth-file (the relay answers auth_failed without a valid one).
         Raises ProtocolError if the encoded hello exceeds its transport
         budget, RelayRejectedError if the relay answers with an error
-        (version mismatch, missing robot id, ...), TimeoutError if nothing
-        answers within `timeout`.
+        (version mismatch, missing robot id, auth_failed, ...), TimeoutError
+        if nothing answers within `timeout`.
         """
-        msg = Hello(v=PROTOCOL_VERSION, role=self.role, robot=robot, manifest=manifest)
+        if token is not None and len(token) > MAX_TOKEN_LEN:
+            # Before the model: pydantic's error would quote the value.
+            raise ProtocolError(f"hello token is {len(token)} characters (limit {MAX_TOKEN_LEN})")
+        msg = Hello(v=PROTOCOL_VERSION, role=self.role, robot=robot, manifest=manifest, token=token)
         control_payload: bytes | None = None
         if self.role == "robot":
             control_payload = encode_datagram(msg)
@@ -222,7 +331,7 @@ class RelayClient:
 
         def retire_hello_stream() -> None:
             # In-flight check and reset in the same event-loop turn (the
-            # aioquic-safe reset rule, web/README.md bug 9); a delivered
+            # aioquic-safe reset rule, docs/web/protocol.md workaround 9); a delivered
             # stream is left alone so a reset cannot destroy a hello the
             # relay has yet to read.
             if hello_stream is not None and self._session.stream_in_flight(hello_stream):
@@ -476,33 +585,10 @@ class LatestChannelWriter:
                     if time.monotonic() - started > self.stale_after and not self._mailbox.empty():
                         # Stalled with a newer frame waiting: abandon this one.
                         # reset_if_in_flight rechecks membership in this same
-                        # event-loop turn (required, see web/README.md).
+                        # event-loop turn (required, see docs/web/protocol.md).
                         if session.reset_if_in_flight(stream_id):
                             self.resets += 1
                         break
         finally:
             closed.cancel()
         logger.info(f"latest-wins writer for {self.ch}: session closed, stopping")
-
-
-async def connect_with_backoff(
-    url: str,
-    role: Role,
-    *,
-    insecure: bool | None = None,
-    max_attempts: int = 8,
-    base_delay: float = 0.5,
-    max_delay: float = 10.0,
-) -> RelayClient:
-    """connect() with exponential backoff for flaky startup ordering."""
-    delay = base_delay
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return await RelayClient.connect(url, role, insecure=insecure)
-        except (OSError, asyncio.TimeoutError, ConnectionError) as e:
-            if attempt == max_attempts:
-                raise
-            logger.info(f"relay connect attempt {attempt} failed ({e}); retrying in {delay:.1f}s")
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, max_delay)
-    raise AssertionError("unreachable")

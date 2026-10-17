@@ -28,6 +28,9 @@ build/
 /web/cockpit/.dist-*
 /web/sdk/.dist-*
 
+# Hosted relay: certificate and auth file next to docker/relay/compose.yaml
+/docker/relay/config/
+
 # Nix / direnv (symlink one of the tracked .envrc.* files to .envrc)
 .direnv/
 .envrc
@@ -62,6 +65,7 @@ data/*
 # Runtime output
 /logs
 /recordings
+/downloads
 results/
 /assets/output/
 /assets/rgbd_data/
@@ -88,7 +92,6 @@ recording*.db
 # Downloaded model weights
 FastSAM-x.pt
 yolo11n*.pt
-*mobileclip*
 
 # openspec
 /openspec/changes/archive/
@@ -104,3 +107,6 @@ optuna.db
 # 个人/工具目录, 非业务模块, 不纳入版本管理
 .cursor/
 jiangtao/
+
+# policy blobs are loaded from outside the repository
+*.bin

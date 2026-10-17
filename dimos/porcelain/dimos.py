@@ -24,7 +24,12 @@ from typing import Any, TypeAlias, TypeVar, cast
 from dimos.core.coordination.blueprints import Blueprint
 from dimos.core.coordination.module_coordinator import ModuleCoordinator, ModuleDescriptor
 from dimos.core.global_config import global_config
-from dimos.core.introspection.module.info import ModuleInfo, RpcInfo, extract_rpc_info
+from dimos.core.introspection.module.info import (
+    ModuleInfo,
+    RpcInfo,
+    StreamInfo,
+    extract_rpc_info,
+)
 from dimos.core.module import ModuleBase, PeekNotFound
 from dimos.core.rpc_client import RpcCall
 from dimos.porcelain.local_module_source import LocalModuleSource
@@ -40,8 +45,21 @@ DescribeTarget: TypeAlias = str | ModuleHandle | RpcCall | ModuleInfo | RpcInfo
 S = TypeVar("S")
 
 
+def _load_opencv_first() -> None:
+    """PyAV bundles its own libxcb; an OpenCV window opened after PyAV loads hangs.
+
+    The Go2 stack loads PyAV, so import cv2 before anything this API starts.
+    Best effort: a headless box without libGL must still be able to connect.
+    """
+    try:
+        import cv2  # noqa: F401
+    except (ImportError, OSError):
+        pass
+
+
 class Dimos:
     def __init__(self, **config_overrides: Any) -> None:
+        _load_opencv_first()
         self._config_overrides = config_overrides
         self._coordinator: ModuleCoordinator | None = None
         self._source: ModuleSource | None = None
@@ -119,6 +137,7 @@ class Dimos:
         `@rpc` (and `@skill`, which implies `@rpc`) on a module are callable.
         `stop()` closes the connection without terminating the remote process.
         """
+        _load_opencv_first()
         source = RemoteModuleSource(timeout=timeout)
         instance = cls()
         instance._source = source
@@ -184,6 +203,29 @@ class Dimos:
                     "select one with instance_name="
                 )
             return cast("S", source.get_module(matches[0]))
+
+    def list_streams(self, module: str | ModuleHandle | None = None) -> list[StreamInfo]:
+        """Return the wired streams of deployed modules and the channel carrying each.
+
+        Subscribe via its module, e.g. ``app.Detector.get_stream("detections").subscribe(cb)``.
+
+        Args:
+            module: Optional exact instance name, unique class name, or module proxy.
+        """
+        with self._lock:
+            descriptors = self._require_source().list_stream_descriptors()
+        instance_name = None if module is None else self._module_instance_name(module)
+        return [
+            StreamInfo(
+                name=descriptor.name,
+                type_name=descriptor.type_name.rsplit(".", 1)[-1],
+                module_name=descriptor.module,
+                direction=descriptor.direction,
+                channel=descriptor.channel,
+            )
+            for descriptor in descriptors
+            if instance_name is None or descriptor.module == instance_name
+        ]
 
     def list_rpcs(self, module: str | ModuleHandle | None = None) -> list[RpcInfo]:
         """Return structured metadata for all advertised RPCs.
@@ -306,24 +348,25 @@ class Dimos:
         """Stop all modules and clean up resources.
 
         On a locally-driven `Dimos`, stops the coordinator and workers.
-        On a connected `Dimos` (from `Dimos.connect()`), closes the LCM RPC
-        client without terminating the remote process.
+        On a connected `Dimos` (from `Dimos.connect()`), closes its RPC client
+        and stream transports without terminating the remote process.
         """
         with self._lock:
             if self._stopped:
                 return
             self._stopped = True
+            source, self._source = self._source, None
+            coordinator, self._coordinator = self._coordinator, None
 
-            if self._source is not None:
-                try:
-                    self._source.close()
-                except Exception:
-                    pass
-                self._source = None
-
-            if self._coordinator is not None:
-                self._coordinator.stop()
-                self._coordinator = None
+        # Dispatch callbacks may access the app while teardown joins their
+        # transport thread. Release the app lock before waiting for them.
+        if source is not None:
+            try:
+                source.close()
+            except Exception:
+                pass
+        if coordinator is not None:
+            coordinator.stop()
 
     @property
     def is_running(self) -> bool:

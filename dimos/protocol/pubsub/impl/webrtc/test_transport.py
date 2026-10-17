@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
+import contextlib
 import pickle
 import struct
 
@@ -37,6 +39,33 @@ from dimos.protocol.pubsub.impl.webrtc.providers.spec import (
 )
 from dimos.protocol.pubsub.impl.webrtc.webrtcpubsub import WebRTCPubSub
 from dimos.protocol.pubsub.spec import SubscriptionGate
+
+
+def _run_coro_that_stops_loop(coro: Awaitable[None], timeout_s: float = 2.0) -> None:
+    """Drive a coroutine that calls ``loop.stop()`` on its running loop.
+
+    ``asyncio.run()`` raises ``RuntimeError: Event loop stopped before Future
+    completed`` on Python 3.10/3.11 when the coroutine stops the loop.
+    ``run_forever()`` is the matching driver for that terminal branch.
+    """
+    loop = asyncio.new_event_loop()
+    task = loop.create_task(coro)
+    handle = loop.call_later(timeout_s, loop.stop)
+    try:
+        loop.run_forever()
+        handle.cancel()
+        if not task.done():
+            raise TimeoutError(f"coroutine did not finish within {timeout_s}s")
+        exception = task.exception()
+        if exception is not None:
+            raise exception
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                loop.run_until_complete(task)
+        loop.close()
+
 
 # ─── Mock provider ───────────────────────────────────────────────────
 
@@ -439,8 +468,6 @@ def test_broker_heartbeat_terminal_notifies_operator_lost() -> None:
     """A revoked session (401/404 streak) may leave the WebRTC room up, so the
     planner would keep driving. The terminal branch must inject operator_lost
     before abandoning the heartbeat loop."""
-    import asyncio
-
     provider = BrokerConfig(api_key="key")._create()
     provider._config = provider._config.model_copy(update={"heartbeat_hz": 1000.0})  # fast ticks
 
@@ -453,7 +480,7 @@ def test_broker_heartbeat_terminal_notifies_operator_lost() -> None:
         return 401
 
     provider._heartbeat_once = _always_401  # type: ignore[method-assign]
-    asyncio.run(asyncio.wait_for(provider._heartbeat_loop(), timeout=2.0))
+    _run_coro_that_stops_loop(provider._heartbeat_loop())
 
     assert got and b'"operator_lost"' in got[0], "terminal streak must inject operator_lost"
 

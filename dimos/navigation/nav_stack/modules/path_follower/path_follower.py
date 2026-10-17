@@ -30,7 +30,7 @@ from dimos.msgs.std_msgs.Int8 import Int8
 
 
 class PathFollowerConfig(NativeModuleConfig):
-    cwd: str | None = None
+    source_dir: str | None = "dimos/navigation/nav_stack/modules/path_follower"
     executable: str = "result/bin/path_follower"
     build_command: str | None = (
         "nix build github:dimensionalOS/dimos-module-path-follower/v0.2.0 --no-write-lock-file"
