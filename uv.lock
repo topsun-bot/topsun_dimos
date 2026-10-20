@@ -36,14 +36,15 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-dimos-viewer = false
-dimos-lcm = false
-lcm = false
-edgetam-dimos = false
-eclipse-zenoh = false
 can-motor-control = false
-md-babel-py = false
 dim-odom = false
+dimos-cdrgen = false
+dimos-lcm = false
+dimos-viewer = false
+eclipse-zenoh = false
+edgetam-dimos = false
+lcm = false
+md-babel-py = false
 roboplan = false
 
 [manifest]
@@ -2353,6 +2354,7 @@ lint = [
     { name = "chromadb" },
     { name = "deptry" },
     { name = "dimos", extra = ["visualization", "web", "webrtc"] },
+    { name = "dimos-cdrgen" },
     { name = "einops" },
     { name = "gdown" },
     { name = "googlemaps" },
@@ -2421,12 +2423,14 @@ project-deps = [
     { name = "xacro" },
 ]
 tests = [
+    { name = "build" },
     { name = "can-motor-control" },
     { name = "chromadb" },
     { name = "click" },
     { name = "coacd" },
     { name = "coverage" },
     { name = "dimos", extra = ["apriltag", "cpu", "drone", "learning", "mapping", "visualization", "web", "webrtc"] },
+    { name = "dimos-cdrgen" },
     { name = "einops" },
     { name = "gdown" },
     { name = "googlemaps" },
@@ -2477,6 +2481,7 @@ tests = [
     { name = "xacro" },
 ]
 tests-self-hosted = [
+    { name = "build" },
     { name = "can-motor-control" },
     { name = "chromadb" },
     { name = "click" },
@@ -2484,6 +2489,7 @@ tests-self-hosted = [
     { name = "coverage" },
     { name = "dim-odom" },
     { name = "dimos", extra = ["apriltag", "cpu", "drone", "learning", "manipulation", "mapping", "misc", "unitree", "visualization", "web", "webrtc"] },
+    { name = "dimos-cdrgen" },
     { name = "einops" },
     { name = "gdown" },
     { name = "googlemaps" },
@@ -2709,6 +2715,7 @@ lint = [
     { name = "chromadb", specifier = ">=1.0.0" },
     { name = "deptry", specifier = "==0.25.1" },
     { name = "dimos", extras = ["web", "visualization", "webrtc"] },
+    { name = "dimos-cdrgen", specifier = "==0.1.0" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "gdown", specifier = "==6.0.0" },
     { name = "googlemaps", specifier = ">=4.10.0" },
@@ -2776,6 +2783,7 @@ project-deps = [
     { name = "xacro" },
 ]
 tests = [
+    { name = "build", specifier = ">=1.2.2" },
     { name = "can-motor-control", specifier = ">=0.0.8" },
     { name = "chromadb", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.3" },
@@ -2783,6 +2791,7 @@ tests = [
     { name = "coverage", specifier = ">=7.0" },
     { name = "dimos", extras = ["apriltag", "mapping", "drone", "cpu", "learning"] },
     { name = "dimos", extras = ["web", "visualization", "webrtc"] },
+    { name = "dimos-cdrgen", specifier = "==0.1.0" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "gdown", specifier = "==6.0.0" },
     { name = "googlemaps", specifier = ">=4.10.0" },
@@ -2833,6 +2842,7 @@ tests = [
     { name = "xacro" },
 ]
 tests-self-hosted = [
+    { name = "build", specifier = ">=1.2.2" },
     { name = "can-motor-control", specifier = ">=0.0.8" },
     { name = "chromadb", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.3" },
@@ -2842,6 +2852,7 @@ tests-self-hosted = [
     { name = "dimos", extras = ["apriltag", "mapping", "drone", "cpu", "learning"] },
     { name = "dimos", extras = ["manipulation", "misc", "unitree"] },
     { name = "dimos", extras = ["web", "visualization", "webrtc"] },
+    { name = "dimos-cdrgen", specifier = "==0.1.0" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "gdown", specifier = "==6.0.0" },
     { name = "googlemaps", specifier = ">=4.10.0" },
@@ -2892,6 +2903,23 @@ tests-self-hosted = [
     { name = "viser", extras = ["urdf"], marker = "platform_machine != 'aarch64' or sys_platform != 'linux'", specifier = ">=1.0.29" },
     { name = "watchdog", specifier = ">=3.0.0" },
     { name = "xacro" },
+]
+
+[[package]]
+name = "dimos-cdrgen"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "empy" },
+    { name = "lark" },
+    { name = "rosbags" },
+    { name = "setuptools" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+    { name = "wheel" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/1a/31327fa4bb2a240783d0b41e315be2a4485eabf07ab032f49c6328f5f51b/dimos_cdrgen-0.1.0.tar.gz", hash = "sha256:69ea4955e64a769d56d4bd5e0fff44c98f96c29c5608125cd011cef2740624f0", size = 75010, upload-time = "2026-10-15T05:00:09.663Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/9c/086701c3249ed2caabe83cea008c3e08bd6063c48a1df852fbca6aadff50/dimos_cdrgen-0.1.0-py3-none-any.whl", hash = "sha256:6731e8900f7e61af419b8c77599587f32677c9d64f27ac15f5e78be4b76bc011", size = 70183, upload-time = "2026-10-15T05:00:08.098Z" },
 ]
 
 [[package]]
@@ -3119,6 +3147,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/79/b0/05a5b4d49749602b12e13d1871f8e6d1fe6db806eda75f6f57bb4f1acf6f/embreex-4.4.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cb0872f5bc231f465b840b122847acbaf468ac48f49bfaff127c5347ec0db94f", size = 14529899, upload-time = "2026-04-22T19:46:56.824Z" },
     { url = "https://files.pythonhosted.org/packages/b5/96/625e035f3433071c91de07e66265a261be7bb708367f785000f93d7a992a/embreex-4.4.0-cp312-cp312-win_amd64.whl", hash = "sha256:6c092ee1adf5c48b7430c7ae3902943863745e54b4aef4327ecb3473e0a299d7", size = 13119305, upload-time = "2026-04-22T19:46:59.329Z" },
 ]
+
+[[package]]
+name = "empy"
+version = "4.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/0a/c500fc4c8f48cac08b76b8987070b178f0549534584ac1f414066700a3f9/empy-4.2.tar.gz", hash = "sha256:86f15e1da9743e79a2e9b2cbacf1a13d0b7fb1835b6254eb253c978b72287f4f", size = 166069, upload-time = "2024-08-25T23:32:09.946Z" }
 
 [[package]]
 name = "etils"
@@ -4996,6 +5030,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/4a/e2d0925e5ead474709eb89c6bbb9cd188396c9e3384a1f5d2491a38aeab6/lap-0.5.12-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:1c34c3d8aefbf7d0cb709801ccf78c6ac31f4b1dc26c169ed1496ed3cb6f4556", size = 1728876, upload-time = "2024-11-30T01:26:25.744Z" },
     { url = "https://files.pythonhosted.org/packages/46/89/73bad73b005e7f681f8cfa2c8748e9d766b91da781d07f300f86a9eb4f03/lap-0.5.12-cp312-cp312-win_amd64.whl", hash = "sha256:753ef9bd12805adbf0d09d916e6f0d271aebe3d2284a1f639bd3401329e436e5", size = 1476975, upload-time = "2024-11-30T01:26:40.341Z" },
     { url = "https://files.pythonhosted.org/packages/d9/8d/00df0c44b728119fe770e0526f850b0a9201f23bf4276568aef5b372982e/lap-0.5.12-cp312-cp312-win_arm64.whl", hash = "sha256:83e507f6def40244da3e03c71f1b1f54ceab3978cde72a84b84caadd8728977e", size = 1466243, upload-time = "2024-11-30T01:26:43.202Z" },
+]
+
+[[package]]
+name = "lark"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/60/bc7622aefb2aee1c0b4ba23c1446d3e30225c8770b38d7aedbfb65ca9d5a/lark-1.2.2.tar.gz", hash = "sha256:ca807d0162cd16cef15a8feecb862d7319e7a09bdb13aef927968e45040fed80", size = 252132, upload-time = "2024-08-13T19:49:00.652Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/00/d90b10b962b4277f5e64a78b6609968859ff86889f5b898c1a778c06ec00/lark-1.2.2-py3-none-any.whl", hash = "sha256:c2276486b02f0f1b90be155f2c8ba4a8e194d42775786db622faccd652d8e80c", size = 111036, upload-time = "2024-08-13T19:48:58.603Z" },
 ]
 
 [[package]]
@@ -9341,6 +9384,23 @@ wheels = [
 ]
 
 [[package]]
+name = "rosbags"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lz4" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "ruamel-yaml" },
+    { name = "typing-extensions" },
+    { name = "zstandard" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/2f/b6d11cc9fac4003b284e2c152b5c34ca5b6d26caf5f6979118e2d588a0d7/rosbags-0.11.0.tar.gz", hash = "sha256:e73bbe79a15d7f539653375278ffca6c48e56b5c2ada4a4531de0b17737cbc46", size = 254438, upload-time = "2025-10-15T09:49:54.453Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/75/b66d992a87539cd9e0070bca6ba49694b9258a4f9bc905d0576354d7864a/rosbags-0.11.0-py3-none-any.whl", hash = "sha256:2ce27d8dc37f554f10bf5962f665331ce16f43aba304c6c233eb15fab05b61ab", size = 137920, upload-time = "2025-10-15T09:49:50.329Z" },
+]
+
+[[package]]
 name = "rpds-py"
 version = "0.30.0"
 source = { registry = "https://pypi.org/simple" }
@@ -9418,6 +9478,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/a4/c2292b95246b9165cc43a0c3757e80995d58bc9b43da5cb47ad6e3535213/rtree-1.4.1-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:f155bc8d6bac9dcd383481dee8c130947a4866db1d16cb6dff442329a038a0dc", size = 1555140, upload-time = "2025-08-13T19:31:58.031Z" },
     { url = "https://files.pythonhosted.org/packages/74/25/5282c8270bfcd620d3e73beb35b40ac4ab00f0a898d98ebeb41ef0989ec8/rtree-1.4.1-py3-none-win_amd64.whl", hash = "sha256:efe125f416fd27150197ab8521158662943a40f87acab8028a1aac4ad667a489", size = 389358, upload-time = "2025-08-13T19:31:59.247Z" },
     { url = "https://files.pythonhosted.org/packages/3f/50/0a9e7e7afe7339bd5e36911f0ceb15fed51945836ed803ae5afd661057fd/rtree-1.4.1-py3-none-win_arm64.whl", hash = "sha256:3d46f55729b28138e897ffef32f7ce93ac335cb67f9120125ad3742a220800f0", size = 355253, upload-time = "2025-08-13T19:32:00.296Z" },
+]
+
+[[package]]
+name = "ruamel-yaml"
+version = "0.19.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/3b/ebda527b56beb90cb7652cb1c7e4f91f48649fbcd8d2eb2fb6e77cd3329b/ruamel_yaml-0.19.1.tar.gz", hash = "sha256:53eb66cd27849eff968ebf8f0bf61f46cdac2da1d1f3576dd4ccee9b25c31993", size = 142709, upload-time = "2026-01-02T16:50:31.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/0c/51f6841f1d84f404f92463fc2b1ba0da357ca1e3db6b7fbda26956c3b82a/ruamel_yaml-0.19.1-py3-none-any.whl", hash = "sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93", size = 118102, upload-time = "2026-01-02T16:50:29.201Z" },
 ]
 
 [[package]]
@@ -11395,6 +11464,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/06/28/55bc3e107a56fdcf7d5022cb32b8c21d98a9cc2df5cd9f3b93e10419099e/whatthepatch-1.0.7.tar.gz", hash = "sha256:9eefb4ebea5200408e02d413d2b4bc28daea6b78bb4b4d53431af7245f7d7edf", size = 34612, upload-time = "2024-11-16T17:21:22.153Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/93/af1d6ccb69ab6b5a00e03fa0cefa563f9862412667776ea15dd4eece3a90/whatthepatch-1.0.7-py3-none-any.whl", hash = "sha256:1b6f655fd31091c001c209529dfaabbabdbad438f5de14e3951266ea0fc6e7ed", size = 11964, upload-time = "2024-11-16T17:21:20.761Z" },
+]
+
+[[package]]
+name = "wheel"
+version = "0.48.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/20/50ed6bdf27dec98b568a8ae25dc599f35baa3d9709f9e83fd1edb56b9a90/wheel-0.48.0.tar.gz", hash = "sha256:94800765601e9171bf5d58d066e640662842bcedcbab982b2c90787a2c987322", size = 66471, upload-time = "2026-08-11T22:02:27.327Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/29/69cfbb602cd91690c55d38ba9fe53e6a7e76a6fa647bf38f19c138d25449/wheel-0.48.0-py3-none-any.whl", hash = "sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab", size = 33320, upload-time = "2026-08-11T22:02:26.1Z" },
 ]
 
 [[package]]
