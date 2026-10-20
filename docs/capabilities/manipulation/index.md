@@ -449,6 +449,12 @@ KeyboardTeleopModule ──→ ControlCoordinator ──→ ManipulationModule
 - **ControlCoordinator**: 100Hz control loop with mock or real hardware adapters
 - **ManipulationModule**: world backend, optional visualization, RRT motion planning, obstacle management
 
+A manipulation stack that plans around a camera-built voxel map adds
+`manipulation_mapping()` from
+[`common/blueprints.py`](/dimos/robot/manipulators/common/blueprints.py) (self
+filter, voxel mapper, `PointCloudBoxFilter`), which feeds `ManipulationModule`'s
+`voxel_map` input.
+
 ### Streaming pose-target control
 
 `CartesianIKTask` and `TeleopIKTask` are sibling leaves over the shared
@@ -524,7 +530,7 @@ planner is locked for its whole native call.
 | File | Description |
 |------|-------------|
 | [`manipulation_module.py`](/dimos/manipulation/manipulation_module.py) | Main module (RPC interface, state machine) |
-| [`robot/manipulators/common/blueprints.py`](/dimos/robot/manipulators/common/blueprints.py) | Shared coordinator, planner, and task helpers |
+| [`robot/manipulators/common/blueprints.py`](/dimos/robot/manipulators/common/blueprints.py) | Shared coordinator, planner, mapping, and task helpers |
 | [`robot/manipulators/a750/config.py`](/dimos/robot/manipulators/a750/config.py) | A-750 model and hardware config |
 | [`robot/manipulators/a750/blueprints/teleop.py`](/dimos/robot/manipulators/a750/blueprints/teleop.py) | A-750 keyboard teleop blueprint |
 | [`robot/manipulators/piper/blueprints/basic.py`](/dimos/robot/manipulators/piper/blueprints/basic.py) | Piper coordinator blueprint |

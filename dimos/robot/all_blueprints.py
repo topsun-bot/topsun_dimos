@@ -347,6 +347,7 @@ all_modules = {
     "pgo-voxel-mapper": "dimos.navigation.go2.loop_closure.module.PGOVoxelMapper",
     "phone-teleop-module": "dimos.teleop.phone.phone_teleop_module.PhoneTeleopModule",
     "pick-and-place-module": "dimos.manipulation.pick_and_place_module.PickAndPlaceModule",
+    "point-cloud-box-filter": "dimos.mapping.pointclouds.box_filter.PointCloudBoxFilter",
     "point-cloud-self-filter": "dimos.manipulation.planning.utils.point_cloud_self_filter.PointCloudSelfFilter",
     "point-lio": "dimos.hardware.sensors.lidar.pointlio.module.PointLio",
     "point-nav-skill-container": "dimos.agents.skills.point_nav.PointNavSkillContainer",
