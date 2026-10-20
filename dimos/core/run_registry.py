@@ -26,8 +26,8 @@ import signal
 import time
 
 from dimos.constants import STATE_DIR
+from dimos.core.config_secrets import SECRET_CONFIG_FIELDS, without_secret_values
 from dimos.core.coordination.process_lifecycle import kill_run_processes
-from dimos.core.global_config import SECRET_CONFIG_FIELDS
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -47,6 +47,7 @@ class RunEntry:
     cli_args: list[str] = field(default_factory=list)
     config_overrides: dict[str, object] = field(default_factory=dict)
     original_argv: list[str] = field(default_factory=list)
+    mcp_url: str | None = None
 
     @staticmethod
     def config_field_name(option: str) -> str:
@@ -77,11 +78,7 @@ class RunEntry:
         return safe
 
     def __post_init__(self) -> None:
-        self.config_overrides = {
-            key: value
-            for key, value in self.config_overrides.items()
-            if self.config_field_name(key) not in SECRET_CONFIG_FIELDS
-        }
+        self.config_overrides = without_secret_values(self.config_overrides)
         self.original_argv = self.without_secret_options(self.original_argv)
 
     @property

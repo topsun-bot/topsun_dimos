@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 from reactivex.disposable import Disposable
@@ -45,8 +45,11 @@ logger = setup_logger()
 class G1HighLevelWebRtcConfig(ModuleConfig):
     ip: str | None = None
     connection_mode: str = "ai"
-    # Per-device AES-128 key (G1 fw >=1.5.1); defaults from GlobalConfig.
-    aes_128_key: str | None = Field(default_factory=lambda m: m["g"].unitree_aes_128_key)
+    # Per-device AES-128 key (G1 fw >=1.5.1).
+    aes_128_key: str | None = Field(default=None, repr=False)
+    # Topsun: CN vs global Unitree cloud for WebRTC auth.
+    unitree_cloud_region: Literal["cn", "global"] = "global"
+    unitree_webrtc_connect_timeout_sec: float = 30.0
 
 
 class G1HighLevelWebRtc(Module, HighLevelG1Spec):
@@ -69,9 +72,9 @@ class G1HighLevelWebRtc(Module, HighLevelG1Spec):
             self.config.ip,
             self.config.connection_mode,
             aes_128_key=self.config.aes_128_key,
-            region=self.config.g.unitree_cloud_region,
+            region=self.config.unitree_cloud_region,
             device_type="G1",
-            connect_timeout_sec=self.config.g.unitree_webrtc_connect_timeout_sec,
+            connect_timeout_sec=self.config.unitree_webrtc_connect_timeout_sec,
         )
         self.connection.start()
         self.register_disposable(Disposable(self.cmd_vel.subscribe(self.move)))

@@ -136,10 +136,9 @@ def parse_nav_go2_config(argv: list[str] | None = None) -> NavGo2RunConfig:
 
 
 def _apply_viewer_cli(viewer: str) -> None:
-    """Map legacy ``rerun-web`` to GlobalConfig viewer + rerun_web."""
+    """Map legacy ``rerun-web`` to GlobalConfig viewer (rerun-web is module config)."""
     if viewer == "rerun-web":
         global_config.viewer = "rerun"
-        global_config.rerun_web = True
     else:
         global_config.viewer = viewer
 
