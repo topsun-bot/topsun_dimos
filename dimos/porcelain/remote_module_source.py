@@ -197,6 +197,14 @@ class RemoteModuleSource(ModuleSource):
         for key in keys:
             self.invalidate(key)
 
+    def unload_module_by_class_name(self, class_name: str) -> None:
+        self._coord.call("unload_module_by_class_name", class_name)
+        with self._lock:
+            deployed = set(self._refresh_descriptors())
+            undeployed = {*self._cache, *(module for module, _ in self._streams)} - deployed
+        for remote_name in undeployed:
+            self.invalidate(remote_name)
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
