@@ -26,7 +26,9 @@ def _topic(blueprint: Blueprint, atom: BlueprintAtom, port: str) -> str:
 
 def test_relocalizer_loaded_map_seeds_the_voxel_map() -> None:
     mapper = next(a for a in relocalize_mid360.active_blueprints if a.module is RayTracingVoxelMap)
-    reloc = next(a for a in relocalize_mid360.active_blueprints if a.module is LocalMapRelocalization)
+    reloc = next(
+        a for a in relocalize_mid360.active_blueprints if a.module is LocalMapRelocalization
+    )
     assert _topic(relocalize_mid360, mapper, "loaded_map") == _topic(
         relocalize_mid360, reloc, "loaded_map"
     )
