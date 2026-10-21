@@ -233,6 +233,10 @@ class FakeArm(ConnectionModule):
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("rpc_transport", _SkipRpc)
         super().__init__(**kwargs)
+        if not hasattr(self, "rpc"):
+            # Module.__init__ skips transport RPC on ValueError and leaves
+            # this unset; stop() then does ``if self.rpc``.
+            self.rpc = None
         #: The last 1000 commands passed to ``write``, oldest first.
         self.writes: deque[dict[str, float]] = deque(maxlen=1000)
         #: How many times ``halt`` has been called.
