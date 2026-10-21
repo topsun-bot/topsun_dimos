@@ -204,10 +204,6 @@ class TestB1Connection:
             conn.watchdog_thread.join(timeout=1.0)
             conn._close_module()
 
-    @pytest.mark.skipif(
-        _IS_MACOS and bool(os.environ.get("CI")),
-        reason="watchdog timing assertions fail on the macOS CI runners",
-    )
     def test_continuous_commands_prevent_timeout(self) -> None:
         """Test that continuous commands prevent watchdog timeout."""
         conn = MockB1ConnectionModule(ip="127.0.0.1", port=9090)
@@ -232,6 +228,19 @@ class TestB1Connection:
                 conn.handle_twist_stamped(twist)
                 commands_sent += 1
                 time.sleep(0.05)  # 50ms between commands (well under 200ms timeout)
+
+            # Loaded macOS CI can stretch that last sleep past the 200ms
+            # watchdog. Publish one more command immediately so the
+            # no-timeout assertion is not racing the trailing sleep.
+            conn.handle_twist_stamped(
+                TwistStamped(
+                    ts=time.time(),
+                    frame_id="base_link",
+                    linear=Vector3(0.5, 0, 0),
+                    angular=Vector3(0, 0, 0),
+                )
+            )
+            commands_sent += 1
 
             # Should never timeout
             assert not conn.timeout_active, "Should not timeout with continuous commands"
