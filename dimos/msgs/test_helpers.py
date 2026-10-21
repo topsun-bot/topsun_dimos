@@ -20,7 +20,10 @@ from dimos.msgs.helpers import lcm_msg_type
 
 def test_lcm_msg_type() -> None:
     assert lcm_msg_type("geometry_msgs.Pose") is Pose
-    with pytest.raises(ImportError):
+    with pytest.raises(ImportError, match="has no message class 'Nope'") as missing:
         lcm_msg_type("geometry_msgs.Nope")
+    # Missing class must be ImportError, not ModuleNotFoundError from a
+    # nonexistent `dimos_lcm.geometry_msgs.Nope` submodule.
+    assert type(missing.value) is ImportError
     with pytest.raises(ValueError):
         lcm_msg_type("Bare")
