@@ -16,8 +16,9 @@
 
 A spec class declares ``__cdr_fields__`` — an ordered list of ``(name, type)``.
 ``type`` is a primitive code (``"u8"``, ``"f32"`` …), ``"string"``, a nested spec
-class, or ``("array", elem, n)`` / ``("seq", elem)``. ``decode(buf, Cls)`` walks
-the body with CDR alignment and returns a populated instance.
+class, :class:`OptionalPrim` (a trailing primitive older recordings omit), or
+``("array", elem, n)`` / ``("seq", elem)``. ``decode(buf, Cls)`` walks the body
+with CDR alignment and returns a populated instance.
 
 This replaces per-message hand-rolled decoders: the wire layout lives in the
 spec, not in code. The same spec also generates the IDL we embed into mcaps.
@@ -60,6 +61,15 @@ class Cursor:
         if m:
             self.p += n - m
 
+    def remaining(self) -> int:
+        return len(self.b) - self.p
+
+    def has_prim(self, code: str) -> bool:
+        """Whether ``code`` fits at the current position, including its alignment."""
+        _, sz, _ = _PRIM[code]
+        pad = (sz - (self.p - 4) % sz) % sz
+        return self.remaining() >= pad + sz
+
     def prim(self, code: str) -> Any:
         ch, sz, _ = _PRIM[code]
         self.align(sz)
@@ -81,7 +91,30 @@ class Cursor:
         return v
 
 
+class OptionalPrim:
+    """A trailing primitive that older recordings omit.
+
+    Unitree's SDK ``crc`` is present on current firmware and the rust CDR
+    fixtures, but ``go2_china_office_indoor.mcap`` (and other pre-CRC Go2
+    captures) ends after ``reserve``. ``read`` leaves ``default`` rather than
+    walking four bytes past the payload.
+    """
+
+    __slots__ = ("code", "default")
+
+    def __init__(self, code: str, default: Any = 0) -> None:
+        self.code = code
+        self.default = default
+
+    def read(self, cur: Cursor) -> Any:
+        if not cur.has_prim(self.code):
+            return self.default
+        return cur.prim(self.code)
+
+
 def _read(cur: Cursor, t: Any) -> Any:
+    if isinstance(t, OptionalPrim):
+        return t.read(cur)
     if isinstance(t, str):
         return cur.string() if t == "string" else cur.prim(t)
     if isinstance(t, tuple):

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from dimos.robot.unitree.go2.dds.cdr import OptionalPrim
 from dimos.robot.unitree.go2.dds.msgs.base import PrettyMsg
 from dimos.robot.unitree.go2.dds.msgs.BmsCmd import BmsCmd
 from dimos.robot.unitree.go2.dds.msgs.MotorCmd import MotorCmd
@@ -44,6 +45,7 @@ class LowCmd(PrettyMsg):
     fan: np.ndarray  # u8[2]
     gpio: int
     reserve: int
+    # SDK CRC. Older firmware / china-office MCAPs end after reserve; then 0.
     crc: int
 
     __cdr_fields__ = [
@@ -60,5 +62,5 @@ class LowCmd(PrettyMsg):
         ("fan", ("array", "u8", 2)),
         ("gpio", "u8"),
         ("reserve", "u32"),
-        ("crc", "u32"),
+        ("crc", OptionalPrim("u32")),
     ]
