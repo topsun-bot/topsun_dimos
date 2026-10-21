@@ -113,9 +113,9 @@ def _view() -> Any:
 
 relocalize_mid360 = autoconnect(
     RecordingPlayer.blueprint(),
-    RayTracingVoxelMap.blueprint(voxel_size=0.1, world_frame=WORLD, global_emit_every=5).remappings(
-        [(RayTracingVoxelMap, "loaded_map", "loaded_map_unused")]
-    ),
+    # Keep `loaded_map` so LocalMapRelocalization's placed premap auto-connects
+    # and seeds RayTracingVoxelMap (the only producer of that stream).
+    RayTracingVoxelMap.blueprint(voxel_size=0.1, world_frame=WORLD, global_emit_every=5),
     # LocalMapRelocalization and not LidarWindowRelocalization: these recordings
     # carry the scans in the sensor frame, as the sensor published them, and the
     # window one wants them registered. The mapper is what registers them here.
