@@ -28,7 +28,7 @@ for tests that have no robot model.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 import functools
 from pathlib import Path
 import tempfile
@@ -55,7 +55,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.protocol.rpc.spec import DEFAULT_RPC_TIMEOUT, Args, RPCSpec
+from dimos.protocol.rpc.spec import RPCSpec
 from dimos.robot.assets.model import RobotModel
 
 
@@ -195,41 +195,17 @@ def fake_arm_model() -> RobotModel:
     return RobotModel.from_file(path)
 
 
-class NullRPC(RPCSpec):
-    """No-op RPC so in-process ``FakeArm`` tests do not open the default zenoh session.
+class _SkipRpc(RPCSpec):
+    """Raises so ``Module.__init__`` skips transport RPC for in-process tests.
 
-    ``Module.__init__`` starts ``config.rpc_transport``. The Topsun/Quiet-zenoh
-    default is zenoh; that session stalls the module loop on hosted macOS and
-    trips ConnectionModule's 50ms deadman even when commands are already queued.
+    The Topsun/Quiet-zenoh default starts a zenoh session here; that stalls the
+    module loop on hosted macOS and trips ConnectionModule's 50ms deadman.
+    Pydantic accepts this as ``type[RPCSpec]``; the ``ValueError`` is the
+    existing hook that leaves the module on LocalTransport only.
     """
 
-    def __init__(
-        self,
-        rpc_timeouts: dict[str, float] | None = None,
-        default_rpc_timeout: float = DEFAULT_RPC_TIMEOUT,
-        **kwargs: Any,
-    ) -> None:
-        self.rpc_timeouts = dict(rpc_timeouts or {})
-        self.default_rpc_timeout = default_rpc_timeout
-
-    def start(self) -> None:
-        return None
-
-    def stop(self) -> None:
-        return None
-
-    def serve_rpc(self, f: Callable[..., Any], name: str) -> Callable[[], None]:
-        return lambda: None
-
-    def call(
-        self, name: str, arguments: Args, cb: Callable[..., Any] | None
-    ) -> Callable[[], Any] | None:
-        if cb is None:
-            return None
-        return lambda: None
-
-    def call_nowait(self, name: str, arguments: Args) -> None:
-        return None
+    def __init__(self, **kwargs: Any) -> None:
+        raise ValueError("in-process FakeArm tests do not start transport RPC")
 
 
 class FakeArmConfig(ConnectionConfig):
@@ -238,7 +214,6 @@ class FakeArmConfig(ConnectionConfig):
     source: str = "mock"
     model: RobotModel | None = Field(default_factory=fake_arm_model)
     position_command: JointPort = JointPort()
-    rpc_transport: type[RPCSpec] = NullRPC
 
 
 class FakeArm(ConnectionModule):
@@ -256,6 +231,7 @@ class FakeArm(ConnectionModule):
     joint_state: Out[JointState]
 
     def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("rpc_transport", _SkipRpc)
         super().__init__(**kwargs)
         #: The last 1000 commands passed to ``write``, oldest first.
         self.writes: deque[dict[str, float]] = deque(maxlen=1000)
