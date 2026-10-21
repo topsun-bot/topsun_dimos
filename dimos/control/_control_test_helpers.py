@@ -28,7 +28,7 @@ for tests that have no robot model.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import functools
 from pathlib import Path
 import tempfile
@@ -55,6 +55,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.protocol.rpc.spec import DEFAULT_RPC_TIMEOUT, Args, RPCSpec
 from dimos.robot.assets.model import RobotModel
 
 
@@ -194,12 +195,53 @@ def fake_arm_model() -> RobotModel:
     return RobotModel.from_file(path)
 
 
+class NullRPC:
+    """No-op RPC so in-process ``FakeArm`` tests do not open the default zenoh session.
+
+    ``Module.__init__`` starts ``config.rpc_transport``. The Topsun/Quiet-zenoh
+    default is zenoh; that session stalls the module loop on hosted macOS and
+    trips ConnectionModule's 50ms deadman even when commands are already queued.
+    """
+
+    def __init__(
+        self,
+        rpc_timeouts: dict[str, float] | None = None,
+        default_rpc_timeout: float = DEFAULT_RPC_TIMEOUT,
+        **kwargs: Any,
+    ) -> None:
+        self.rpc_timeouts = dict(rpc_timeouts or {})
+        self.default_rpc_timeout = default_rpc_timeout
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def serve_rpc(self, f: Callable[..., Any], name: str) -> Callable[[], None]:
+        return lambda: None
+
+    def serve_module_rpc(self, module: Any, name: str | None = None) -> None:
+        return None
+
+    def call(
+        self, name: str, arguments: Args, cb: Callable[..., Any] | None
+    ) -> Callable[[], None] | None:
+        if cb is None:
+            return None
+        return lambda: None
+
+    def call_nowait(self, name: str, arguments: Args) -> None:
+        return None
+
+
 class FakeArmConfig(ConnectionConfig):
     """Settings for ``FakeArm``: named "mock", driven by joint position."""
 
     source: str = "mock"
     model: RobotModel | None = Field(default_factory=fake_arm_model)
     position_command: JointPort = JointPort()
+    rpc_transport: type[RPCSpec] = NullRPC
 
 
 class FakeArm(ConnectionModule):
