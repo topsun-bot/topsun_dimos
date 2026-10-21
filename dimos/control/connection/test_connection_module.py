@@ -486,6 +486,10 @@ def test_any_accepted_command_feeds_the_one_deadman(rig: Callable[..., Rig]) -> 
     body = MotorCommandArray(q=[0.1, 0.2], dq=[0, 0], kp=[1, 1], kd=[1, 1], tau=[0, 0])
     forward = Twist(Vector3(0.1, 0.0, 0.0), Vector3(0.0, 0.0, 0.0))
     r.send("motor_command", body)
+    # The body command must be accepted before the window starts; otherwise a
+    # stalled loop (zenoh RPC start on hosted macOS) expires the deadman
+    # before any base command can feed it.
+    assert wait_until(lambda: len(writes(r)) >= 1)
     deadline = time.monotonic() + 4 * DEADMAN_S
     while time.monotonic() < deadline:
         r.send("base_command", forward)

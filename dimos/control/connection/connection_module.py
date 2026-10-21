@@ -501,7 +501,30 @@ class ConnectionModule(Module, ABC):
             self._deadman = None
 
     def _deadman_expired(self) -> None:
+        """Timer fired. Halt after pending loop work so a queued command can restart us.
+
+        ``process_observable`` delivers on this loop via ``call_soon_threadsafe``
+        into a LATEST mailbox; ``_apply`` (which calls ``_start_deadman``) runs
+        as a later task. If the loop stalled past ``deadman_timeout_s``, this
+        timer and the mailbox wakeup become ready together. One ``call_soon``
+        lets the wakeup run; a second lets the handler run. Hosted macOS CI
+        hits this when Module RPC starts the default zenoh session.
+        """
         self._deadman = None
+        loop = asyncio.get_running_loop()
+        loop.call_soon(self._deadman_after_pending_commands)
+
+    def _deadman_after_pending_commands(self) -> None:
+        if self._deadman is not None:
+            return
+        asyncio.get_running_loop().call_soon(self._deadman_halt_if_idle)
+
+    def _deadman_halt_if_idle(self) -> None:
+        if self._deadman is not None:
+            return
+        with self._lock:
+            if self._stopping:
+                return
         logger.warning(f"{self._label}: no command in {self.config.deadman_timeout_s} s, halting")
         self._halt()
         # Set only once halted, so a status that says it fired means the robot was told to stop.
