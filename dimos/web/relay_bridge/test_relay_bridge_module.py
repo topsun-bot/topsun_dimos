@@ -193,7 +193,7 @@ def test_unknown_channels_in_snapshot_are_ignored(bridge) -> None:
 
 
 @pytest.mark.skipif_no_turbojpeg
-def test_encode_paths_and_max_hz_gate(bridge) -> None:
+def test_encode_paths_and_max_hz_gate(bridge, monkeypatch) -> None:
     module, clients = bridge
     client = clients[0]
     push(module, client, Subs(chs=["color_image", "odom"], n=1))
@@ -218,19 +218,20 @@ def test_encode_paths_and_max_hz_gate(bridge) -> None:
     assert jpeg[:2] == b"\xff\xd8"  # JPEG magic: TurboJPEG really encoded
     assert meta == {"w": 12, "h": 8}
 
-    # maxHz gate: the first publish warmed the encode path (lazy imports cost
-    # ~250 ms), so this back-to-back pair reliably lands inside the 50 ms
-    # interval - exactly one of the two encodes.
-    time.sleep(0.06)
+    # Sampling gate accepts a frame up to half an interval early. odom is
+    # 20 Hz (50 ms), so two wall-clock publishes on a loaded macOS runner
+    # can land more than 25 ms apart and both encode. Drive the gate clock
+    # so the pair is one sample and the next publish is past the interval.
     count = module.encoded["odom"]
+    frozen = time.monotonic() + 0.06
+    monkeypatch.setattr(relay_bridge_module.time, "monotonic", lambda: frozen)
     odom_transport(module).publish(pose)
     odom_transport(module).publish(pose)
     assert module.encoded["odom"] == count + 1
 
-    # After the interval passes, encoding resumes.
-    time.sleep(0.06)
+    monkeypatch.setattr(relay_bridge_module.time, "monotonic", lambda: frozen + 0.06)
     odom_transport(module).publish(pose)
-    assert wait_until(lambda: module.encoded["odom"] == count + 2)
+    assert module.encoded["odom"] == count + 2
 
 
 def test_default_image_gate_preserves_mujoco_video_rate() -> None:
