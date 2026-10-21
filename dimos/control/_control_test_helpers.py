@@ -223,11 +223,6 @@ class _NullRPC(RPCSpec):
     def serve_rpc(self, f: Callable[..., Any], name: str) -> Callable[[], None]:
         return lambda: None
 
-    def call(
-        self, name: str, arguments: Args, cb: Callable[..., Any] | None
-    ) -> Callable[[], Any] | None:
-        return None
-
     def call_nowait(self, name: str, arguments: Args) -> None:
         return None
 
