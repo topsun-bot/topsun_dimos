@@ -195,7 +195,7 @@ def fake_arm_model() -> RobotModel:
     return RobotModel.from_file(path)
 
 
-class NullRPC:
+class NullRPC(RPCSpec):
     """No-op RPC so in-process ``FakeArm`` tests do not open the default zenoh session.
 
     ``Module.__init__`` starts ``config.rpc_transport``. The Topsun/Quiet-zenoh
@@ -221,12 +221,9 @@ class NullRPC:
     def serve_rpc(self, f: Callable[..., Any], name: str) -> Callable[[], None]:
         return lambda: None
 
-    def serve_module_rpc(self, module: Any, name: str | None = None) -> None:
-        return None
-
     def call(
         self, name: str, arguments: Args, cb: Callable[..., Any] | None
-    ) -> Callable[[], None] | None:
+    ) -> Callable[[], Any] | None:
         if cb is None:
             return None
         return lambda: None
