@@ -520,13 +520,15 @@ def test_every_module_flake_builds_against_one(input_name: str) -> None:
     devcontainer, and bumping it is an everyone-lives-here change.
     """
     by_rev: dict[str, list[str]] = {}
-    for lock in sorted(DIMOS_PROJECT_ROOT.rglob("flake.lock")):
+    # Generated build directories can contain dependency checkouts with their own
+    # locks. Only compare the module flakes tracked by this repository.
+    for lock in sorted(_RELOCK.flake_locks()):
         rel = lock.relative_to(DIMOS_PROJECT_ROOT)
-        if ".git" in lock.parts or lock.parent == DIMOS_PROJECT_ROOT:
-            continue
         # Topsun leftover nav_stack flakes are not in the official DimOS
         # native-module set and keep historical pins (not relocked with #4187).
         if rel.parts[:3] == ("dimos", "navigation", "nav_stack"):
+            continue
+        if not lock.is_file():
             continue
         rev = _root_input(lock, input_name)
         if rev:
