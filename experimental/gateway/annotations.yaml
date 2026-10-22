@@ -77,6 +77,15 @@ robots:
         unitree-go2-agentic-ollama:
           title: Go2 agent (Ollama model)
           description: The Go2 agent with a local language model served by Ollama.
+        unitree-go2-agentic-deepseek:
+          title: Go2 agent (DeepSeek)
+          description: The Go2 agent with DeepSeek V4 Pro over the OpenAI-compatible API.
+        unitree-go2-agentic-qwen-mlx:
+          title: Go2 agent (local Qwen MLX)
+          description: The Go2 agent with a local Qwen model served by an MLX OpenAI-compatible server.
+        unitree-go2-qwen-follow:
+          title: Go2 follow-me (Qwen VL)
+          description: The Go2 agent with DashScope Qwen VL and a ReID follow-me skill.
         unitree-go2-cockpit:
           title: Go2 with a cockpit
           description: 'Map and navigation with an authored cockpit: video over the 3D voxel map.'
@@ -257,6 +266,25 @@ robots:
           title: G1 agent in simulation
           description: 'The G1 agent against a simulated G1: no robot needed.'
           recommended_config: []
+        unitree-g1-agentic-deepseek:
+          title: G1 agent (DeepSeek)
+          description: The G1 agent with DeepSeek V4 Pro over the OpenAI-compatible API.
+        unitree-g1-agentic-sim-deepseek:
+          title: G1 agent in simulation (DeepSeek)
+          description: 'The G1 agent against a simulated G1, using DeepSeek V4 Pro: no robot needed.'
+          recommended_config: []
+        unitree-g1-greeter:
+          title: G1 greeter
+          description: A laptop-friendly G1 greeter with fixed spoken templates (no walking, no sensors).
+        unitree-g1-greeter-hands-free:
+          title: G1 greeter (hands-free)
+          description: The G1 greeter with VAD voice input and fixed spoken templates.
+        unitree-g1-greeter-onboard:
+          title: G1 greeter onboard
+          description: Onboard G1 navigation plus the greeter stack over DDS (no WebRTC).
+        unitree-g1-greeter-voice:
+          title: G1 greeter (push-to-talk)
+          description: The G1 greeter with Enter-to-record voice input and fixed spoken templates.
         unitree-g1-sim:
           title: G1 perception in simulation
           description: G1 perception and memory against a simulated G1.
@@ -287,6 +315,13 @@ robots:
         unitree-g1-nav-simple:
           title: G1 simple navigation
           description: Onboard sensors, a ray-traced costmap and A* replanning (needs the Unitree SDK).
+        unitree-g1-nav-onboard:
+          title: G1 onboard navigation
+          description: Fast-LIO2, the nav stack and MovementManager over the G1 DDS high-level SDK.
+        unitree-g1-nav-sim:
+          title: G1 navigation in simulation
+          description: The G1 nav stack against a simulated G1. No robot needed.
+          recommended_config: []
         unitree-g1-primitive-no-nav:
           title: G1 primitive (building block)
           description: The minimal G1 stack without navigation that bigger G1 blueprints build on.
