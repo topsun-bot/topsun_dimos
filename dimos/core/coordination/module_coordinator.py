@@ -45,10 +45,11 @@ from dimos.core.stream import Transport
 from dimos.core.transport import (
     LCMTransport,
     PubSubTransport,
+    ZenohTransport,
     pLCMTransport,
     pZenohTransport,
 )
-from dimos.core.transport_factory import make_transport
+from dimos.core.transport_factory import make_transport, zenoh_prefix
 from dimos.spec.utils import is_spec, spec_annotation_compliance, spec_structural_compliance
 from dimos.utils.generic import short_id
 from dimos.utils.logging_config import setup_logger
@@ -134,8 +135,8 @@ class ModuleCoordinator(Resource):
 
     def start_rpc_service(self, *, name: str | None = None) -> None:
         """Expose the coordinator's API as RPC methods under an optional name."""
-        if not self._global_config.serve_coordinator_rpc:
-            # Deliberate: the name is bus-wide, and this stack shares the bus with
+        if name is None and not self._global_config.serve_coordinator_rpc:
+            # Deliberate: the default name is bus-wide, and this stack shares the bus with
             # one that owns it. Costs remote introspection of THIS stack, nothing else.
             logger.info("serve_coordinator_rpc is off; not claiming the Coordinator name")
             return
@@ -411,7 +412,8 @@ class ModuleCoordinator(Resource):
         blueprint: Blueprint,
         parsed_config: ParsedBlueprintConfig | None = None,
         *,
-        remote_module_refs: Mapping[tuple[str, str], tuple[type[ModuleBase], str]] | None = None,
+        remote_module_refs: Mapping[tuple[str, str], tuple[type[ModuleBase] | frozenset[str], str]]
+        | None = None,
     ) -> ModuleCoordinator:
         """Build a blueprint from its pinned values or an exact parsed config.
 
@@ -429,7 +431,7 @@ class ModuleCoordinator(Resource):
 
         _run_configurators(blueprint)
         _check_requirements(blueprint)
-        _verify_no_name_conflicts(blueprint)
+        verify_no_name_conflicts(blueprint)
 
         logger.info("Starting the modules")
         coordinator = cls(g=global_config)
@@ -448,7 +450,6 @@ class ModuleCoordinator(Resource):
                 coordinator,
                 remote_module_refs=remote_ref_proxies,
             )
-
             t2 = time.perf_counter()
             coordinator.build_all_modules()
             t3 = time.perf_counter()
@@ -476,13 +477,17 @@ class ModuleCoordinator(Resource):
 
     def _create_remote_module_ref_clients(
         self,
-        targets: Mapping[tuple[str, str], tuple[type[ModuleBase], str]],
+        targets: Mapping[tuple[str, str], tuple[type[ModuleBase] | frozenset[str], str]],
     ) -> dict[tuple[str, str], RPCClient]:
+        """A client per target: the provider's class, or just its rpc names to keep it unimported."""
         from dimos.core.rpc_client import RPCClient
 
         clients: dict[tuple[str, str], RPCClient] = {}
-        for key, (module_type, rpc_name) in targets.items():
-            client = RPCClient.remote(module_type, remote_name=rpc_name)
+        for key, (provider, rpc_name) in targets.items():
+            if isinstance(provider, type):
+                client = RPCClient.remote(provider, remote_name=rpc_name)
+            else:
+                client = RPCClient(None, None, rpc_name, provider)
             self._remote_module_ref_clients.append(client)
             clients[key] = client
         return clients
@@ -526,7 +531,7 @@ class ModuleCoordinator(Resource):
 
         _run_configurators(blueprint)
         _check_requirements(blueprint)
-        _verify_no_name_conflicts(blueprint)
+        verify_no_name_conflicts(blueprint)
         _verify_no_conflicts_with_existing(blueprint, self._transport_registry)
 
         # Reject duplicate modules.
@@ -886,15 +891,38 @@ def _get_transport_for(blueprint: Blueprint, name: str, stream_type: type) -> Pu
 
 
 def _coerce_transport_to_backend(transport: Transport[Any]) -> Transport[Any]:
-    """Leave authored transports on the backend they were declared with.
+    """Leave authored LCM/Zenoh pins on the declared backend; rescope zenoh into the run.
 
-    Blueprints pin specific channels in their `transport_map` with e.g. `LCMTransport.spec(
-    "/cmd_vel", Twist)`. So the global transport switch reaches those too, rebuild the plain
-    LCM<->Zenoh pair via the factory when it doesn't match `global_config.transport`. Deliberate
-    non-default choices (`JpegLcmTransport`, ROS, DDS, WebRTC, ...) are exact-type-checked
-    out and left untouched.
+    Explicit ``transport_map`` entries (G1/Go2 hardware LCM bridges, CLI pickled
+    channels, ...) must not flip LCM<->Zenoh when ``global_config.transport``
+    changes. Unmapped streams still go through ``make_transport()``. A hosted
+    run with ``zenoh_domain`` still keeps every plain zenoh transport inside
+    ``dimos-domains/<domain>/``. Non-LCM/Zenoh transports (Jpeg, ROS, DDS,
+    WebRTC) stay untouched.
     """
-    return transport
+    prefix = zenoh_prefix(global_config)
+    is_pickled = type(transport) in (pLCMTransport, pZenohTransport)
+    is_lcm = type(transport) in (LCMTransport, pLCMTransport)
+    is_zenoh = type(transport) in (ZenohTransport, pZenohTransport)
+    if not isinstance(transport, PubSubTransport) or not (is_lcm or is_zenoh):
+        return transport
+    if is_pickled:
+        raw, msg_type = transport.topic, None
+    else:
+        raw, msg_type = transport.topic.topic, transport.topic.lcm_type
+    # A run with a zenoh domain keeps every plain zenoh transport inside it.
+    outside = (
+        global_config.transport == "zenoh"
+        and is_zenoh
+        and bool(global_config.zenoh_domain)
+        and not raw.startswith(prefix)
+    )
+    if not outside:
+        return transport
+
+    # Strip the zenoh namespace back to the logical name; the factory re-applies the right one.
+    logical = next((raw[len(p) :] for p in (prefix, "dimos/") if raw.startswith(p)), raw)
+    return make_transport(logical, msg_type)
 
 
 def _materialize_transports(
@@ -971,7 +999,7 @@ def _resolve_blueprint_config(
     )
 
 
-def _verify_no_name_conflicts(blueprint: Blueprint) -> None:
+def verify_no_name_conflicts(blueprint: Blueprint) -> None:
     name_to_types: dict[Any, set[type]] = defaultdict(set)
     name_to_modules: dict[Any, list[tuple[type, type]]] = defaultdict(list)
 
@@ -1114,6 +1142,24 @@ def _namespace_levels(consumer_namespace: str) -> list[str]:
         namespace = _atom_namespace(namespace)
     levels.append("")
     return levels
+
+
+def resolve_module_refs(blueprint: Blueprint) -> dict[tuple[str, str], str]:
+    """Each (consumer, ref) an active atom of ``blueprint`` provides, as the coordinator wires it."""
+    disabled = set(blueprint.disabled_modules_tuple)
+    resolved: dict[tuple[str, str], str] = {}
+    for consumer in blueprint.active_blueprints:
+        for reference in consumer.module_refs:
+            replacement = blueprint.remapping_map.get((consumer.name, reference.name))
+            spec = (
+                replacement
+                if is_module_type(replacement) or is_spec(replacement)
+                else reference.spec
+            )
+            provider = _resolve_single_ref(consumer, reference, spec, blueprint, disabled)
+            if isinstance(provider, str):
+                resolved[consumer.name, reference.name] = provider
+    return resolved
 
 
 def _resolve_single_ref(
