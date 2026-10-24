@@ -156,6 +156,46 @@ def test_lcm_per_point_timing_round_trip() -> None:
     np.testing.assert_array_equal(decoded_lines, lines)
 
 
+def test_lcm_decode_maps_ros_time_and_ring() -> None:
+    """The L1's ROS-style `time` (f32 s) and `ring` (u16) land on offset_times and lines."""
+    from dimos_lcm.sensor_msgs.PointCloud2 import PointCloud2 as LCMPointCloud2
+    from dimos_lcm.sensor_msgs.PointField import PointField
+
+    layout = np.dtype(
+        {
+            "names": ["x", "y", "z", "intensity", "ring", "time"],
+            "formats": ["<f4", "<f4", "<f4", "<f4", "<u2", "<f4"],
+            "offsets": [0, 4, 8, 12, 16, 18],
+            "itemsize": 24,
+        }
+    )
+    arr = np.zeros(3, layout)
+    arr["x"] = [1.0, 2.0, 3.0]
+    arr["ring"] = 1
+    arr["time"] = [0.0, 0.031, 0.0625]
+    kinds = {"<f4": PointField.FLOAT32, "<u2": PointField.UINT16}
+    msg = LCMPointCloud2()
+    msg.header.frame_id = "utlidar_lidar"
+    msg.header.stamp.sec = 100
+    msg.height, msg.width, msg.point_step = 1, 3, 24
+    msg.row_step = 72
+    msg.fields = [
+        PointField(
+            name=n, offset=layout.fields[n][1], datatype=kinds[layout.fields[n][0].str], count=1
+        )
+        for n in layout.names
+    ]
+    msg.fields_length = len(msg.fields)
+    msg.data = arr.tobytes()
+    msg.data_length = len(msg.data)
+
+    cloud = PointCloud2.lcm_decode(msg.lcm_encode())
+
+    np.testing.assert_array_equal(cloud.offset_times_u32(), [0, 31_000_000, 62_500_000])
+    np.testing.assert_array_equal(cloud.lines_u8(), [1, 1, 1])
+    np.testing.assert_allclose(cloud.as_numpy()[0][:, 0], [1.0, 2.0, 3.0])
+
+
 def test_bounding_box_intersects() -> None:
     """Test bounding_box_intersects method with various scenarios."""
     # Test 1: Overlapping boxes
@@ -255,3 +295,21 @@ def test_to_rerun_keeps_the_clouds_own_rgb() -> None:
     ramp = cloud.to_rerun(mode="points", rgb=False)
     assert ramp.colors is None
     assert ramp.class_ids is not None
+
+
+def test_seq_round_trips_through_lcm_with_and_without_intensity_and_empty() -> None:
+    seq = (3 << 16) | 5
+    pts = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+    plain = PointCloud2.from_numpy(pts, frame_id="odom", timestamp=1.0)
+    with_intensity = PointCloud2.from_numpy(
+        pts, frame_id="odom", timestamp=1.0, intensities=np.array([0.5, 0.7], dtype=np.float32)
+    )
+    empty = PointCloud2.from_numpy(
+        np.zeros((0, 3), dtype=np.float32), frame_id="odom", timestamp=1.0
+    )
+    for cloud in (plain, with_intensity, empty):
+        cloud.seq = seq
+        decoded = PointCloud2.lcm_decode(cloud.lcm_encode())
+        assert decoded.seq == seq
+        assert len(decoded) == len(cloud)
+    assert PointCloud2.lcm_decode(PointCloud2.from_numpy(pts, timestamp=1.0).lcm_encode()).seq == 0

@@ -22,14 +22,18 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
-from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.global_config import global_config
 from dimos.mapping.costmapper import CostMapper
 from dimos.mapping.voxels.module import VoxelGridMapper
-from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
+from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import (
+    rerun_config,
+    unitree_go2_basic,
+)
+from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -74,7 +78,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["rerun", "rerun-web", "foxglove", "none"],
         default=None,
-        help="Visualization backend (default: GlobalConfig / none)",
+        help=(
+            "Visualization backend. rerun-web keeps GlobalConfig.viewer=rerun and "
+            "sets RerunBridgeModule.rerun_web (default: GlobalConfig / none)"
+        ),
     )
     parser.add_argument(
         "--visualnav-root",
@@ -135,25 +142,51 @@ def parse_nav_go2_config(argv: list[str] | None = None) -> NavGo2RunConfig:
     )
 
 
-def _apply_viewer_cli(viewer: str) -> None:
-    """Map legacy ``rerun-web`` to GlobalConfig viewer + rerun_web."""
-    if viewer == "rerun-web":
-        global_config.viewer = "rerun"
-        global_config.rerun_web = True
-    else:
-        global_config.viewer = viewer
+class NavGo2Viewer:
+    """Maps this example's ``--viewer`` flag onto GlobalConfig and the Rerun bridge.
+
+    ``GlobalConfig.viewer`` is only ``rerun`` or ``none``. The web viewer is
+    ``RerunBridgeModule.rerun_web``, which ``unitree_go2_basic`` does not set.
+    Later-wins overlay keeps the Go2 visual overrides already on that atom.
+    """
+
+    @staticmethod
+    def apply_global(viewer: str) -> None:
+        global_config.viewer = "rerun" if viewer == "rerun-web" else viewer
+
+    @staticmethod
+    def overlay_blueprint(blueprint: Blueprint, viewer: str | None) -> Blueprint:
+        if viewer != "rerun-web":
+            return blueprint
+        return autoconnect(
+            blueprint,
+            RerunBridgeModule.blueprint(
+                **NavGo2Viewer._composed_rerun_kwargs(blueprint),
+                rerun_web=True,
+            ),
+        )
+
+    @staticmethod
+    def _composed_rerun_kwargs(blueprint: Blueprint) -> dict[str, Any]:
+        for atom in blueprint.blueprints:
+            if atom.module is RerunBridgeModule:
+                return dict(atom.kwargs)
+        return dict(rerun_config)
 
 
-def _build_blueprint(config: NavGo2RunConfig):
+def _build_blueprint(config: NavGo2RunConfig) -> Blueprint:
     """Compose stack from ``waypoint_selection`` in nomad config."""
     if config.mode == "record":
-        return autoconnect(
-            unitree_go2_basic,
-            RecordImageModule.blueprint(output_dir=config.record_output_dir),
-        ).global_config(
-            n_workers=3,
-            robot_model="unitree_go2",
-            robot_ip=config.robot_ip,
+        return NavGo2Viewer.overlay_blueprint(
+            autoconnect(
+                unitree_go2_basic,
+                RecordImageModule.blueprint(output_dir=config.record_output_dir),
+            ).global_config(
+                n_workers=3,
+                robot_model="unitree_go2",
+                robot_ip=config.robot_ip,
+            ),
+            config.viewer,
         )
 
     follower_config = WaypointFollowerConfig.load_default()
@@ -186,16 +219,19 @@ def _build_blueprint(config: NavGo2RunConfig):
         ]
     )
     n_workers = 6 if config.nomad_config.waypoint_selection == "navigation_map" else 4
-    return autoconnect(*modules).global_config(
-        n_workers=n_workers,
-        robot_model="unitree_go2",
-        robot_ip=config.robot_ip,
+    return NavGo2Viewer.overlay_blueprint(
+        autoconnect(*modules).global_config(
+            n_workers=n_workers,
+            robot_model="unitree_go2",
+            robot_ip=config.robot_ip,
+        ),
+        config.viewer,
     )
 
 
 def run(config: NavGo2RunConfig) -> None:
     if config.viewer:
-        _apply_viewer_cli(config.viewer)
+        NavGo2Viewer.apply_global(config.viewer)
 
     blueprint = _build_blueprint(config)
     ModuleCoordinator.build(blueprint).loop()

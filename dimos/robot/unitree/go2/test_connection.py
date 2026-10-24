@@ -19,15 +19,23 @@ dimos/robot/unitree/test_connection.py; this pins the go2-local routing.
 """
 
 from collections.abc import Callable, Iterator
-from types import SimpleNamespace
+import json
+from pathlib import Path
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
+from pytest_mock import MockerFixture
+from reactivex import Subject
 
+from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.robot.unitree.go2 import connection as go2_conn
 from dimos.robot.unitree.go2.connection import ConnectionConfig, GO2Connection
+from dimos.simulation.mujoco.config import MujocoConfig
 
 
 @pytest.fixture
@@ -41,11 +49,7 @@ def stub_webrtc(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 def test_make_connection_webrtc_forwards_aes_128_key(stub_webrtc: MagicMock) -> None:
     """Webrtc branch forwards aes_128_key plus CN-cloud region/timeout kwargs."""
-    cfg = SimpleNamespace(
-        unitree_connection_type="webrtc",
-        unitree_cloud_region="global",
-        unitree_webrtc_connect_timeout_sec=30.0,
-    )
+    cfg = ConnectionConfig(g=GlobalConfig())
     go2_conn.make_connection("192.168.123.161", cfg, aes_128_key="cafe" * 8)
     stub_webrtc.assert_called_once_with(
         "192.168.123.161",
@@ -57,10 +61,108 @@ def test_make_connection_webrtc_forwards_aes_128_key(stub_webrtc: MagicMock) -> 
     )
 
 
-def test_connection_config_aes_key_defaults_from_global_config() -> None:
-    """ConnectionConfig.aes_128_key defaults from GlobalConfig.unitree_aes_128_key."""
-    g = GlobalConfig(robot_ip="127.0.0.1", unitree_aes_128_key="dd" * 16)
-    assert ConnectionConfig(g=g).aes_128_key == "dd" * 16
+def test_scoped_connection_settings_resolve_sources_and_nested_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "robot.json"
+    path.write_text(
+        json.dumps({"go2connection": {"mujoco": {"room": "custom", "steps_per_frame": 4}}})
+    )
+    parsed = BlueprintConfigParser(
+        GO2Connection.blueprint(obstacle_avoidance=False, mujoco={"shadows": "off"})
+    ).parse(
+        ["--go2connection.mujoco.steps-per-frame", "9", "--go2connection.dimsim.headless=false"],
+        config_path=path,
+        environ={
+            "GO2CONNECTION__AES_128_KEY": "test-aes-key",
+            "GO2CONNECTION__MUJOCO__STEPS_PER_FRAME": "6",
+            "GO2CONNECTION__MUJOCO__START_POS": "[2.5, -3]",
+        },
+    )
+    config = ConnectionConfig(**parsed.module_kwargs("go2connection"))
+
+    assert config.mujoco == MujocoConfig(
+        room="custom", steps_per_frame=9, start_pos=(2.5, -3), shadows="off"
+    )
+    assert config.dimsim.headless is False
+    assert config.aes_128_key == "test-aes-key"
+    assert config.obstacle_avoidance is False
+    assert "obstacle_avoidance" not in parsed.global_config_values()
+
+
+def test_make_connection_replay_forwards_exit_on_complete() -> None:
+    """--go2connection.replay-exit reaches ReplayConnection (the lazy `replay` opens no DB)."""
+    conn = go2_conn.make_connection(
+        None, ConnectionConfig(g=GlobalConfig(replay=True), replay_exit=True)
+    )
+    assert isinstance(conn, go2_conn.ReplayConnection)
+    assert conn._exit_on_complete is True
+    conn = go2_conn.make_connection("replay", ConnectionConfig(g=GlobalConfig(replay=True)))
+    assert isinstance(conn, go2_conn.ReplayConnection)
+    assert conn._exit_on_complete is False
+
+
+def test_replay_exit_fires_after_the_last_stream_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shutdown is requested exactly once, when every subscribed stream ends."""
+    conn = go2_conn.ReplayConnection(exit_on_complete=True)
+    fired = threading.Event()
+    monkeypatch.setattr(conn, "_request_shutdown", fired.set)
+
+    first: Subject[int] = Subject()
+    second: Subject[int] = Subject()
+    conn._tracked(first).subscribe()
+    conn._tracked(second).subscribe()
+    conn.seal_subscriptions()
+
+    first.on_completed()
+    assert not fired.wait(0.1)
+    second.on_completed()
+    assert fired.wait(2)
+
+
+def test_replay_exit_waits_for_the_seal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stream completing before the next one subscribes must not fire.
+
+    Subscriptions register one at a time, so a synchronously-completing first
+    stream briefly matches the counters (1/1); only the seal says the set is
+    complete.
+    """
+    conn = go2_conn.ReplayConnection(exit_on_complete=True)
+    fired = threading.Event()
+    monkeypatch.setattr(conn, "_request_shutdown", fired.set)
+
+    first: Subject[int] = Subject()
+    conn._tracked(first).subscribe()
+    first.on_completed()  # counters now 1/1 with more subscriptions to come
+    assert not fired.wait(0.1)
+
+    second: Subject[int] = Subject()
+    conn._tracked(second).subscribe()
+    conn.seal_subscriptions()
+    assert not fired.wait(0.1)
+
+    second.on_completed()
+    assert fired.wait(2)
+
+
+def test_replay_exit_fires_at_the_seal_when_already_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = go2_conn.ReplayConnection(exit_on_complete=True)
+    fired = threading.Event()
+    monkeypatch.setattr(conn, "_request_shutdown", fired.set)
+
+    only: Subject[int] = Subject()
+    conn._tracked(only).subscribe()
+    only.on_completed()
+    conn.seal_subscriptions()
+    assert fired.wait(2)
+
+
+def test_replay_exit_off_leaves_streams_untouched() -> None:
+    source: Subject[int] = Subject()
+    conn = go2_conn.ReplayConnection()
+    assert conn._tracked(source) is source
 
 
 def test_odom_to_tf_unprefixed_by_default() -> None:
@@ -110,6 +212,33 @@ def test_publish_tf_on_by_default(connection: Callable[[bool], GO2Connection]) -
     conn._publish_tf(PoseStamped(ts=1.0, frame_id="ignored"))
     assert conn.tf.publish.call_count == 1
     assert conn.odom.publish.call_count == 1
+
+
+class _StopLoopError(Exception):
+    pass
+
+
+def test_camera_info_is_restamped_on_each_publish(
+    connection: Callable[[bool], GO2Connection], mocker: MockerFixture
+) -> None:
+    """A frozen stamp collapses a recording's camera_info onto one instant before the run."""
+    conn = connection(publish_tf=True)
+    conn.camera_info = MagicMock()
+    conn.camera_info_static = CameraInfo(frame_id="camera_optical", ts=1.0)
+
+    def sleep(_seconds: float) -> None:
+        if conn.camera_info.publish.call_count >= 2:
+            raise _StopLoopError
+
+    mocker.patch.object(go2_conn.time, "sleep", side_effect=sleep)
+    before = time.time()
+    with pytest.raises(_StopLoopError):
+        conn.publish_camera_info()
+
+    published = [call.args[0] for call in conn.camera_info.publish.call_args_list]
+    assert [info.ts >= before for info in published] == [True, True]
+    assert [info.frame_id for info in published] == [conn.camera_info_static.frame_id] * 2
+    assert conn.camera_info_static.ts == 1.0
 
 
 def test_odom_to_tf_prefixed() -> None:

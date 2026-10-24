@@ -15,12 +15,10 @@
 """Unit tests for UnitreeWebRTCConnection.
 
 Pure-Python test suite with no hardware or network. Covers connect() error propagation,
-aes_128_key forwarding, CN-cloud region kwargs, and the UNITREE_AES_128_KEY env var
-via GlobalConfig.
+aes_128_key forwarding, and CN-cloud region kwargs.
 """
 
 import json
-from pathlib import Path
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, call
 
@@ -28,7 +26,6 @@ import pytest
 from unitree_webrtc_connect.constants import DATA_CHANNEL_TYPE, RTC_TOPIC, SPORT_CMD
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
-from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.robot.unitree import connection as conn_mod
@@ -163,12 +160,6 @@ def test_empty_string_key_forwarded_as_falsy(stub_legion: MagicMock) -> None:
     assert not _aes_kwarg(stub_legion)
 
 
-def test_global_config_reads_unitree_aes_128_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The key enters via GlobalConfig, read from the UNITREE_AES_128_KEY env var."""
-    monkeypatch.setenv("UNITREE_AES_128_KEY", "ee" * 16)
-    assert GlobalConfig().unitree_aes_128_key == "ee" * 16
-
-
 def test_normalize_unitree_aes_key_accepts_32_hex() -> None:
     assert (
         conn_mod._normalize_unitree_aes_key("ABCDEF0123456789ABCDEF0123456789")
@@ -238,20 +229,6 @@ def test_legion_connection_kwargs_reject_configured_key_when_package_is_too_old(
             "global",
             "Go2",
         )
-
-
-def test_global_config_reads_unitree_aes_128_key_dotenv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("UNITREE_AES_128_KEY", raising=False)
-    monkeypatch.delenv("UNITREE_AES_KEY", raising=False)
-    monkeypatch.delenv("DIMOS_UNITREE_WEBRTC_AES_KEY", raising=False)
-    (tmp_path / ".env").write_text(f"UNITREE_AES_128_KEY={'ab' * 16}\n")
-
-    config = GlobalConfig()
-
-    assert config.unitree_aes_128_key == "ab" * 16
 
 
 def test_region_and_device_type_forwarded_with_key(stub_legion: MagicMock) -> None:

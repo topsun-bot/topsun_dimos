@@ -18,7 +18,9 @@ Generic: walks the store's streams and logs every observation whose payload
 implements ``to_rerun()`` (the :class:`RerunConvertible` convention). Streams
 whose payload has no ``to_rerun`` are skipped. Each stream becomes an entity
 path; observations share one ``time`` timeline (relative to the store's earliest
-observation, so streams stay aligned). Writes a ``.rrd`` and opens the viewer.
+observation, so streams stay aligned). CameraInfo streams are the exception:
+logged once as a Pinhole on their matching image entity (see
+:func:`_pair_camera_infos`). Writes a ``.rrd`` and opens the viewer.
 """
 
 from __future__ import annotations
@@ -26,10 +28,76 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dimos.memory.store.base import Store
+    from dimos.memory.stream import Stream
+    from dimos.memory.type.observation import Observation
+    from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+
+
+def _pair_camera_infos(
+    renderable: list[tuple[str, Stream[Any], Observation[Any]]],
+) -> tuple[dict[str, tuple[CameraInfo, str]], set[str]]:
+    """Match each CameraInfo stream to the Image stream(s) it calibrates.
+
+    Pairs by ``frame_id``, falling back to the only image stream when the store
+    has one of each; the image's frame_id wins as the pinhole's parent frame.
+    Returns (image stream -> (CameraInfo, parent frame), paired stream names).
+    """
+    from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+    from dimos.msgs.sensor_msgs.Image import Image
+
+    infos = [(n, f.data) for n, _, f in renderable if isinstance(f.data, CameraInfo)]
+    images = [(n, f.data) for n, _, f in renderable if isinstance(f.data, Image)]
+
+    pinholes: dict[str, tuple[CameraInfo, str]] = {}
+    paired: set[str] = set()
+    for info_name, info in infos:
+        targets = [(n, img) for n, img in images if img.frame_id and img.frame_id == info.frame_id]
+        if not targets and len(infos) == 1 and len(images) == 1:
+            targets = [images[0]]
+            print(
+                f"  {info_name}: frame_id {info.frame_id!r} matches no image stream, "
+                f"pairing with {targets[0][0]!r} as the only image stream"
+            )
+        if not targets:
+            print(f"  {info_name}: no image stream matches frame_id {info.frame_id!r}")
+            continue
+        for target, img in targets:
+            pinholes[target] = (info, img.frame_id or info.frame_id)
+        paired.add(info_name)
+    return pinholes, paired
+
+
+def _frame_first_seen(
+    renderable: list[tuple[str, Stream[Any], Observation[Any]]], frames: set[str]
+) -> dict[str, float]:
+    """ts of the first tf observation that defines each frame in ``frames``.
+
+    A Pinhole parented to a tf frame resolves at the origin until that frame
+    exists, so it must be logged when its own frame first appears, not at the
+    first tf message overall (which may be an unrelated or static edge).
+    Scans each tf stream only until every frame is found.
+    """
+    from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+
+    seen: dict[str, float] = {}
+    for _, stream, first in renderable:
+        if not isinstance(first.data, TFMessage):
+            continue
+        missing = set(frames)
+        for obs in stream:
+            if not missing:
+                break
+            if obs.data is None:
+                continue
+            for t in obs.data.transforms:
+                if t.child_frame_id in missing:
+                    missing.discard(t.child_frame_id)
+                    seen[t.child_frame_id] = min(obs.ts, seen.get(t.child_frame_id, obs.ts))
+    return seen
 
 
 def _open_viewer(rrd: str) -> None:
@@ -58,7 +126,11 @@ def render_store(
     """
     import rerun as rr
 
+    from dimos.core.introspection.utils import GROUP_COLORS
     from dimos.memory.utils.progress import progress
+    from dimos.msgs.nav_msgs.Path import Path as NavPath
+    from dimos.msgs.shape_msgs.TriangleMesh import TriangleMesh
+    from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
     from dimos.visualization.rerun.init import rerun_init
 
     if out is None:
@@ -74,8 +146,7 @@ def render_store(
         return base if name == base.rsplit("/", 1)[-1] else f"{base}/{name}"
 
     # Discover renderable streams (payload has a working to_rerun) + shared anchor.
-    renderable = []
-    t0: float | None = None
+    renderable: list[tuple[str, Stream[Any], Observation[Any]]] = []
     for name in store.list_streams():
         stream = store.streams[name]
         try:
@@ -91,17 +162,49 @@ def render_store(
         except Exception as e:
             print(f"  skip {name}: to_rerun() failed ({e})")
             continue
-        renderable.append((name, stream))
-        t0 = first.ts if t0 is None else min(t0, first.ts)
+        renderable.append((name, stream, first))
 
+    # Paired camera_info streams are logged once below; keep their stale ts out of t0.
+    pinholes, paired = _pair_camera_infos(renderable)
+    renderable = [entry for entry in renderable if entry[0] not in paired]
+
+    t0 = min((first.ts for _, _, first in renderable), default=None)
     if t0 is None:
         print("nothing renderable in this store")
         return out
 
+    # Log each pinhole when its own parent frame first appears in tf: before
+    # that the frame is undefined and the pinhole would sit at the origin.
+    # Static only when the store has no tf at all.
+    has_tf = any(isinstance(f.data, TFMessage) for _, _, f in renderable)
+    frame_at = _frame_first_seen(renderable, {frame for _, frame in pinholes.values()})
+
     rerun_init("dimos mem rerun")
     rr.save(out)
 
-    for name, stream in renderable:
+    for image_name, (info, frame) in pinholes.items():
+        pinhole = info.to_rerun_pinhole(optical_frame=frame)
+        at = frame_at.get(frame)
+        if not has_tf:
+            rr.log(entity(image_name), pinhole, static=True)
+            print(f"  {image_name}: pinhole from camera_info (frame {frame!r}, static: no tf)")
+        elif at is None:
+            print(f"  {image_name}: pinhole skipped, frame {frame!r} never appears in tf")
+        elif seconds is not None and at - t0 > seconds:
+            print(
+                f"  {image_name}: pinhole skipped, frame {frame!r} first appears after the window"
+            )
+        else:
+            rr.set_time("time", duration=at - t0)
+            rr.log(entity(image_name), pinhole)
+            print(f"  {image_name}: pinhole from camera_info (frame {frame!r} at +{at - t0:.2f}s)")
+
+    tf_tree = TfFrameTree()
+    mesh_colours: Any = None
+    path_colours: dict[str, tuple[int, int, int]] = {}
+    for name, stream, _ in renderable:
+        path = entity(name)
+        attached: str | None = None
         with progress(stream.count(), label=name) as report:
             for obs in stream:
                 if seconds is not None and obs.ts - t0 > seconds:
@@ -110,13 +213,44 @@ def render_store(
                     report(obs)
                     continue
                 rr.set_time("time", duration=obs.ts - t0)
-                data = obs.data.to_rerun()
-                path = entity(name)
+                if isinstance(obs.data, TFMessage):  # absolute tf paths, like the bridge
+                    for tf_path, arch in obs.data.to_rerun(tf_tree):
+                        rr.log(tf_path, arch)
+                    report(obs)
+                    continue
+                if isinstance(obs.data, TriangleMesh):  # the bridge's mesh theme
+                    if mesh_colours is None:
+                        from dimos.mapping.experimental.mesh import MeshColours
+
+                        mesh_colours = MeshColours()
+                    for entry in mesh_colours(obs.data):
+                        rr.log(entry.path, entry.archetype, static=entry.static)
+                    report(obs)
+                    continue
+                if isinstance(obs.data, NavPath):  # thin, at true height, one colour per stream
+                    # The blueprint graph palette, assigned in stream order so paths stay distinct.
+                    hex_colour = GROUP_COLORS[len(path_colours) % len(GROUP_COLORS)]
+                    colour = path_colours.setdefault(
+                        name,
+                        (
+                            int(hex_colour[1:3], 16),
+                            int(hex_colour[3:5], 16),
+                            int(hex_colour[5:7], 16),
+                        ),
+                    )
+                    data = obs.data.to_rerun(color=colour, z_offset=0.0, radii=0.015)
+                else:
+                    data = obs.data.to_rerun()
                 if isinstance(data, list):  # RerunMulti: [(subpath, archetype), ...]
                     for sub, arch in data:
                         rr.log(f"{path}/{sub}", arch)
                 else:
                     rr.log(path, data)
+                # Pin the entity to its message frame so tf places it, as the bridge does.
+                frame_id = getattr(obs.data, "frame_id", None)
+                if frame_id and frame_id != attached and not isinstance(data, rr.Transform3D):
+                    rr.log(path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))
+                    attached = frame_id
                 report(obs)
 
     rr.rerun_shutdown()  # flush + close the .rrd before opening it

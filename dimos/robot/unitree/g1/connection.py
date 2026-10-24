@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 from reactivex.disposable import Disposable
@@ -22,6 +22,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.robot.unitree.config import connection_type
 from dimos.robot.unitree.connection import UnitreeWebRTCConnection
 from dimos.utils.logging_config import setup_logger
 
@@ -30,9 +31,16 @@ logger = setup_logger()
 
 class G1Config(ModuleConfig):
     ip: str = Field(default_factory=lambda m: m["g"].robot_ip)
-    connection_type: str = Field(default_factory=lambda m: m["g"].unitree_connection_type)
-    # Per-device AES-128 key (G1 fw >=1.5.1); defaults from GlobalConfig.
-    aes_128_key: str | None = Field(default_factory=lambda m: m["g"].unitree_aes_128_key)
+    connection_type: str = Field(
+        default_factory=lambda m: connection_type(
+            replay=m["g"].replay, simulation=m["g"].simulation
+        )
+    )
+    # Per-device AES-128 key (G1 fw >=1.5.1).
+    aes_128_key: str | None = Field(default=None, repr=False)
+    # Topsun: CN vs global Unitree cloud for WebRTC auth.
+    unitree_cloud_region: Literal["cn", "global"] = "global"
+    unitree_webrtc_connect_timeout_sec: float = 30.0
 
 
 class G1ConnectionBase(Module, ABC):
@@ -78,9 +86,9 @@ class G1Connection(G1ConnectionBase):
                 self.connection = UnitreeWebRTCConnection(
                     self.config.ip,
                     aes_128_key=self.config.aes_128_key,
-                    region=self.config.g.unitree_cloud_region,
+                    region=self.config.unitree_cloud_region,
                     device_type="G1",
-                    connect_timeout_sec=self.config.g.unitree_webrtc_connect_timeout_sec,
+                    connect_timeout_sec=self.config.unitree_webrtc_connect_timeout_sec,
                 )
             case "replay":
                 raise ValueError("Replay connection not implemented for G1 robot")

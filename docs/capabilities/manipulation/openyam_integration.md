@@ -9,7 +9,7 @@ arm and its gripper; motor topology is independent of the host operating system.
 The generic Damiao layer selects the native transport provided by
 `can-motor-control>=0.0.8`:
 
-| Host | Default | `--can-port` override |
+| Host | Default | `runtime_config.bus_devices["openyam"]` override |
 |------|---------|-----------------------|
 | Linux | `SocketCanBus("can0")` | SocketCAN interface, such as `can1` |
 | macOS | first `1d50:606f` gs_usb adapter | USB serial number |
@@ -51,27 +51,17 @@ Use the default CAN device:
 dimos run coordinator-openyam
 ```
 
-Select another Linux SocketCAN interface:
+Select a Linux SocketCAN interface or a macOS adapter serial in a blueprint of your own with `openyam_hardware(bus_devices={"openyam": "can1"})`. The device lives in the adapter's `runtime_config`, not in `controlcoordinator.addresses`; see [Hardware configuration](/docs/usage/configuration.md#hardware-configuration).
 
-```bash
-dimos --can-port can1 run coordinator-openyam
-```
-
-Select a macOS adapter by USB serial number:
-
-```bash
-dimos --can-port <USB-SERIAL> run coordinator-openyam
-```
-
-The dual-arm Quest blueprint is identical on both operating systems; only the
+The dual-arm WebXR blueprint is identical on both operating systems; only the
 selector values differ:
 
 ```bash
 # Linux
-dimos run teleop-quest-dual-openyam --left-can-port can0 --right-can-port can1
+dimos run teleop-webxr-dual-openyam --left-can-port can0 --right-can-port can1
 
 # macOS
-dimos run teleop-quest-dual-openyam \
+dimos run teleop-webxr-dual-openyam \
   --left-can-port <LEFT-USB-SERIAL> \
   --right-can-port <RIGHT-USB-SERIAL>
 ```

@@ -12,22 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Stack composition, process management, and shared transport settings.
+
+Module and subsystem settings belong to their owners' configuration classes.
+"""
+
 import os
-from pathlib import Path
-import re
 from typing import Literal, TypeAlias
 
 from pydantic import AliasChoices, Field, ValidationInfo, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from dimos.constants import DEFAULT_BUILD_NATIVE
-from dimos.models.vl.types import VlModelName
-from dimos.visualization.rerun.constants import (
-    RERUN_ENABLE_WEB,
-    RERUN_OPEN_DEFAULT,
-    RerunOpenOption,
-    ViewerBackend,
-)
+from dimos.visualization.rerun.constants import ViewerBackend
 
 TransportBackend: TypeAlias = Literal["lcm", "zenoh"]
 # How one zenoh session joins the network.
@@ -36,21 +33,12 @@ ZenohMode: TypeAlias = Literal["peer", "client", "router"]
 # process can hold, so it is pinned on the one session that owns that port.
 ZenohProcessMode: TypeAlias = Literal["peer", "client"]
 
-
-def _get_all_numbers(s: str) -> list[float]:
-    return [float(x) for x in re.findall(r"-?\d+\.?\d*", s)]
+# pytest: skip developer .env. Prefer DIMOS_PYTEST_RUN_ID (set by dimos/conftest.py).
 
 
 class GlobalConfig(BaseSettings):
     robot_ip: str | None = None
     robot_ips: str | None = None
-    # Per-device AES-128 key for new Unitree firmware (G1 >=1.5.1, Go2 >=1.1.15, data2=3
-    # handshake). Fetch: unitree-fetch-aes-key --email YOU --sn <serial>
-    unitree_aes_128_key: str | None = None
-    xarm7_ip: str | None = None
-    xarm6_ip: str | None = None
-    can_port: str | None = None
-    device_path: str | None = None  # device path for real robot (e.g. /dev/ttyUSB0)
     simulation: str = ""
     replay: bool = False
     replay_db: str = "go2_short"
@@ -58,7 +46,6 @@ class GlobalConfig(BaseSettings):
     record_engine: Literal["python", "rust"] = Field(default="python", validate_default=True)
     record_topics: str = "*"  # comma-separated globs on the topic slug (/a/b -> a_b)
     record_encoding_threads: int | None = Field(default=None, ge=1)
-    new_memory: bool = False
     # How every zenoh session this process opens joins the network.
     zenoh_mode: ZenohProcessMode = "peer"
     # Extra locators every session dials, alongside those derived from --robot-ip.
@@ -76,7 +63,7 @@ class GlobalConfig(BaseSettings):
     zenoh_multicast: bool = True
     # Multicast group scouting joins, e.g. 224.0.0.224:7446. Empty takes zenoh's
     # own. Moving it walks a session onto a private discovery bus, which is how
-    # parallel sessions on one machine stay apart -- LCM_DEFAULT_URL's analog.
+    # parallel sessions on one machine stay apart (LCM_DEFAULT_URL's analog).
     zenoh_scout_addr: str = ""
     # Whether peers propagate the peers they already know over established links.
     # Unlike multicast scouting this reaches nothing new on the LAN, and zenoh
@@ -85,33 +72,18 @@ class GlobalConfig(BaseSettings):
     # Seconds ZenohService.start() blocks for the configured connect endpoints to
     # link before giving up and continuing. 0 disables the wait.
     zenoh_connect_timeout: float = Field(default=1.0, ge=0, le=86400)
+    # Off: share a zenoh bus with a stack that already owns the Coordinator name.
+    serve_coordinator_rpc: bool = True
+    # Isolates this run's zenoh streams under dimos-domains/<name>/; a hosted run pins its run id.
+    zenoh_domain: str = Field(default="", pattern=r"^[A-Za-z0-9_.-]*$")
     viewer: ViewerBackend = "rerun"
-    rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT
-    rerun_web: bool = RERUN_ENABLE_WEB
-    rerun_host: str | None = None
-    rerun_websocket_server_port: int = 3030
-    rerun_save: bool = False
-    rerun_save_dir: str = "~/.local/share/dimos/rrd"
     n_workers: int = 2
-    memory_limit: str = "auto"
-    mujoco_camera_position: str | None = None
-    mujoco_room: str | None = None
-    mujoco_room_from_occupancy: str | None = None
-    mujoco_global_costmap_from_occupancy: str | None = None
-    mujoco_global_map_from_pointcloud: str | None = None
-    mujoco_start_pos: str = "-1.0, 1.0"
-    mujoco_steps_per_frame: int = 7
     scene_package: str | None = None
     robot_model: str | None = None
-    robot_id: str | None = None
+    # Robot geometry shared by every navigation and patrol module in a stack;
+    # a module config may still override it for itself.
     robot_width: float = 0.3
     robot_rotation_diameter: float = 0.6
-    nerf_speed: float = 1.0
-    mcp_port: int = 9990
-    # Seconds an MCP client waits for a tool to answer. A skill that thinks
-    # for longer than this is cut off at the client, not the server, so the
-    # caller owns the number.
-    mcp_timeout: int = 30
     # `DIMOS_TRANSPORT` (or `.env`) is the single switch read by every process
     # (dimos, humancli, agentspy, dtop). The `transport` alias keeps the bare
     # env name and the `--transport` CLI flag (which sets the field by name) working.
@@ -121,25 +93,11 @@ class GlobalConfig(BaseSettings):
     )
     build_native: bool = DEFAULT_BUILD_NATIVE
     dtop: bool = False
-    obstacle_avoidance: bool = True
-    detection_model: VlModelName = "moondream"
     listen_host: str = "127.0.0.1"
-    dimsim_scene: str = "apartment"
-    dimsim_port: int = 8090
-    dimsim_headless: bool = True
     local_relay: bool = False
     relay_url: str | None = None
-    dimos_cloud_url: str = "https://api.dimensional.org"
-    dimos_api_key: str | None = None
-    dimos_upload_codec: str = "lz4"
-    dimos_upload_retries: int = 2
-    dimos_upload_chunk_mb: int | None = None
-    dimos_upload_quiet_s: float = 30.0
-    dimos_http_timeout: float = 60.0
-    dimos_staging_dir: Path | None = None
-    # Topsun: CN vs global Unitree cloud for WebRTC auth.
-    unitree_cloud_region: Literal["cn", "global"] = "global"
-    unitree_webrtc_connect_timeout_sec: float = 30.0
+    """HTTP URL of a relay started elsewhere (e.g. http://localhost:7780); the
+    bridge discovers its WebTransport endpoint through /api/info."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -148,6 +106,32 @@ class GlobalConfig(BaseSettings):
         populate_by_name=True,
         validate_assignment=True,
     )
+
+    @staticmethod
+    def pytest_detected() -> bool:
+        """True inside the pytest runner.
+
+        ``dimos/conftest.py`` exports ``DIMOS_PYTEST_RUN_ID`` before any dimos
+        import. pytest 8.2+ may also set ``PYTEST_VERSION``.
+        """
+        return "DIMOS_PYTEST_RUN_ID" in os.environ or bool(os.environ.get("PYTEST_VERSION"))
+
+    @staticmethod
+    def dotenv_file() -> str | None:
+        return None if GlobalConfig.pytest_detected() else ".env"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        _settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        if cls.pytest_detected():
+            return (init_settings, env_settings, file_secret_settings)
+        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
 
     @field_validator("record_engine")
     @classmethod
@@ -173,31 +157,15 @@ class GlobalConfig(BaseSettings):
             setattr(self, key, value)
 
     @property
-    def unitree_connection_type(self) -> str:
-        if self.replay:
-            return "replay"
-        if self.simulation:
-            return self.simulation
-        return "webrtc"
-
-    @property
-    def mujoco_start_pos_float(self) -> tuple[float, float]:
-        x, y = _get_all_numbers(self.mujoco_start_pos)
-        return (x, y)
-
-    @property
-    def mujoco_camera_position_float(self) -> tuple[float, ...]:
-        if self.mujoco_camera_position is None:
-            return (-0.906, 0.008, 1.101, 4.931, 89.749, -46.378)
-        return tuple(_get_all_numbers(self.mujoco_camera_position))
-
-    @property
     def processed_robot_ips(self) -> tuple[str, ...]:
         ips = [x.strip() for x in (self.robot_ips or "").split(",") if x.strip()]
-        is_running_tests = "PYTEST_CURRENT_TEST" in os.environ
-        if not ips and not is_running_tests:
-            raise ValueError("No robot IPs specified. Must have at least one IP.")
+        if not ips:
+            raise ValueError(
+                "No robot IPs specified. Set ROBOT_IPS or --robot-ips to at least one IP."
+            )
         return tuple(ips)
 
+
+ENV_FILE = GlobalConfig.dotenv_file()
 
 global_config = GlobalConfig()

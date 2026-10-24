@@ -14,16 +14,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from queue import Empty
 from threading import RLock
+from types import SimpleNamespace
 from unittest.mock import MagicMock, create_autospec, patch
 
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.base import BaseMessage
-from langchain_openai import ChatOpenAI
 import pytest
 import requests
 
+from dimos.agents.mcp.constants import DEFAULT_MCP_URL
 from dimos.agents.mcp.mcp_client import McpClient
 
 
@@ -97,6 +99,24 @@ def _mock_session(payload_fn: Callable[[dict[str, object]], dict[str, object]]) 
     session = create_autospec(requests.Session, instance=True, spec_set=True)
     session.post.side_effect = _post
     return session
+
+
+def test_server_url_is_configured_else_the_blueprints_server_else_the_default() -> None:
+    server = SimpleNamespace(mcp_url=lambda: "http://127.0.0.1:9992/mcp")
+    client = McpClient()
+    try:
+        assert client._server_url() == DEFAULT_MCP_URL
+        client._mcp_url = None
+        client._mcp_server = server
+        assert client._server_url() == "http://127.0.0.1:9992/mcp"
+    finally:
+        client.stop()
+    client = McpClient(mcp_server_url="http://configured/mcp")
+    try:
+        client._mcp_server = server
+        assert client._server_url() == "http://configured/mcp"
+    finally:
+        client.stop()
 
 
 @pytest.fixture
@@ -237,10 +257,12 @@ def test_on_system_modules_uses_responses_api_model(
     configured_mcp_client: McpClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Production agents use the Responses API required for Luna tool calls."""
+    from langchain_openai import ChatOpenAI
+
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     configured_mcp_client.config.model = "gpt-5.6-luna"
 
-    with patch("dimos.agents.mcp.mcp_client.create_agent") as create_agent:
+    with patch("langchain.agents.create_agent") as create_agent:
         configured_mcp_client.on_system_modules([])
 
     model = create_agent.call_args.kwargs["model"]
@@ -259,9 +281,33 @@ def test_on_system_modules_resolves_non_reasoning_models(
     resolved_model = MagicMock()
 
     with (
-        patch("dimos.agents.mcp.mcp_client.create_agent"),
-        patch("dimos.agents.mcp.mcp_client.init_chat_model", return_value=resolved_model) as init,
+        patch("langchain.agents.create_agent"),
+        patch("langchain.chat_models.init_chat_model", return_value=resolved_model) as init,
     ):
         configured_mcp_client.on_system_modules([])
 
     init.assert_called_once_with(model=model_name)
+
+
+def test_set_trace_dir_rebuilds_the_model_with_capture(
+    configured_mcp_client: McpClient,
+) -> None:
+    """Evals repoint raw LLM capture per case; the model must be rebuilt so
+    the HTTP hook writes under the new directory. Before the agent exists
+    the path is only stored for the first build."""
+    configured_mcp_client.config.model = "gpt-4o"
+    resolved = MagicMock()
+
+    with (
+        patch("langchain.agents.create_agent") as create_agent,
+        patch("dimos.agents.mcp.mcp_client.init_model", return_value=resolved) as init,
+    ):
+        configured_mcp_client.set_trace_dir("/eval/case/raw")  # no agent yet: stored only
+        assert init.call_count == 0
+
+        configured_mcp_client.on_system_modules([])
+        assert init.call_args.kwargs["trace_dir"] == Path("/eval/case/raw")
+
+        configured_mcp_client.set_trace_dir(None)
+        assert init.call_args.kwargs["trace_dir"] is None
+        assert create_agent.call_count == 2

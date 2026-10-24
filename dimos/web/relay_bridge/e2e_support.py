@@ -120,11 +120,8 @@ class RelayE2E:
         later ``ensure_deno`` skip still runs ``stop``.
         """
         from dimos.core.transport import pLCMTransport
-        from dimos.web.relay_bridge.relay_bridge_module import (
-            RelayBridgeConfig,
-            RelayBridgeModule,
-            default_manifest,
-        )
+        from dimos.web.relay_bridge.config import RelayBridgeConfig, default_manifest
+        from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
 
         RelayE2E.require_deno()
         module: RelayBridgeModule | None = None
@@ -167,11 +164,8 @@ class RelayE2E:
         robot_id: str,
     ) -> Iterator[tuple[RelayProcess, RelayBridgeModule]]:
         """Teleop bridge attached to an already-spawned relay (no child watchdog)."""
-        from dimos.web.relay_bridge.relay_bridge_module import (
-            RelayBridgeConfig,
-            RelayBridgeModule,
-            default_manifest,
-        )
+        from dimos.web.relay_bridge.config import RelayBridgeConfig, default_manifest
+        from dimos.web.relay_bridge.relay_bridge_module import RelayBridgeModule
         from dimos.web.relay_bridge.relay_process import RelayProcess
 
         RelayE2E.require_deno()
@@ -182,7 +176,7 @@ class RelayE2E:
             ready = relay.start()
             manifest = default_manifest(RelayBridgeConfig(), ("tele_cmd_vel",))
             module = RelayBridgeModule(
-                relay_url=ready.wt_url,
+                relay_url=ready.open_url,
                 open_browser=False,
                 web_build=False,
                 robot_id=robot_id,

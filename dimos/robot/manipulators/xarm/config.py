@@ -69,12 +69,21 @@ XARM7_SIM_HOME = [0.0, -0.247, 0.0, 0.909, 0.0, 1.15644, 0.0]
 XARM7_SIM_BASE_POSE = PoseStamped(frame_id="world", position=Vector3(z=0.12))
 
 
-def make_xarm7_sim_robot_config() -> RobotModelConfig:
+def make_xarm7_sim_robot_config(
+    base_pose: PoseStamped | None = None,
+    tf_extra_links: list[str] | None = None,
+) -> RobotModelConfig:
+    """Build the sim planning model.
+
+    Pass ``base_pose`` for a scene that mounts ``link_base`` somewhere other than
+    the pedestal ``data/xarm7`` uses, and ``tf_extra_links`` when a consumer needs
+    more than the tip transform.
+    """
     return make_xarm7_model_config(
         add_gripper=True,
         gripper_hardware_id="arm",
-        base_pose=XARM7_SIM_BASE_POSE,
-        tf_extra_links=["link7"],
+        base_pose=XARM7_SIM_BASE_POSE if base_pose is None else base_pose,
+        tf_extra_links=["link7"] if tf_extra_links is None else tf_extra_links,
         home_joints=XARM7_SIM_HOME,
         pre_grasp_offset=0.05,
     )
@@ -98,7 +107,7 @@ def make_dual_xarm6_model_config() -> RobotModelConfig:
                 "add_gripper_1": "true",
                 "add_gripper_2": "true",
             },
-        ),
+        ).with_default_joint_acceleration_limit(2.0),
         joint_names=canonical_joints,
         base_link="world",
         planning_groups=[
@@ -131,8 +140,9 @@ def make_dual_xarm6_model_config() -> RobotModelConfig:
 
 
 def make_xarm7_sim_hardware(
-    address: str | Path, *, home_joints: list[float] | None = None
+    address: str | Path | None = None, *, home_joints: list[float] | None = None
 ) -> HardwareComponent:
+    """The simulated xArm7; without ``address`` it attaches to the blueprint's MujocoSimModule."""
     selected_home = XARM7_SIM_HOME if home_joints is None else home_joints
     return make_xarm_hardware(
         "arm",
@@ -172,6 +182,7 @@ def make_xarm_hardware(
     adapter_kwargs: dict[str, object] | None = None,
     home_joints: list[float] | None = None,
     canonical_joint_names: list[str] | None = None,
+    mock_without_address: bool = False,
 ) -> HardwareComponent:
     kwargs = _adapter_kwargs(home_joints)
     if adapter_type == "xarm":
@@ -182,13 +193,11 @@ def make_xarm_hardware(
     initial_positions = kwargs.get("initial_positions")
     if gripper and isinstance(initial_positions, list):
         kwargs["initial_positions"] = [*initial_positions, 0.0]
-    limits: JointLimits | None = None
-    if adapter_type == "mock":
-        limits = JointLimits(
-            position_lower=[*([-2 * math.pi] * dof), *([0.0] * len(gripper_joints))],
-            position_upper=[*([2 * math.pi] * dof), *([850.0] * len(gripper_joints))],
-            velocity_max=[*([math.pi] * dof), *([0.0] * len(gripper_joints))],
-        )
+    mock_limits = JointLimits(
+        position_lower=[*([-2 * math.pi] * dof), *([0.0] * len(gripper_joints))],
+        position_upper=[*([2 * math.pi] * dof), *([850.0] * len(gripper_joints))],
+        velocity_max=[*([math.pi] * dof), *([0.0] * len(gripper_joints))],
+    )
     return HardwareComponent(
         hardware_id=hw_id,
         hardware_type=HardwareType.MANIPULATOR,
@@ -196,8 +205,9 @@ def make_xarm_hardware(
         adapter_type=adapter_type,
         address=address,
         auto_enable=auto_enable,
-        limits=limits,
+        limits=mock_limits if adapter_type == "mock" else None,
         adapter_kwargs=kwargs,
+        mock_limits=mock_limits if mock_without_address else None,
     )
 
 
@@ -206,24 +216,16 @@ def xarm7_hardware(
     *,
     gripper: bool = False,
     mock_without_address: bool = False,
+    address: str | None = None,
     home_joints: list[float] | None = None,
     canonical_joint_names: list[str] | None = None,
 ) -> HardwareComponent:
+    """The xArm7; in simulation it attaches to the blueprint's MujocoSimModule."""
     if global_config.simulation:
         return make_xarm_hardware(
             hw_id,
             7,
             adapter_type="sim_mujoco",
-            address=str(XARM7_SIM_PATH),
-            gripper=gripper,
-            home_joints=home_joints,
-            canonical_joint_names=canonical_joint_names,
-        )
-    address = global_config.xarm7_ip
-    if mock_without_address and not address:
-        return make_xarm_hardware(
-            hw_id,
-            7,
             gripper=gripper,
             home_joints=home_joints,
             canonical_joint_names=canonical_joint_names,
@@ -236,6 +238,7 @@ def xarm7_hardware(
         gripper=gripper,
         home_joints=home_joints,
         canonical_joint_names=canonical_joint_names,
+        mock_without_address=mock_without_address,
     )
 
 
@@ -244,24 +247,16 @@ def xarm6_hardware(
     *,
     gripper: bool = False,
     mock_without_address: bool = False,
+    address: str | None = None,
     home_joints: list[float] | None = None,
     canonical_joint_names: list[str] | None = None,
 ) -> HardwareComponent:
+    """The xArm6; in simulation it attaches to the blueprint's MujocoSimModule."""
     if global_config.simulation:
         return make_xarm_hardware(
             hw_id,
             6,
             adapter_type="sim_mujoco",
-            address=str(XARM6_SIM_PATH),
-            gripper=gripper,
-            home_joints=home_joints,
-            canonical_joint_names=canonical_joint_names,
-        )
-    address = global_config.xarm6_ip
-    if mock_without_address and not address:
-        return make_xarm_hardware(
-            hw_id,
-            6,
             gripper=gripper,
             home_joints=home_joints,
             canonical_joint_names=canonical_joint_names,
@@ -274,12 +269,14 @@ def xarm6_hardware(
         gripper=gripper,
         home_joints=home_joints,
         canonical_joint_names=canonical_joint_names,
+        mock_without_address=mock_without_address,
     )
 
 
 def make_xarm_model_config(
     dof: int,
     *,
+    robot_type: str = "xarm",
     prefix: str = "",
     add_gripper: bool = True,
     gripper_hardware_id: str | None = None,
@@ -290,6 +287,7 @@ def make_xarm_model_config(
 ) -> RobotModelConfig:
     xacro_args = {
         "dof": str(dof),
+        "robot_type": robot_type,
         "prefix": prefix,
         "limited": "true",
         "attach_xyz": "0 0 0",
@@ -308,7 +306,7 @@ def make_xarm_model_config(
             XARM_MODEL_PATH,
             package_paths=XARM_PACKAGE_PATHS,
             xacro_args=xacro_args,
-        ),
+        ).with_default_joint_acceleration_limit(2.0),
         base_pose=base_pose if base_pose is not None else PoseStamped(),
         joint_names=model_joint_names,
         base_link=f"{prefix}link_base",
@@ -321,7 +319,9 @@ def make_xarm_model_config(
             )
         ],
         auto_convert_meshes=True,
-        collision_exclusion_pairs=collision_exclusions if add_gripper else [],
+        collision_exclusion_pairs=(
+            collision_exclusions if add_gripper and robot_type == "xarm" else []
+        ),
         gripper_hardware_id=gripper_hardware_id,
         tf_extra_links=[f"{prefix}{link}" for link in (tf_extra_links or [])],
         home_joints=home_joints or [0.0] * dof,
@@ -339,3 +339,31 @@ def make_xarm7_model_config(
     **kwargs: Any,
 ) -> RobotModelConfig:
     return make_xarm_model_config(7, **kwargs)
+
+
+def make_lite6_model_config(
+    **kwargs: Any,
+) -> RobotModelConfig:
+    return make_xarm_model_config(6, robot_type="lite", **kwargs)
+
+
+def lite6_hardware(
+    hw_id: str = "arm",
+    *,
+    gripper: bool = False,
+    mock_without_address: bool = False,
+    address: str | None = None,
+    home_joints: list[float] | None = None,
+    canonical_joint_names: list[str] | None = None,
+) -> HardwareComponent:
+    """Lite 6 speaks the xArm SDK; the adapter detects the model on connect. No sim scene yet."""
+    return make_xarm_hardware(
+        hw_id,
+        6,
+        adapter_type="xarm",
+        address=address,
+        gripper=gripper,
+        home_joints=home_joints,
+        canonical_joint_names=canonical_joint_names,
+        mock_without_address=mock_without_address,
+    )

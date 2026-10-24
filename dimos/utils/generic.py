@@ -15,6 +15,7 @@
 from collections.abc import Callable
 import hashlib
 import json
+import math
 import os
 import socket
 import string
@@ -35,6 +36,13 @@ def get_local_ips() -> list[tuple[str, str]]:
             if addr.family == socket.AF_INET and not addr.address.startswith("127."):
                 results.append((addr.address, iface))
     return results
+
+
+def connect_host(bind_host: str) -> str:
+    """The host a client on this machine dials to reach a server bound to ``bind_host``."""
+    if bind_host in ("0.0.0.0", "::"):
+        return "localhost"
+    return f"[{bind_host}]" if ":" in bind_host else bind_host
 
 
 _T = TypeVar("_T")
@@ -97,6 +105,19 @@ def extract_json_from_llm_response(response: str) -> Any:
             pass
 
     return None
+
+
+def finite_number(value: Any, name: str) -> float:
+    """Validate an untrusted JSON number: not a bool, not a string, finite."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{name} must be a finite number, got {value!r}") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    return number
 
 
 def short_id(from_string: str | None = None) -> str:

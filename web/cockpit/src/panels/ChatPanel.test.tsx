@@ -4,9 +4,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { FrameHeader, Msg, PanelSpec } from "@dimos/shared";
 import type { Manifest } from "@dimos/shared/manifest";
-import { ChannelStore, PublishError, type Session, StatusStore } from "@dimos/sdk";
+import { PublishError, StatusStore } from "@dimos/sdk";
 import type { TeleopHooks } from "@dimos/sdk/internal/teleop";
+import { FakeSession } from "../testing/fakeSession.ts";
 import { ChatPanel } from "./ChatPanel.tsx";
+import { chatTranscript, MAX_LINES } from "./chatTranscript.ts";
 import { TeleopPanel } from "./TeleopPanel.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,22 +70,6 @@ const MANIFEST: Manifest = {
 
 function header(ch: string, seq: number): FrameHeader {
   return { ch, seq, ts: 1_700_000_000 + seq, delivery: ch === "agent" ? "reliable" : "latest" };
-}
-
-class FakeSession implements Session {
-  status = new StatusStore();
-  store = new ChannelStore();
-  published: [string, unknown][] = [];
-  reject: PublishError | null = null;
-  watch = () => new Promise<never>(() => {});
-  subscribe = () => () => {};
-  publish = (ch: string, value: unknown) => {
-    this.published.push([ch, value]);
-    return this.reject === null
-      ? Promise.resolve({ ch, relayTs: 1, bridgeTs: 2 })
-      : Promise.reject(this.reject);
-  };
-  close = () => {};
 }
 
 class FakeHooks implements TeleopHooks {
@@ -193,6 +179,33 @@ describe("ChatPanel", () => {
     expect(container.querySelector('[data-testid="chat-agent-thinking"]')).not.toBeNull();
     frame("agent_idle", 2, true);
     expect(container.querySelector('[data-testid="chat-agent-thinking"]')).toBeNull();
+  });
+
+  it("keeps unique rows and trims correctly after producer sequences restart", () => {
+    mount();
+    const batch = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ role: "ai", text: `${prefix}-${i}`, ts: i }));
+    const before = batch("before", 600);
+    const after = batch("after", 401);
+    frame("agent", 0, before);
+    const transcript = chatTranscript(session.store, "agent");
+    const retained = transcript.getSnapshot()[1];
+    act(() => session.store.rebaseline());
+    frame("agent", 0, after);
+
+    const lines = transcript.getSnapshot();
+    expect(lines).toHaveLength(MAX_LINES);
+    expect(new Set(lines.map((line) => line.id)).size).toBe(MAX_LINES);
+    expect(lines[0]).toBe(retained);
+    const rows = [...container.querySelectorAll<HTMLElement>("[data-role]")];
+    expect(rows.map((row) => row.firstElementChild?.textContent)).toEqual(
+      [...before, ...after].slice(-MAX_LINES).map((line) => line.text),
+    );
+
+    act(() => session.store.reset());
+    frame("agent", 0, [{ role: "ai", text: "new session", ts: 0 }]);
+    expect(roles()).toEqual(["ai"]);
+    expect(transcript.getSnapshot().map((line) => line.text)).toEqual(["new session"]);
   });
 
   it("publishes the draft and reports a rejection", async () => {

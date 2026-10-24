@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 import reactivex as rx
 from reactivex.abc import DisposableBase, ObserverBase, SchedulerBase
-from reactivex.disposable import Disposable
+from reactivex.disposable import Disposable, SerialDisposable, SingleAssignmentDisposable
 from reactivex.observable import Observable
 from reactivex.scheduler import TimeoutScheduler
 
@@ -39,7 +39,7 @@ from dimos.protocol.service.spec import BaseConfig, Configurable
 from dimos.utils.data import resolve_named_path
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Generator, Iterator
 
     from dimos.memory.stream import Stream
 
@@ -93,7 +93,7 @@ class Replay(Configurable):
         for name in self.store.list_streams():
             try:
                 candidates.append(float(self.store.stream(name).first().ts))
-            except LookupError:
+            except (LookupError, ImportError, AttributeError):
                 continue
         return min(candidates) if candidates else None
 
@@ -103,6 +103,14 @@ class Replay(Configurable):
             if self._anchor is None:
                 self._anchor = (time.time(), candidate_first_ts)
             return self._anchor
+
+    def pin_anchor(self, ts: float | None = None) -> None:
+        """Pin the anchor at *ts* (default: the earliest recorded ts) now, before any stream
+        subscribes, so streams that start earlier than the first-subscribed one keep their
+        frames."""
+        first = self.first_ts() if ts is None else ts
+        if first is not None:
+            self._resolve_anchor(first)
 
     def reset_anchor(self) -> None:
         """Forget the pinned anchor. Next ``.observable()`` re-pins it."""
@@ -180,6 +188,12 @@ class ReplayStream(Generic[T]):
         except LookupError:
             return None
 
+    def last_ts(self) -> float | None:
+        try:
+            return float(self._base_stream().last().ts)
+        except LookupError:
+            return None
+
     def count(self) -> int:
         return int(self._base_stream().count())
 
@@ -220,6 +234,9 @@ class ReplayStream(Generic[T]):
         the same anchor and skip past frames already behind wall time.
         Adapted from the legacy ``timed_playback`` (which pinned a fresh
         anchor per subscribe).
+
+        Disposing cancels pending emissions and waits for an active callback
+        before releasing its iterator, so the store can then be closed safely.
         """
         replay = self._replay
         speed = replay.config.speed
@@ -232,15 +249,17 @@ class ReplayStream(Generic[T]):
             scheduler: SchedulerBase | None = None,
         ) -> DisposableBase:
             sched = scheduler or TimeoutScheduler()
-            is_disposed = False
+            disposed = threading.Event()
+            emission_lock = threading.RLock()
+            pending = SerialDisposable()
 
-            def make_iterator() -> Iterator[tuple[float, T]]:
+            def make_iterator() -> Generator[tuple[float, Any], None, None]:
                 while True:
                     emitted = False
                     obs: Any
                     for obs in base():
                         emitted = True
-                        yield (obs.ts, decode(obs))
+                        yield (obs.ts, obs)  # decoded at emission, keeping subscribe cheap
                     if not loop or not emitted:
                         break
 
@@ -275,7 +294,9 @@ class ReplayStream(Generic[T]):
 
             prev_ts = first_ts
 
-            def schedule(message: tuple[float, T], wrap_off: float, prev: float) -> None:
+            def schedule(message: tuple[float, Any], wrap_off: float, prev: float) -> None:
+                if disposed.is_set():
+                    return
                 ts, data = message
                 if ts < prev:
                     wrap_off += (prev - ts) + _LOOP_GAP
@@ -284,26 +305,40 @@ class ReplayStream(Generic[T]):
 
                 def emit(_s: SchedulerBase, _state: object) -> DisposableBase | None:
                     nonlocal wrap_offset, prev_ts
-                    if is_disposed:
-                        return None
-                    observer.on_next(data)
-                    try:
-                        nxt = next(iterator)
-                    except StopIteration:
-                        observer.on_completed()
-                        return None
-                    wrap_offset = wrap_off
-                    prev_ts = ts
-                    schedule(nxt, wrap_offset, prev_ts)
+                    with emission_lock:
+                        if disposed.is_set():
+                            return None
+                        observer.on_next(decode(data))
+                        # An observer may dispose from on_next, including closing
+                        # the store. Do not advance its cursor after that.
+                        if disposed.is_set():
+                            return None
+                        try:
+                            nxt = next(iterator)
+                        except StopIteration:
+                            observer.on_completed()
+                            return None
+                        wrap_offset = wrap_off
+                        prev_ts = ts
+                        schedule(nxt, wrap_offset, prev_ts)
                     return None
 
-                sched.schedule_relative(delay, emit)
+                # A zero-delay callback can schedule its successor before this
+                # call returns. Install the slot first so it cannot overwrite
+                # the successor's cancellation handle.
+                scheduled = SingleAssignmentDisposable()
+                pending.disposable = scheduled
+                scheduled.disposable = sched.schedule_relative(delay, emit)
 
             schedule((first_ts, first_data), wrap_offset, prev_ts)
 
             def dispose() -> None:
-                nonlocal is_disposed
-                is_disposed = True
+                disposed.set()
+                pending.dispose()
+                # Reentrant for disposal from on_next/on_completed. An external
+                # stop waits here until decoding and cursor reads have finished.
+                with emission_lock:
+                    iterator.close()
 
             return Disposable(dispose)
 

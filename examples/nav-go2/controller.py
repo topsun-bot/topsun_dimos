@@ -34,7 +34,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path
-from dimos.navigation.replanning_a_star.controllers import PController
+from dimos.navigation.go2.replanning_a_star.controllers import PController
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()

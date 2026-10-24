@@ -18,7 +18,6 @@ import importlib.util
 import os
 from pathlib import Path
 import select
-import shutil
 import signal
 import socket
 import subprocess
@@ -57,7 +56,12 @@ from dimos.protocol.service.zenohservice import ZenohConfig, ZenohSessionPool
 pytestmark = pytest.mark.self_hosted
 
 _RUST_PACKAGE = DIMOS_PROJECT_ROOT / "dimos" / "experimental" / "memory" / "rust"
-_EXECUTABLE = _RUST_PACKAGE / "result" / "bin" / "dimos-memory-recorder"
+_EXECUTABLE = Path(
+    os.environ.get(
+        "DIMOS_MEMORY_RECORDER_TEST_EXECUTABLE",
+        str(_RUST_PACKAGE / "result" / "bin" / "dimos-memory-recorder"),
+    )
+)
 _MCAP_AVAILABLE = importlib.util.find_spec("mcap") is not None
 
 
@@ -76,26 +80,21 @@ class FakeTransport:
 
 @pytest.fixture(scope="module")
 def rust_recorder_executable() -> Path:
-    if _EXECUTABLE.is_file():
-        return _EXECUTABLE
-    if shutil.which("nix") is None:
-        pytest.skip(
-            "nix is required to build dimos-memory-recorder "
-            "(self-hosted CI installs it via docker/ros/install-nix.sh)"
+    # Build locally. Should already be built in CI.
+    if not _EXECUTABLE.is_file():
+        subprocess.run(
+            [
+                "nix",
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "build",
+                "-L",
+                "path:.#dimos-memory-recorder",
+                "--no-write-lock-file",
+            ],
+            cwd=_RUST_PACKAGE,
+            check=True,
         )
-    subprocess.run(
-        [
-            "nix",
-            "--extra-experimental-features",
-            "nix-command flakes",
-            "build",
-            "-L",
-            ".#dimos-memory-recorder",
-            "--no-write-lock-file",
-        ],
-        cwd=_RUST_PACKAGE,
-        check=True,
-    )
     assert _EXECUTABLE.is_file()
     return _EXECUTABLE
 
@@ -157,6 +156,8 @@ def test_rust_artifact_is_readable_by_python_memory2(
     endpoint = f"tcp/127.0.0.1:{_free_port()}"
     monkeypatch.setattr(global_config, "transport", "zenoh")
     recorder = InteropRustRecorder(
+        source_dir=None,
+        build_command=None,
         executable=str(rust_recorder_executable),
         store=store,
         record_tf=False,
@@ -288,8 +289,9 @@ def test_cli_recording_uses_existing_binary_for_both_formats(
     monkeypatch.setattr(global_config, "record_encoding_threads", 2)
     monkeypatch.setattr(global_config, "transport", "lcm")
     monkeypatch.setattr(global_config, "build_native", False)
-    monkeypatch.setattr(rust_cli_recorder, "_EXECUTABLE", rust_recorder_executable)
-    monkeypatch.setattr(rust_cli_recorder, "_RUST_DIR", _RUST_PACKAGE)
+    monkeypatch.setattr(
+        rust_cli_recorder, "prepare_rust_recorder", lambda: rust_recorder_executable
+    )
     monkeypatch.setattr(rust_cli_recorder, "recording_dir", lambda: tmp_path)
     channel = f"/rust-recorder-{uuid.uuid4().hex[:8]}"
     publisher: LCMTransport[Imu] = LCMTransport(channel, Imu, url=lcm_url)
@@ -330,6 +332,8 @@ def test_tf_records_over_zenoh_and_replays_through_python(
     endpoint = f"tcp/127.0.0.1:{_free_port()}"
     monkeypatch.setattr(global_config, "transport", "zenoh")
     recorder = RustRecorder(
+        source_dir=None,
+        build_command=None,
         executable=str(rust_recorder_executable),
         store=RustSqliteStoreConfig(path=str(artifact)),
         record_tf=True,

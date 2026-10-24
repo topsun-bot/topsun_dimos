@@ -34,7 +34,7 @@ class VoxelGrid:
 
     Backend picked at construction: Open3D VoxelBlockGrid on CUDA, packed
     sorted-key numpy store on CPU (the Open3D CPU hashmap path degrades
-    linearly with map size — full-map scan + gather per frame, ~150 ms at
+    linearly with map size: full-map scan + gather per frame, ~150 ms at
     300k voxels). Both produce identical voxel sets.
 
     No Module/framework dependency. Can be used standalone or wrapped

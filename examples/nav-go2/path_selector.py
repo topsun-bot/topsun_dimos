@@ -19,7 +19,7 @@ import math
 import numpy as np
 
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
-from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
+from dimos.navigation.go2.replanning_a_star.navigation_map import NavigationMap
 
 
 class TrajectoryPathSelector:

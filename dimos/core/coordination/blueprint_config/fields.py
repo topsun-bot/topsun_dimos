@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import is_dataclass
 import inspect
 from types import UnionType
 from typing import Annotated, Any, Union, get_args, get_origin, get_type_hints
@@ -165,6 +166,11 @@ def prepare_model_input(
             continue
         nested_models = _base_model_types(info.annotation)
         if not nested_models:
+            # A dataclass field has no per-field defaults to fall back on, so a
+            # sparse override is completed from the field's default instance.
+            default = _parse_field_default(info)
+            if is_dataclass(default) and not isinstance(default, type):
+                prepared[name] = {**plain(default), **plain_mapping(raw_value)}
             continue
 
         selected: type[BaseModel] | None = None
@@ -269,6 +275,21 @@ def safe_field_default(model: type[BaseModel], path: tuple[str, ...]) -> Any:
         if nested_default is not PydanticUndefined:
             return nested_default
     return PydanticUndefined
+
+
+def field_descriptions(model: type[BaseModel], path: tuple[str, ...]) -> tuple[str, ...]:
+    """Return distinct descriptions for a field, including nested union members."""
+    if not path or (info := model.model_fields.get(path[0])) is None:
+        return ()
+    if len(path) == 1:
+        return (info.description,) if info.description else ()
+    return tuple(
+        dict.fromkeys(
+            description
+            for nested_model in _base_model_types(info.annotation)
+            for description in field_descriptions(nested_model, path[1:])
+        )
+    )
 
 
 def field_is_required(model: type[BaseModel], path: tuple[str, ...]) -> bool:
