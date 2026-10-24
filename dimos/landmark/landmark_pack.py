@@ -185,7 +185,7 @@ def import_pack(
     no_backup: Skip backing up the existing landmark_memory directory.
     pack_dir: Custom pack directory (overrides the default lookup).
 
-    Raises
+    Raises:
     ------
     RuntimeError: If dimos is currently running.
     FileNotFoundError: If the pack is missing required files.
