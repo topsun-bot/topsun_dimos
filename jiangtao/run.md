@@ -94,8 +94,8 @@ python jiangtao/scripts/visualize_global_map.py --save topview.png --elevation 9
 环境变量：
 
 ```bash
-export UNITREE_AES_128_KEY='0a7d97828984ec332984571244318f30'
-export OPENAI_API_KEY="sk-fb774f182a3c4c28aaa8b6878ee32b60"
+export UNITREE_AES_128_KEY="<YOUR_UNITREE_AES_128_KEY>"
+export OPENAI_API_KEY="<YOUR_DEEPSEEK_API_KEY>"
 export OPENAI_BASE_URL="https://api.deepseek.com"
 export DIMOS_VLM_API_KEY="EMPTY"
 export DIMOS_VLM_BASE_URL="http://10.10.153.172:8080/v1"
@@ -104,7 +104,7 @@ export DIMOS_ROTATION_STEP_DEG=60
 export DIMOS_ROOM_SCAN_ROTATIONS=6
 
 # 云端 VLM fallback (本地不可用时自动切换)
-export DIMOS_VLM_CLOUD_API_KEY="sk-ws-H.EDDREER.p3xq.MEUCIQDdBEwnddKuZEg2EXYSeqpWRBGlATod78ixRpzjHrew8wIgH0sJMDzpuZJdyORYcnsOQLDuP5gpF5ZDqfnW_WDpbto"
+export DIMOS_VLM_CLOUD_API_KEY="<YOUR_ALIYUN_API_KEY>"
 export DIMOS_VLM_CLOUD_BASE_URL="https://ws-sy431890c06kqcoz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 export DIMOS_VLM_CLOUD_MODEL_NAME="qwen3-vl-plus"
 export DIMOS_VLM_FALLBACK_COOLDOWN=60
