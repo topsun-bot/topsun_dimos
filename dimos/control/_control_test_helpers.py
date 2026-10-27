@@ -27,6 +27,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 import functools
+import multiprocessing
 from pathlib import Path
 import tempfile
 import threading
@@ -153,6 +154,10 @@ class _NullRPC(RPCSpec):
     trips ConnectionModule's 50ms deadman even when commands are already queued.
     Passed via ``FakeArm.__init__`` kwargs rather than a typed config field so
     mypy does not have to prove a field override.
+
+    Worker-deployed ``FakeArm`` (``ModuleCoordinator.build``) must keep the
+    real RPC backend so the coordinator can call ``set_transport`` / start /
+    stop. ``FakeArm.__init__`` only installs this no-op on the main process.
     """
 
     def __init__(
@@ -206,7 +211,8 @@ class FakeArm(ConnectionModule):
     joint_state: Out[JointState]
 
     def __init__(self, **kwargs: Any) -> None:
-        kwargs.setdefault("rpc_transport", _NullRPC)
+        if multiprocessing.current_process().name == "MainProcess":
+            kwargs.setdefault("rpc_transport", _NullRPC)
         super().__init__(**kwargs)
         #: The last 1000 commands passed to ``write``, oldest first.
         self.writes: deque[dict[str, float]] = deque(maxlen=1000)
