@@ -1,0 +1,323 @@
+# Copyright 2025-2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import threading
+from unittest.mock import MagicMock
+
+import pytest
+
+from dimos.agents.capabilities import CAP_MOVEMENT
+from dimos.agents.skills.holoagent import (
+    HoloAgentNavSkillContainer,
+    HoloAgentSkillContainer,
+)
+from dimos.agents.skills.holoagent_client import SHUTDOWN_TIMEOUT_SEC, HoloAgentBridgeError
+
+
+class _BareHoloAgentSkills(HoloAgentNavSkillContainer):
+    """Skill container without Module/LCM setup, for unit tests."""
+
+    def __init__(self, client: MagicMock) -> None:
+        self._client = client
+        self.started_tools: list[str] = []
+        self.stopped_tools: list[str] = []
+
+    def start_tool(self, name: str) -> None:
+        self.started_tools.append(name)
+
+    def stop_tool(self, name: str) -> None:
+        self.stopped_tools.append(name)
+
+
+def _container() -> tuple[_BareHoloAgentSkills, MagicMock]:
+    client = MagicMock()
+    return _BareHoloAgentSkills(client), client
+
+
+def test_skills_are_annotated() -> None:
+    nav_names = (
+        "holoagent_health",
+        "holoagent_semantic_nav",
+        "holoagent_relative_move",
+        "holoagent_stop_nav",
+        "holoagent_navigation_signal",
+    )
+    for name in nav_names:
+        method = getattr(HoloAgentNavSkillContainer, name)
+        assert getattr(method, "__skill__", False), name
+        assert method.__doc__, name
+    for name in (
+        "holoagent_semantic_nav",
+        "holoagent_relative_move",
+        "holoagent_navigation_signal",
+    ):
+        method = getattr(HoloAgentNavSkillContainer, name)
+        assert list(method.__skill_uses__) == [CAP_MOVEMENT], name
+        assert method.__skill_lifecycle__ == "background", name
+    assert "holoagent_arm" not in HoloAgentNavSkillContainer.__dict__
+    assert "holoagent_arm" not in HoloAgentSkillContainer.__dict__
+
+
+def test_semantic_nav_success() -> None:
+    skills, client = _container()
+    client.semantic_nav.return_value = {"success": True}
+
+    result = skills.holoagent_semantic_nav("coffee machine", floor="1F", room="pantry")
+
+    client.semantic_nav.assert_called_once_with("1F", "pantry", "coffee machine")
+    assert "semantic_nav(1F,pantry,coffee machine)" in result
+    assert "published" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == []
+
+
+def test_relative_move_rejects_zero() -> None:
+    skills, client = _container()
+    result = skills.holoagent_relative_move(0.0, 0.0, 0.0)
+    client.relative_nav.assert_not_called()
+    assert "refused" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == ["holoagent_nav"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"forward": float("nan")},
+        {"forward": float("inf")},
+        {"left": float("-inf")},
+        {"forward": 3.1},
+        {"left": -3.1},
+        {"rotation": 181.0},
+    ],
+)
+def test_relative_move_rejects_non_finite_or_oversized(kwargs: dict[str, float]) -> None:
+    skills, client = _container()
+    result = skills.holoagent_relative_move(**kwargs)
+    client.relative_nav.assert_not_called()
+    assert "refused" in result
+
+
+def test_semantic_nav_rejects_blank_object() -> None:
+    skills, client = _container()
+    result = skills.holoagent_semantic_nav("   ")
+    client.semantic_nav.assert_not_called()
+    assert "refused" in result
+    assert skills.stopped_tools == ["holoagent_nav"]
+
+
+def test_failed_same_tool_takeover_keeps_hold() -> None:
+    skills, client = _container()
+    client.semantic_nav.return_value = {"success": True}
+    skills.holoagent_semantic_nav("coffee machine", floor="1F", room="pantry")
+
+    result = skills.holoagent_semantic_nav("   ")
+
+    client.semantic_nav.assert_called_once()
+    assert "refused" in result
+    assert skills.started_tools == ["holoagent_nav", "holoagent_nav"]
+    assert skills.stopped_tools == []
+
+
+def test_semantic_nav_rejects_commas() -> None:
+    skills, client = _container()
+    result = skills.holoagent_semantic_nav("coffee, machine", floor="1,F")
+    client.semantic_nav.assert_not_called()
+    assert "refused" in result
+
+
+def test_relative_move_success() -> None:
+    skills, client = _container()
+    client.relative_nav.return_value = {"success": True}
+    result = skills.holoagent_relative_move(0.5, 0.0, 15.0)
+    client.relative_nav.assert_called_once_with(0.5, 0.0, 15.0)
+    assert "published" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == []
+
+
+def test_navigation_signal_success() -> None:
+    skills, client = _container()
+    client.navigation_signal.return_value = {"success": True}
+    result = skills.holoagent_navigation_signal("one_point_1")
+    client.navigation_signal.assert_called_once_with("one_point_1")
+    assert "published" in result
+    assert skills.started_tools == ["holoagent_nav"]
+    assert skills.stopped_tools == []
+
+
+def test_navigation_signal_stop_refuses_and_directs_to_stop_nav() -> None:
+    skills, client = _container()
+    result = skills.holoagent_navigation_signal("stop")
+    client.navigation_signal.assert_not_called()
+    assert "holoagent_stop_nav" in result
+    assert "refused" in result
+    assert skills.started_tools == []
+    assert skills.stopped_tools == []
+
+
+def test_health_success_is_not_a_publish_message() -> None:
+    skills, client = _container()
+    client.health.return_value = {"status": "ok"}
+    result = skills.holoagent_health()
+    assert result.startswith("HoloAgent robot_bridge health:")
+    assert "not waiting for arrival" not in result
+
+
+def test_bridge_errors_are_returned_as_strings() -> None:
+    skills, client = _container()
+    client.health.side_effect = HoloAgentBridgeError("GET http://127.0.0.1:8000/health failed")
+    result = skills.holoagent_health()
+    assert result.startswith("HoloAgent health check failed:")
+
+
+def test_module_shutdown_stops_bridge() -> None:
+    skills, client = _container()
+    client.stop_navigation.return_value = {"success": True}
+    skills._stop_bridge_best_effort()
+    client.stop_navigation.assert_called_once_with(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
+    client.close.assert_called_once()
+    assert skills.stopped_tools == ["holoagent_nav"]
+    assert skills._client is None
+
+
+def test_module_shutdown_still_drops_client_if_bridge_stop_fails() -> None:
+    skills, client = _container()
+    client.stop_navigation.side_effect = HoloAgentBridgeError("down")
+    skills._stop_bridge_best_effort()
+    client.stop_navigation.assert_called_once_with(timeout_sec=SHUTDOWN_TIMEOUT_SEC)
+    client.close.assert_called_once()
+    assert skills._client is None
+    assert skills.stopped_tools == ["holoagent_nav"]
+
+
+def test_stop_waits_for_in_flight_nav_then_releases() -> None:
+    skills, client = _container()
+    nav_entered = threading.Event()
+    release_nav = threading.Event()
+    order: list[str] = []
+
+    def semantic_nav(*_args: object, **_kwargs: object) -> dict[str, bool]:
+        order.append("nav")
+        nav_entered.set()
+        assert release_nav.wait(timeout=2.0)
+        return {"success": True}
+
+    def stop_navigation(*_args: object, **_kwargs: object) -> dict[str, bool]:
+        order.append("stop")
+        return {"success": True}
+
+    client.semantic_nav.side_effect = semantic_nav
+    client.stop_navigation.side_effect = stop_navigation
+
+    nav_result: list[str] = []
+    stop_result: list[str] = []
+
+    def run_nav() -> None:
+        nav_result.append(skills.holoagent_semantic_nav("chair"))
+
+    def run_stop() -> None:
+        assert nav_entered.wait(timeout=2.0)
+        stop_result.append(skills.holoagent_stop_nav())
+
+    nav_thread = threading.Thread(target=run_nav)
+    stop_thread = threading.Thread(target=run_stop)
+    nav_thread.start()
+    stop_thread.start()
+    assert nav_entered.wait(timeout=2.0)
+    assert client.stop_navigation.call_count == 0
+    release_nav.set()
+    nav_thread.join(timeout=2.0)
+    stop_thread.join(timeout=2.0)
+    assert not nav_thread.is_alive()
+    assert not stop_thread.is_alive()
+    assert order == ["nav", "stop"]
+    assert "published" in nav_result[0]
+    assert "published" in stop_result[0]
+    assert skills.stopped_tools == ["holoagent_nav"]
+
+
+def test_stop_nav_success() -> None:
+    skills, client = _container()
+    client.stop_navigation.return_value = {"success": True}
+    assert "published" in skills.holoagent_stop_nav()
+    client.stop_navigation.assert_called_once()
+    assert skills.stopped_tools == ["holoagent_nav"]
+
+
+def test_bridge_uses_module_config_url() -> None:
+    from dimos.agents.skills.holoagent_client import HoloAgentBridgeClient
+    from dimos.core.global_config import GlobalConfig
+
+    skills = _BareHoloAgentSkills(None)
+    skills._client = None
+    skills.config = MagicMock()
+    skills.config.g = GlobalConfig(holoagent_url="http://10.1.2.3:8000")
+
+    client = skills._bridge()
+
+    assert isinstance(client, HoloAgentBridgeClient)
+    assert client.base_url == "http://10.1.2.3:8000"
+
+
+def test_holoagent_url_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dimos.core.global_config import GlobalConfig
+
+    for alias in ("DIMOS_HOLOAGENT_URL", "HOLOAGENT_URL", "holoagent_url"):
+        monkeypatch.delenv(alias, raising=False)
+    assert GlobalConfig(_env_file=None).holoagent_url == "http://127.0.0.1:8000"
+
+
+@pytest.mark.parametrize(
+    ("env_name", "value"),
+    [
+        ("DIMOS_HOLOAGENT_URL", "http://10.0.0.8:8000"),
+        ("HOLOAGENT_URL", "http://10.0.0.9:8000"),
+    ],
+)
+def test_holoagent_url_env_aliases(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, value: str
+) -> None:
+    from dimos.core.global_config import GlobalConfig
+
+    for alias in ("DIMOS_HOLOAGENT_URL", "HOLOAGENT_URL", "holoagent_url"):
+        monkeypatch.delenv(alias, raising=False)
+    monkeypatch.setenv(env_name, value)
+    assert GlobalConfig(_env_file=None).holoagent_url == value
+
+
+def test_dimos_holoagent_url_wins_over_other_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dimos.core.global_config import GlobalConfig
+
+    monkeypatch.delenv("holoagent_url", raising=False)
+    monkeypatch.setenv("HOLOAGENT_URL", "http://old.example:8000")
+    monkeypatch.setenv("DIMOS_HOLOAGENT_URL", "http://new.example:8000")
+    assert GlobalConfig(_env_file=None).holoagent_url == "http://new.example:8000"
+
+
+def test_holoagent_prompt_requires_bridge_stop_on_user_halt() -> None:
+    from dimos.agents.skills.holoagent import HOLOAGENT_SKILLS_PROMPT
+
+    assert "holoagent_stop_nav" in HOLOAGENT_SKILLS_PROMPT
+    assert "stop_all_motion" in HOLOAGENT_SKILLS_PROMPT
+    assert "does not cancel a" in HOLOAGENT_SKILLS_PROMPT
+    assert "execute_arm_command" not in HOLOAGENT_SKILLS_PROMPT
+
+
+def test_g1_holoagent_prompt_mentions_native_arm() -> None:
+    from dimos.agents.skills.holoagent import HOLOAGENT_G1_SKILLS_PROMPT
+
+    assert "holoagent_stop_nav" in HOLOAGENT_G1_SKILLS_PROMPT
+    assert "execute_arm_command" in HOLOAGENT_G1_SKILLS_PROMPT
+    assert "holoagent_navigation_signal" in HOLOAGENT_G1_SKILLS_PROMPT

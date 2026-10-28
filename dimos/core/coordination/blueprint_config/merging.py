@@ -29,7 +29,10 @@ from dimos.core.coordination.blueprint_config.schema import (
     display_normalized_option,
     normalize_option_name,
 )
-from dimos.core.coordination.blueprint_config.sources import global_environment_names
+from dimos.core.coordination.blueprint_config.sources import (
+    global_environment_alias_ranks,
+    global_environment_names,
+)
 from dimos.core.coordination.blueprint_config.values import (
     deep_merge,
     deep_set,
@@ -92,6 +95,8 @@ def merge_environment(
 
     known_transports = {transport.name for transport in schema.transports}
     global_env_names = global_environment_names()
+    alias_ranks = global_environment_alias_ranks()
+    applied_rank: dict[str, int] = {}
     targets = {target.identity: target for target in schema.targets}
     env_source: dict[str, Any] = {}
 
@@ -105,7 +110,12 @@ def merge_environment(
         lowered = raw_name.lower()
         global_field = global_env_names.get(lowered)
         if global_field is not None:
+            rank = alias_ranks[global_field].get(lowered, 10_000)
+            previous = applied_rank.get(global_field)
+            if previous is not None and previous <= rank:
+                continue
             set_coerced(("g", global_field), raw_name, value)
+            applied_rank[global_field] = rank
             continue
 
         parts = tuple(part.lower().replace("-", "_") for part in raw_name.split("__"))
