@@ -388,7 +388,6 @@ all_modules = {
     "temporal-memory": "dimos.perception.experimental.temporal_memory.temporal_memory.TemporalMemory",
     "terrain-analysis": "dimos.navigation.nav_stack.modules.terrain_analysis.terrain_analysis.TerrainAnalysis",
     "terrain-map-ext": "dimos.navigation.nav_stack.modules.terrain_map_ext.terrain_map_ext.TerrainMapExt",
-    "trajectory-follower": "dimos.navigation.trajectory_follower.fancy.module.TrajectoryFollower",
     "trajectory-follower-native": "dimos.navigation.trajectory_follower.fancy.native.TrajectoryFollowerNative",
     "twist-teleop-module": "dimos.teleop.webxr.extensions.TwistTeleopModule",
     "type-safe-agent": "dimos.agents.typesafe.agent.TypeSafeAgent",
