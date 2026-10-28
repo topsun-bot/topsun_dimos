@@ -15,7 +15,7 @@
 """CockpitVoiceInput: audio_in chunks -> decode -> STT pipeline -> human_input.
 
 The real normalizer and WhisperNode wiring run against a fake Whisper model;
-the ffmpeg boundary runs for real in the container test and is otherwise
+the PyAV decode runs for real in the container test and is otherwise
 replaced with a byte-mirroring stub.
 
 Topsun's local-mic ``VoiceInput`` is a separate module (Enter-to-talk / VAD).
@@ -38,13 +38,10 @@ import pytest
 from dimos.agents import voice_input as voice_input_module
 from dimos.agents.voice_input import CockpitVoiceInput
 from dimos.stream.audio.base import AudioEvent
-from dimos.stream.audio.decode import ffmpeg_requirement
 from dimos.stream.audio.node_normalizer import AudioNormalizer
 from dimos.stream.audio.stt import node_whisper as whisper_module
 from dimos.web.relay_bridge.audio_codec import AudioChunk
 from dimos.web.relay_bridge.module_test_support import FakeTransport
-
-pytestmark = pytest.mark.skipif_no_ffmpeg
 
 
 def _chunk(sid: str = "u1", seq: int = 0, data: bytes = b"", final: bool = False) -> AudioChunk:
@@ -109,7 +106,6 @@ def make_voice(monkeypatch: pytest.MonkeyPatch) -> Iterator[_MakeVoice]:
         monkeypatch.setattr(AudioNormalizer, "_normalize_audio", record_normalized)
         monkeypatch.setattr(whisper_module, "_USE_FASTER_WHISPER", False)
         monkeypatch.setattr(whisper_module, "whisper", FakeWhisper())
-        monkeypatch.setattr(voice_input_module, "ffmpeg_requirement", lambda: None)
         if not real_decode:
 
             def fake_decode(raw: bytes) -> AudioEvent | None:
@@ -153,11 +149,8 @@ def test_chunks_reassemble_through_decode_to_human_input(
 def test_real_container_bytes_reach_pcm_and_human_input(
     make_voice: _MakeVoice, wait_until: Any
 ) -> None:
-    # A real WAV through the real ffmpeg decode: the pipeline receives the
+    # A real WAV through the real PyAV decode: the pipeline receives the
     # 16-kHz mono float32 PCM WhisperNode assumes, and text reaches the port.
-    requirement_error = ffmpeg_requirement()
-    if requirement_error is not None:
-        pytest.skip(requirement_error)
     h = make_voice(real_decode=True)
     raw = _wav_bytes()
     for seq, offset in enumerate(range(0, len(raw), 16_384)):

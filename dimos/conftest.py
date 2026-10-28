@@ -20,7 +20,6 @@ import os
 import pathlib
 import platform
 import re
-import shutil
 import tempfile
 import threading
 import time
@@ -220,9 +219,6 @@ def pytest_configure(config):
         "markers",
         "skipif_no_deno: skip when the Deno runtime is not on PATH or in cache",
     )
-    config.addinivalue_line(
-        "markers", "skipif_no_ffmpeg: skip when the ffmpeg binary is missing, except in CI"
-    )
     config.addinivalue_line("markers", "skipif_macos_bug: skip known-buggy tests on macOS")
     config.addinivalue_line("markers", "skipif_macos: skip tests not intended to run on macOS")
     config.addinivalue_line(
@@ -311,10 +307,6 @@ def pytest_collection_modifyitems(config, items):
             "native libturbojpeg unavailable",
         ),
         "skipif_no_deno": (not _has_deno(), "deno is not available"),
-        "skipif_no_ffmpeg": (
-            shutil.which("ffmpeg") is None and not os.getenv("CI"),
-            "ffmpeg not installed",
-        ),
         "skipif_macos_bug": (_is_macos(), "Some tests are buggy on Mac OS"),
         "skipif_macos": (_is_macos(), "Not intended to run on macOS"),
         "skipif_aarch64": (

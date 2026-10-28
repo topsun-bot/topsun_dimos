@@ -20,8 +20,12 @@ Greeter blueprints depend on those names.
 
 ``CockpitVoiceInput`` is the robot-side of the cockpit chat-panel mic:
 ``audio_in`` carries one utterance per button hold as ordered AudioChunk
-slices. Reassembled bytes go through the owned local STT chain and the
-transcript is published on ``human_input``.
+slices (dimos/web/relay_bridge/audio_codec.py pins the wire contract). The
+reassembled container bytes go through the owned local STT chain - PyAV
+decode to PCM, AudioNormalizer, WhisperNode (the exact pipeline behind the
+legacy WebInput upload) - and the transcript is published on ``human_input``.
+A cancelled hold simply stops sending; its half-built utterance is reaped
+after ``stale_utterance_s``.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.core.transport import pLCMTransport
 from dimos.stream.audio.base import AudioEvent
-from dimos.stream.audio.decode import decode_audio_bytes, ffmpeg_requirement
+from dimos.stream.audio.decode import decode_audio_bytes
 from dimos.stream.audio.node_normalizer import AudioNormalizer
 from dimos.stream.audio.pipeline import whisper_pipeline
 from dimos.utils.logging_config import setup_logger
@@ -328,9 +332,6 @@ class CockpitVoiceInput(Module):
 
     @rpc
     def start(self) -> None:
-        requirement_error = ffmpeg_requirement()
-        if requirement_error is not None:
-            raise RuntimeError(requirement_error)
         super().start()
         self._audio_subject, transcripts = self._pipeline.result()
         self.register_disposable(

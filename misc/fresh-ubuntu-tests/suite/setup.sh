@@ -11,7 +11,7 @@ export GIT_LFS_SKIP_SMUDGE=1
 # `bin/build-test-natives` can compile the Pybind11 extension when uv binds
 # the system interpreter (managed CPython already ships headers).
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl git g++ portaudio19-dev git-lfs libturbojpeg python3-dev pre-commit libgl1 libegl1 libglib2.0-0 ffmpeg libsndfile1 pkg-config
+sudo apt-get install -y ca-certificates curl git g++ portaudio19-dev git-lfs libturbojpeg python3-dev pre-commit libgl1 libegl1 libglib2.0-0 libsndfile1 libusb-1.0-0 libgfortran5 pkg-config
 
 # uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
