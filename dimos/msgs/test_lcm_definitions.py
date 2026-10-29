@@ -36,6 +36,9 @@ KNOWN = {
     "sensor_msgs.ImuInfo",
     # leshy, https://github.com/dimensionalOS/dimos/pull/4497
     "shape_msgs.TriangleMesh",
+    # Fork-only nav-stack viz messages restored on topsun_dimos (54fb744a).
+    "nav_msgs.ContourPolygons3D",
+    "nav_msgs.GraphNodes3D",
 }
 
 
