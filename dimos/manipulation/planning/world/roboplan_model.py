@@ -20,16 +20,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 import itertools
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
 import numpy as np
+import yaml
 
 from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.groups.registry import PlanningGroupRegistry
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.models import PlanningGroupID
+from dimos.manipulation.planning.spec.validation import PreparedRobotModel
 from dimos.manipulation.planning.utils.mesh_utils import prepare_urdf_for_drake
 from dimos.robot.assets.model import LoadedRobotModel
 from dimos.utils.transform_utils import pose_to_matrix
@@ -39,8 +42,6 @@ ROBOPLAN_WORLD_FRAME = "dimos_world"
 _ROOT_LINK = ROBOPLAN_WORLD_FRAME
 _ROOT_JOINT = "dimos_world_joint"
 _FREE_ROOTS = {"world", "map", _ROOT_LINK}
-# TODO: Remove this default when formal per-joint acceleration overrides are available.
-_DEFAULT_ACCELERATION_LIMIT = 2.0
 _REFERENCE_ATTRIBUTES = (
     "reference",
     "frame",
@@ -61,6 +62,7 @@ class _SceneFactory(Protocol):
         urdf: str,
         srdf: str,
         package_paths: Sequence[str],
+        joint_limits: Path,
     ) -> Any: ...
 
 
@@ -95,25 +97,39 @@ class _PreparedModel:
 
 
 def build_roboplan_model(
-    config: RobotModelConfig,
+    robot: PreparedRobotModel,
     registry: PlanningGroupRegistry,
     scene_factory: _SceneFactory,
 ) -> RoboPlanModel:
     """Build the configured model scene transactionally."""
+    config = robot.config
     description = prepare_urdf_for_drake(
-        config.model.load(),
+        robot.description,
         convert_meshes=config.auto_convert_meshes,
     )
     prepared = _prepare_model(config, description)
     groups, all_group = _groups(config, registry)
     srdf = _srdf(_MODEL_NAME, config, groups, prepared)
     package_paths = [str(path) for path in description.package_paths.values()]
-    scene = scene_factory(
-        name=_MODEL_NAME,
-        urdf=prepared.xml,
-        srdf=srdf,
-        package_paths=package_paths,
-    )
+    # 0.7 ignores nonstandard acceleration attributes in URDF. Import the
+    # authoritative prepared limits through the supported YAML API instead.
+    limits = {
+        coordinate.name: {
+            "max_velocity": [coordinate.max_velocity],
+            "max_acceleration": [coordinate.max_acceleration],
+        }
+        for coordinate in robot.joint_space.coordinates
+    }
+    with TemporaryDirectory(prefix="dimos-roboplan-limits-") as directory:
+        limits_path = Path(directory) / "limits.yaml"
+        limits_path.write_text(yaml.safe_dump({"joint_limits": limits}))
+        scene = scene_factory(
+            name=_MODEL_NAME,
+            urdf=prepared.xml,
+            srdf=srdf,
+            package_paths=package_paths,
+            joint_limits=limits_path,
+        )
     groups = _validate_group_order(scene, groups)
     all_group = groups[frozenset(all_group.group_ids)]
     _apply_collision_exclusions(scene, srdf)
@@ -125,12 +141,11 @@ def build_roboplan_model(
 
 
 def _prepare_model(config: RobotModelConfig, description: LoadedRobotModel) -> _PreparedModel:
-    result = ET.Element("robot", {"name": _MODEL_NAME})
+    result = ET.Element("robot", {"name": _MODEL_NAME, "version": "1.0"})
     ET.SubElement(result, "link", {"name": _ROOT_LINK})
     root = ET.fromstring(description.xml)
     if _tag(root.tag) != "robot":
         raise ValueError("Prepared model is not a URDF robot")
-    _add_missing_acceleration_limits(root)
     names = {
         tag: {
             name
@@ -179,15 +194,6 @@ def _prepare_model(config: RobotModelConfig, description: LoadedRobotModel) -> _
         ET.tostring(result, encoding="unicode", xml_declaration=True),
         tuple(adjacent),
     )
-
-
-def _add_missing_acceleration_limits(root: ET.Element) -> None:
-    for joint in root.iter():
-        if _tag(joint.tag) != "joint" or joint.get("type") == "fixed":
-            continue
-        limit = next((child for child in joint if _tag(child.tag) == "limit"), None)
-        if limit is not None and limit.get("acceleration") is None:
-            limit.set("acceleration", str(_DEFAULT_ACCELERATION_LIMIT))
 
 
 def _authored_root(root: ET.Element, base_link: str) -> ET.Element | None:

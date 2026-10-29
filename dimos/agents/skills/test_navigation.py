@@ -13,11 +13,13 @@
 # limitations under the License.
 
 from collections.abc import Iterator
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+from dimos_lcm.std_msgs import Bool
 from langchain_core.messages import HumanMessage
 import numpy as np
 import pytest
@@ -33,6 +35,8 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.base import NavigationState
+from dimos.navigation.go2.replanning_a_star.spec import NavigationInterfaceSpec
+from dimos.perception.experimental.spatial_memory_spec import SpatialMemorySpec
 from dimos.types.robot_location import RobotLocation
 from dimos.types.spatial_record import RecordType, SpatialRecord
 
@@ -1237,3 +1241,201 @@ def test_go_to_semantic_location(agent_setup) -> None:
     )
 
     assert "success" in history[-1].content.lower()
+
+
+@pytest.fixture
+def container(mocker, monkeypatch):
+    """A started container on a mocked planner, spatial memory and tool-stream
+    helpers, with a tagged location 'bed' 1 m from the robot.
+
+    room_first puts tagged locations ahead of the Topsun semantic fallback
+    chain so these #4880 tests exercise the same tagged-location path as
+    upstream.
+    """
+    monkeypatch.setenv("DIMOS_NAV_FALLBACK", "room_first")
+    with patch.object(navigation_module, "_create_vl_model", return_value=SimpleNamespace()):
+        module = NavigationSkillContainer()
+    try:
+        module._skill_started = True
+        mocker.patch.object(
+            module, "_navigation", mocker.Mock(spec=NavigationInterfaceSpec), create=True
+        )
+        mocker.patch.object(
+            module, "_spatial_memory", mocker.Mock(spec=SpatialMemorySpec), create=True
+        )
+        landmark = mocker.Mock()
+        landmark.resolve_by_query.return_value = None
+        landmark.query_by_type.return_value = []
+        module._landmark_memory = landmark
+        module._object_tracking = None
+        module._spatial_memory.query_tagged_location.return_value = RobotLocation(
+            name="bed", position=(1.0, 2.0, 0.0), rotation=(0.0, 0.0, 0.0)
+        )
+        module._spatial_memory.query_by_text.return_value = []
+        module._spatial_memory.query_by_text_with_images.return_value = []
+        module._latest_odom = PoseStamped(position=make_vector3(0.0, 2.0, 0.0))
+        for name in ("start_tool", "tool_update", "stop_tool"):
+            mocker.patch.object(module, name)
+        yield module
+    finally:
+        module.stop()
+
+
+def test_navigate_with_text_keeps_the_tool_open_while_the_goal_is_under_way(container) -> None:
+    message = container.navigate_with_text("bed")
+
+    assert "A tool update reports when the robot stops" in message
+    goal = container._navigation.set_goal.call_args.args[0]
+    assert (goal.position.x, goal.position.y) == (1.0, 2.0)
+    container.start_tool.assert_called_once_with("navigate_with_text")
+    container.stop_tool.assert_not_called()
+
+
+def test_goal_reached_reports_where_the_robot_stopped_and_closes_the_tool(container) -> None:
+    container.navigate_with_text("bed")
+
+    container._on_goal_reached(Bool(False))
+
+    container.tool_update.assert_called_once_with(
+        "navigate_with_text",
+        "Navigation to 'bed' stopped short of the target: robot at (0.00, 2.00), 1.00 m from it.",
+    )
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+
+
+def test_arrival_is_reported(container) -> None:
+    container.navigate_with_text("bed")
+    container._latest_odom = PoseStamped(position=make_vector3(1.0, 2.0, 0.0))
+
+    container._on_goal_reached(Bool(True))
+
+    container.tool_update.assert_called_once_with(
+        "navigate_with_text", "Arrived at 'bed': robot at (1.00, 2.00), 0.00 m from it."
+    )
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+
+
+def test_goal_reached_is_reported_once(container) -> None:
+    container.navigate_with_text("bed")
+
+    container._on_goal_reached(Bool(False))
+    container._on_goal_reached(Bool(True))
+
+    container.tool_update.assert_called_once()
+    container.stop_tool.assert_called_once()
+
+
+def test_goal_reached_without_a_navigation_under_way_is_ignored(container) -> None:
+    container._on_goal_reached(Bool(True))
+
+    container.tool_update.assert_not_called()
+    container.stop_tool.assert_not_called()
+
+
+def test_a_planner_giving_up_inside_set_goal_still_ends_the_navigation(container) -> None:
+    # The planner finds no path inside set_goal and publishes goal_reached before
+    # the call returns. The frame arrives on the transport's thread.
+    frame = threading.Thread(target=container._on_goal_reached, args=(Bool(False),))
+    container._navigation.set_goal.side_effect = lambda _goal: frame.start()
+
+    container.navigate_with_text("bed")
+    frame.join()
+
+    container.tool_update.assert_called_once()
+    assert "stopped short" in container.tool_update.call_args.args[1]
+    # The call's own stop_tool can run as well, a no-op on the closed stream.
+    container.stop_tool.assert_called_with("navigate_with_text")
+    assert container._active is None
+
+
+def test_a_second_call_while_a_goal_is_under_way_is_refused(container) -> None:
+    container.navigate_with_text("bed")
+
+    message = container.navigate_with_text("kitchen")
+
+    assert message == "Already navigating to 'bed'. Call stop_navigation first."
+    container._navigation.set_goal.assert_called_once()
+    # The open stream is re-stamped with the second call's movement hold.
+    assert container.start_tool.call_count == 2
+    container.stop_tool.assert_not_called()
+
+    container._on_goal_reached(Bool(True))
+
+    assert "Arrived at 'bed'" in container.tool_update.call_args.args[1]
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+
+
+def test_an_exception_during_the_lookup_closes_the_tool(container) -> None:
+    container._spatial_memory.query_tagged_location.side_effect = RuntimeError("rpc failed")
+
+    with pytest.raises(RuntimeError):
+        container.navigate_with_text("bed")
+
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+    # The next call is not refused.
+    container._spatial_memory.query_tagged_location.side_effect = None
+    assert "Started navigating" in container.navigate_with_text("bed")
+
+
+def test_an_exception_from_set_goal_closes_the_tool(container) -> None:
+    container._navigation.set_goal.side_effect = RuntimeError("planner down")
+
+    with pytest.raises(RuntimeError):
+        container.navigate_with_text("bed")
+
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+    assert container._active is None
+    container._on_goal_reached(Bool(False))
+    container.tool_update.assert_not_called()
+
+
+def test_stop_navigation_during_a_lookup_leaves_the_stream_to_that_call(container) -> None:
+    # stop_navigation and navigate_with_text sent in one agent turn run in parallel.
+    # Here the stop lands while the lookup is under way.
+    def stop_meanwhile(_query):
+        container.stop_navigation()
+        return RobotLocation(name="bed", position=(1.0, 2.0, 0.0), rotation=(0.0, 0.0, 0.0))
+
+    container._spatial_memory.query_tagged_location.side_effect = stop_meanwhile
+
+    message = container.navigate_with_text("bed")
+
+    assert "Started navigating" in message
+    container._navigation.cancel_goal.assert_called_once_with()
+    container._navigation.set_goal.assert_called_once()
+    # The stop left the stream to the call, and the goal it sent keeps it open.
+    container.stop_tool.assert_not_called()
+
+    container._on_goal_reached(Bool(True))
+
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+
+
+def test_no_match_releases_the_tool_at_once(container) -> None:
+    container._spatial_memory.query_tagged_location.return_value = None
+    container._spatial_memory.query_by_text.return_value = []
+
+    message = container.navigate_with_text("sofa")
+
+    assert "Could not reach" in message
+    container._navigation.set_goal.assert_not_called()
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+
+
+def test_stop_navigation_cancels_the_goal_and_closes_the_tool(container) -> None:
+    container.navigate_with_text("bed")
+
+    assert container.stop_navigation() == "Stopped"
+
+    container._navigation.cancel_goal.assert_called_once_with()
+    container.stop_tool.assert_called_once_with("navigate_with_text")
+    # The cancel's own goal_reached frame is not reported as a stop short of the target.
+    container._on_goal_reached(Bool(False))
+    container.tool_update.assert_not_called()
+
+
+def test_stop_navigation_with_nothing_under_way(container) -> None:
+    assert container.stop_navigation() == "Stopped"
+
+    container._navigation.cancel_goal.assert_called_once_with()
+    container.stop_tool.assert_called_once_with("navigate_with_text")

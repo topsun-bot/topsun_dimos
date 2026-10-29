@@ -35,7 +35,7 @@ from dimos.msgs.std_msgs.Int8 import Int8
 
 
 class LocalPlannerConfig(NativeModuleConfig):
-    cwd: str | None = None
+    source_dir: str | None = "dimos/navigation/nav_stack/modules/local_planner"
     executable: str = "result/bin/local_planner"
     build_command: str | None = (
         "nix build github:dimensionalOS/dimos-module-local-planner/v0.6.0 --no-write-lock-file"

@@ -1,7 +1,5 @@
 # Unitree G1
 
-![output](assets/g1_rerun.webp)
-
 ## Requirements
 
 - Unitree G1 EDU (need SDK/SSH access)
@@ -47,12 +45,12 @@ SSH into the robot, then:
 
 ```bash
 # pick the "developer" setup
-bash <(curl -fsSL https://pub-4767fdd15e6a41b6b2ce2558d71ec8d9.r2.dev/install.sh)
+curl -fsSL https://raw.githubusercontent.com/dimensionalOS/dimos/main/scripts/install.sh | bash -s -- --mode dev
 ```
 
 #### Notes
 
-dimOS handles DDS setup automatically. If you're using the Unitree SDK directly, set:
+For DDS dependencies, follow the [DDS setup guide](/docs/usage/transports/dds.md). The installer does not provision every robot SDK. If you're using the Unitree SDK directly, set:
 ```bash
 export CYCLONEDDS_HOME="$HOME/cyclonedds/install"
 ```
@@ -81,18 +79,18 @@ Note: this button combination may vary based on the model of the G1
 The robot must already be standing and balancing in sport mode. Use a clear,
 level work area, keep the Unitree remote and emergency stop reachable, and use
 a gantry or spotter for the first hardware run. Keep the robot stationary while
-using Quest arm teleoperation or planned manipulation; Quest thumbsticks do not
+using WebXR arm teleoperation or planned manipulation; WebXR thumbsticks do not
 command locomotion in this blueprint.
 
 On the G1 computer:
 
 ```bash
-uv sync --extra all
+# Activate the developer environment created by the installer first.
 uv run dimos run unitree-g1-teleop --network-interface eth0
 ```
 
 The teleop blueprint excludes navigation and mapping, so no module-disable
-arguments are needed. Wait for the Quest server to listen on port `8443`, then
+arguments are needed. Wait for the WebXR server to listen on port `8443`, then
 activate the robot from a second SSH session:
 
 ```bash
@@ -118,7 +116,7 @@ self-signed certificate.
 
 The blueprint also serves the Viser manipulation panel at
 `http://<g1-computer-ip>:8095`. It can execute arm motion; only expose this port
-on a trusted robot network. Quest arm targets preempt planned arm trajectories.
+on a trusted robot network. WebXR arm targets preempt planned arm trajectories.
 
 When finished, cancel arm motion, enter dry-run, and disarm:
 
@@ -132,7 +130,7 @@ In the ssh terminal `ssh -L 3030:localhost:3030 unitree@192.168.123.164`
 
 ```sh skip
 source .venv/bin/activate
-uv run dimos --rerun-host 0.0.0.0 run unitree-g1-nav-simple
+uv run dimos run unitree-g1-nav-simple --rerunbridgemodule.host 0.0.0.0 --rerunwebsocketserver.host 0.0.0.0
 # should print out something like:
 # ============================================================
 # Rerun gRPC server running (no viewer opened)
@@ -198,7 +196,7 @@ uv run dimos hardware g1 enable
 uv run dimos hardware g1 ready
 ```
 
-`ready` requires completed arming, enabled output, and disengaged Quest arm
+`ready` requires completed arming, enabled output, and disengaged WebXR arm
 tracking. Run `uv run dimos hardware g1 disable` before restarting the sequence.
 
 ### A mapping module tries to build with Nix

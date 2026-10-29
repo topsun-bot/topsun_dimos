@@ -30,18 +30,17 @@ from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
 warnings.filterwarnings("ignore", category=LangChainPendingDeprecationWarning)
 
 import httpx
-from langchain.agents import create_agent
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.base import BaseMessage
 from langchain_core.tools import StructuredTool
-from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 from reactivex.disposable import Disposable
 import requests
 
 from dimos.agents.llm_trace import tracing_http_client
 from dimos.agents.mcp import tool_stream
+from dimos.agents.mcp.constants import DEFAULT_MCP_URL, TOOL_ORIGIN_KEY
+from dimos.agents.mcp.spec import McpServerSpec
 from dimos.agents.system_prompt import SYSTEM_PROMPT
 from dimos.agents.utils import pretty_print_langchain_message
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
@@ -58,13 +57,24 @@ logger = setup_logger()
 _RESPONSES_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
 
-def _init_model(model_name: str, trace_dir: Path | None = None) -> Any:
+def _preload_agent_deps() -> None:
+    import langchain.agents
+    import langchain.chat_models  # noqa: F401
+    import langchain_openai  # noqa: F401
+
+
+def init_model(model_name: str, trace_dir: Path | None = None) -> Any:
     """Initialize a model while preserving LangChain provider resolution.
 
     With *trace_dir*, every request/response body goes to disk whole
     (:mod:`dimos.agents.llm_trace`). Only OpenAI-backed models take the
     ``http_client``; other providers keep working, untraced at the wire.
     """
+    # ~2s: langchain's chat-model machinery pulls transformers+torch; deferred to
+    # keep module import (test collection, CLI startup) light.
+    from langchain.chat_models import init_chat_model
+    from langchain_openai import ChatOpenAI
+
     client = None if trace_dir is None else tracing_http_client(trace_dir)
     if ":" in model_name or not model_name.startswith(_RESPONSES_REASONING_MODEL_PREFIXES):
         model = init_chat_model(model=model_name)
@@ -86,7 +96,8 @@ class McpClientConfig(ModuleConfig):
     model_provider: str | None = None
     model_kwargs: dict[str, Any] | None = None
     model_fixture: str | None = None
-    mcp_server_url: str = "http://localhost:9990/mcp"
+    # None: the McpServer in this blueprint, or the default endpoint without one.
+    mcp_server_url: str | None = None
     supports_vision: bool = True  # Set False for text-only models (e.g. DeepSeek)
     trace_dir: Path | None = None
 
@@ -102,10 +113,13 @@ class McpClient(Module):
         "agent": pLCMTransport,
         "agent_idle": pLCMTransport,
     }
+    # Injected when the blueprint has an McpServer.
+    _mcp_server: McpServerSpec | None = None
 
     _lock: RLock
     _state_graph: CompiledStateGraph[Any, Any, Any, Any] | None
     _message_queue: Queue[BaseMessage]
+    _agent_tools: list[StructuredTool] | None
     _tool_registry: dict[str, dict[str, Any]]
     _history: list[BaseMessage]
     _thread: Thread
@@ -119,6 +133,7 @@ class McpClient(Module):
         self._lock = RLock()
         self._state_graph = None
         self._message_queue = Queue()
+        self._agent_tools = None
         self._tool_registry = {}
         self._history = []
         self._thread = Thread(
@@ -130,6 +145,8 @@ class McpClient(Module):
         self._http_client = self._make_http_client()
         self._seq_ids = SequentialIds()
         self._tool_stream_cleanup = None
+        self._mcp_url: str | None = None
+        Thread(target=_preload_agent_deps, name="McpClient-preload", daemon=True).start()
 
     @staticmethod
     def _make_http_client() -> httpx.Client:
@@ -150,6 +167,17 @@ class McpClient(Module):
     def __reduce__(self) -> Any:
         return (self.__class__, (), {})
 
+    def _server_url(self) -> str:
+        """The MCP endpoint: configured, else the blueprint's McpServer, else the default."""
+        if self._mcp_url is None:
+            if self.config.mcp_server_url is not None:
+                self._mcp_url = self.config.mcp_server_url
+            elif self._mcp_server is not None:
+                self._mcp_url = str(self._mcp_server.mcp_url())
+            else:
+                self._mcp_url = DEFAULT_MCP_URL
+        return self._mcp_url
+
     def _mcp_request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         body: dict[str, Any] = {
             "jsonrpc": "2.0",
@@ -159,7 +187,7 @@ class McpClient(Module):
         if params is not None:
             body["params"] = params
 
-        resp = self._http_client.post(self.config.mcp_server_url, json=body, timeout=120.0)
+        resp = self._http_client.post(self._server_url(), json=body, timeout=120.0)
         resp.raise_for_status()
         data = resp.json()
 
@@ -198,9 +226,7 @@ class McpClient(Module):
     def _fetch_tools(self, timeout: float = 60.0, interval: float = 1.0) -> list[StructuredTool]:
         result = self._try_fetch_tools(timeout=timeout, interval=interval)
         if result is None:
-            raise RuntimeError(
-                f"Failed to fetch tools from MCP server {self.config.mcp_server_url}"
-            )
+            raise RuntimeError(f"Failed to fetch tools from MCP server {self._server_url()}")
 
         raw_tools = result.get("tools", [])
         self._tool_registry = {t["name"]: t for t in raw_tools}
@@ -279,32 +305,39 @@ class McpClient(Module):
 
     @rpc
     def on_system_modules(self, _modules: list[RPCClient]) -> None:
-        tools = self._fetch_tools()
-
-        if self.config.model_fixture is not None:
-            from dimos.agents.testing.mock_model import MockModel
-
-            model = MockModel(json_path=self.config.model_fixture)
-        elif self.config.model_provider is not None:
-            model = init_chat_model(
-                self.config.model,
-                model_provider=self.config.model_provider,
-                **(self.config.model_kwargs or {}),
-            )
-        else:
-            model = _init_model(self.config.model, trace_dir=self.trace_dir())
-
+        self._agent_tools = self._fetch_tools()
+        self._rebuild_agent()
         with self._lock:
-            self._state_graph = create_agent(
-                model=model,
-                tools=tools,
-                system_prompt=self.config.system_prompt,
-            )
             if not self._thread.is_alive():
                 self._thread.start()
 
         # Explicit idle=True so voice-input modules know the mic may open immediately.
         self.agent_idle.publish(True)
+
+    def _rebuild_agent(self) -> None:
+        # ~2s: pulls transformers+torch; deferred to keep module import light.
+        from langchain.agents import create_agent
+        from langchain.chat_models import init_chat_model
+
+        # Under the lock, or a concurrent set_trace_dir can lose its path to this build.
+        with self._lock:
+            if self.config.model_fixture is not None:
+                from dimos.agents.testing.mock_model import MockModel
+
+                model = MockModel(json_path=self.config.model_fixture)
+            elif self.config.model_provider is not None:
+                model = init_chat_model(
+                    self.config.model,
+                    model_provider=self.config.model_provider,
+                    **(self.config.model_kwargs or {}),
+                )
+            else:
+                model = init_model(self.config.model, trace_dir=self.config.trace_dir)
+            self._state_graph = create_agent(
+                model=model,
+                tools=self._agent_tools or [],
+                system_prompt=self.config.system_prompt,
+            )
 
     @rpc
     def stop(self) -> None:
@@ -323,6 +356,15 @@ class McpClient(Module):
     def trace_dir(self) -> Path | None:
         """Where raw LLM request/response bodies go; ``None`` when tracing is off."""
         return self.config.trace_dir
+
+    @rpc
+    def set_trace_dir(self, path: str | None) -> None:
+        """Point raw LLM capture at *path* and rebuild the model to pick it
+        up; ``None`` turns tracing off."""
+        with self._lock:
+            self.config.trace_dir = Path(path) if path is not None else None
+            if self._state_graph is not None:
+                self._rebuild_agent()
 
     @rpc
     def add_message(self, message: BaseMessage) -> None:
@@ -429,6 +471,7 @@ def _append_image_to_history(
     if not mcp_client.config.supports_vision:
         # Text-only models can't process images — skip the artefact message.
         return
+    # Tagged with its tool, or chat UIs would show this user turn as typed input.
     mcp_client.add_message(
         HumanMessage(
             content=[
@@ -437,6 +480,7 @@ def _append_image_to_history(
                     "text": f"This is the artefact for the '{func_name}' tool with UUID:={uuid_}.",
                 },
                 result,
-            ]
+            ],
+            additional_kwargs={TOOL_ORIGIN_KEY: func_name},
         )
     )

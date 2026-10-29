@@ -25,7 +25,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
 
 class TarePlannerConfig(NativeModuleConfig):
-    cwd: str | None = "."
+    source_dir: str | None = "dimos/navigation/nav_stack/modules/tare_planner"
     executable: str = "result/bin/tare_planner"
     build_command: str | None = (
         "nix build github:dimensionalOS/dimos-module-tare-planner/v0.1.0 --no-write-lock-file"

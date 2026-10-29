@@ -22,13 +22,13 @@ MediaRecorder container variance, so Chromium's webm is not enough);
 holding the chat composer's mic records real audio, ships it as chunked
 publishes, and the test asserts the reassembled byte stream (one sid,
 contiguous seqs, empty final frame) lands on the module's port AND survives
-the real ffmpeg decode into the 16-kHz PCM the Whisper pipeline assumes.
+the real PyAV decode into the 16-kHz PCM the Whisper pipeline assumes.
 VoiceInput/Whisper stay out of scope: chunk delivery and decodability are
 the wire contract under test; transcription wiring is pytest-covered.
 
 Marked web_browser: excluded from the default suite (needs the
-`browser-tests` dependency group, Playwright browsers, built web dists, and
-the ffmpeg binary). Locally:
+`browser-tests` dependency group, Playwright browsers and built web dists).
+Locally:
 `uv run --group browser-tests pytest -m web_browser dimos/e2e_tests/test_voice_browser.py`.
 """
 
@@ -79,6 +79,8 @@ def fake_mic_page(request: pytest.FixtureRequest, playwright_browsers: None) -> 
                 firefox_user_prefs={
                     "media.navigator.streams.fake": True,
                     "media.navigator.permission.disabled": True,
+                    # Needed avoid CoreAudio startup exceeding timeout on some runners.
+                    "media.cubeb.force_null_context": True,
                 }
             )
             context = browser.new_context()
@@ -102,7 +104,8 @@ def test_hold_to_talk_ships_a_decodable_recording(
     mic.hover()
     fake_mic_page.mouse.down()
     expect(mic).to_have_attribute("data-state", "recording", timeout=15_000)
-    fake_mic_page.wait_for_timeout(1_500)
+    # 3 s, so a slow runner's late recorder start still leaves well over the 0.5 s asserted below.
+    fake_mic_page.wait_for_timeout(3_000)
     fake_mic_page.mouse.up()
     expect(mic).to_have_attribute("data-state", "idle", timeout=30_000)
 
@@ -118,8 +121,8 @@ def test_hold_to_talk_ships_a_decodable_recording(
     assert [chunk.seq for chunk in chunks] == list(range(len(chunks)))
     assert chunks[0].mime.startswith("audio/")
     audio = b"".join(chunk.data for chunk in chunks)
-    assert len(audio) > 1_000  # ~1.5 s of compressed audio, not an empty shell
-    # Whatever container this engine produced, the owned ffmpeg decode turns
+    assert len(audio) > 1_000  # ~3 s of compressed audio, not an empty shell
+    # Whatever container this engine produced, the owned PyAV decode turns
     # it into the PCM shape the Whisper pipeline assumes.
     event = decode_audio_bytes(audio)
     assert event is not None and event.sample_rate == 16_000

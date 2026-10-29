@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Construction and objective tests for shared G1 Quest teleoperation."""
+"""Construction and objective tests for shared G1 WebXR teleoperation."""
 
 from typing import Any, cast
 import xml.etree.ElementTree as ET
@@ -29,7 +29,13 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
 from dimos.control.tasks.trajectory_task.trajectory_task import JOINT_TRAJECTORY_TASK_NAME
 from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import Blueprint
+from dimos.imitation.collection.episode import EpisodeStatus
+from dimos.manipulation.planning.spec.validation import prepare_robot_model
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_groot_wbc import (
     _G1_TELEOP_MODEL,
     _G1GrootCoordinator,
@@ -42,12 +48,11 @@ from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_teleop import (
 )
 from dimos.robot.unitree.g1.manip_config import (
     G1_LEFT_ARM_JOINTS,
-    G1_MANIPULATION_MODEL,
     G1_RIGHT_ARM_JOINTS,
     g1_manipulation_model_config,
 )
 from dimos.robot.unitree.g1.teleop_ik import G1PinkPoseTargetSolver
-from dimos.teleop.quest.quest_extensions import VideoArmTeleopModule
+from dimos.teleop.webxr.extensions import VideoArmTeleopModule
 
 
 def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
@@ -80,7 +85,17 @@ def test_g1_blueprint_uses_shared_bimanual_teleop_task() -> None:
     ]
     assert _G1_TELEOP_MODEL.base_link == "pelvis"
     assert _G1_TELEOP_MODEL.joint_names == g1_arms
+    assert _G1_TELEOP_MODEL.model._default_joint_acceleration_limit == 2.0
     assert task.params["max_joint_velocity_rad_s"] == pytest.approx(np.deg2rad(120.0))
+
+
+@pytest.mark.self_hosted
+def test_g1_teleop_model_is_accepted_by_prepare_robot_model() -> None:
+    """The coordinator prepares this model at start; missing limits raise here."""
+    prepared = prepare_robot_model(_G1_TELEOP_MODEL)
+
+    assert prepared.joint_space.names == tuple(g1_arms)
+    assert prepared.joint_space.acceleration_limits == pytest.approx((2.0,) * len(g1_arms))
 
 
 def test_g1_blueprint_keeps_bounded_trajectory_path_below_teleop() -> None:
@@ -100,7 +115,7 @@ def test_g1_blueprint_keeps_bounded_trajectory_path_below_teleop() -> None:
     ]
 
 
-def test_g1_teleop_wires_arm_and_recording_streams_without_quest_locomotion() -> None:
+def test_g1_teleop_wires_arm_and_recording_streams_without_webxr_locomotion() -> None:
     teleop_kwargs = _module_kwargs(unitree_g1_teleop, VideoArmTeleopModule)
 
     assert "task_names" not in teleop_kwargs
@@ -135,16 +150,23 @@ def test_g1_teleop_excludes_navigation_and_legacy_visualization() -> None:
     )
 
 
-def test_g1_collection_streams_do_not_require_world_poses() -> None:
-    recorder_kwargs = _module_kwargs(unitree_g1_teleop, G1CollectionRecorder)
-
-    assert recorder_kwargs["poseless_streams"] == [
-        "color_image",
-        "status",
-        "left_cartesian_command",
-        "right_cartesian_command",
-        "coordinator_joint_state",
-    ]
+async def test_g1_collection_accepts_blueprint_config_and_records_without_world_poses(tmp_path):
+    kwargs = _module_kwargs(unitree_g1_teleop, G1CollectionRecorder)
+    recorder = G1CollectionRecorder(**{**kwargs, "db_path": str(tmp_path / "session.db")})
+    try:
+        ports = recorder._data_ports()
+        assert {name: port.type for name, port in ports.items()} == {
+            "color_image": Image,
+            "coordinator_joint_state": JointState,
+            "status": String,
+            "left_cartesian_command": PoseStamped,
+            "right_cartesian_command": PoseStamped,
+        }
+        assert recorder.config.record_tf is False
+        for name in ports:
+            assert await recorder._resolve_pose(name, JointState(ts=1.0), 1.0) is None
+    finally:
+        recorder.stop()
 
 
 @pytest.mark.self_hosted
@@ -170,7 +192,6 @@ def test_g1_teleop_wires_manipulation_to_existing_coordinator() -> None:
     model = manipulation_kwargs["model"]
 
     assert manipulation_kwargs["instance_name"] == "G1Manipulation"
-    assert model.model is G1_MANIPULATION_MODEL
     assert model.joint_names == g1_joints
     assert [group.name for group in model.planning_groups] == ["left_arm", "right_arm"]
     assert manipulation_kwargs["visualization"] == ViserVisualizationConfig(host="0.0.0.0")
@@ -178,3 +199,23 @@ def test_g1_teleop_wires_manipulation_to_existing_coordinator() -> None:
         unitree_g1_teleop.remapping_map[("G1Manipulation", "_control_coordinator")]
         is _G1GrootCoordinator
     )
+
+
+@pytest.fixture
+def g1_json_recorder(tmp_path):
+    recorder = G1CollectionRecorder(db_path=tmp_path / "recording.db")
+    try:
+        yield recorder
+    finally:
+        recorder.stop()
+
+
+def test_g1_records_episode_source_time_without_parsing_other_string_streams(
+    g1_json_recorder, mocker
+):
+    mocker.patch("dimos.memory.module.time.time", return_value=99.0)
+    event = EpisodeStatus(
+        ts=12.5, state="idle", episodes_saved=1, episodes_discarded=0, last_event="save"
+    )
+    assert g1_json_recorder._resolve_ts("status", String(event.to_json())) == 12.5
+    assert g1_json_recorder._resolve_ts("another_status", String(event.to_json())) == 99.0

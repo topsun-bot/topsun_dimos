@@ -252,6 +252,7 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     spawn_yaw: float | None = None
     reset_joint_positions: list[float] | None = None
     headless: bool = False
+    tracked_bodies: list[str] = Field(default_factory=list)
     dof: int = 7
 
     # Camera config (matches former MujocoCameraConfig).
@@ -333,6 +334,7 @@ class MujocoSimModule(
     # this to translate the robot in world space.
     odom: Out[PoseStamped]
     tf: Out[TFMessage]
+    body_poses: Out[TFMessage]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -348,6 +350,7 @@ class MujocoSimModule(
         self._camera_info_base: CameraInfo | None = None
         self._shm_ready_signaled = False
         self._latest_frame_ts: float | None = None
+        self._missing_bodies: set[str] = set()
 
         # IMU sensor slices into MjData.sensordata, resolved once at start.
         # None if the MJCF has no recognized IMU sensors (e.g. arm-only sims).
@@ -407,6 +410,11 @@ class MujocoSimModule(
         return 1.0
 
     @rpc
+    def scene_path(self) -> str:
+        """The MJCF the simulated manipulator adapters attach to (their SHM key)."""
+        return str(self.config.robot_mjcf or self.config.address)
+
+    @rpc
     def start(self) -> None:
         if not self.config.address and not self.config.robot_mjcf:
             raise RuntimeError(
@@ -423,8 +431,8 @@ class MujocoSimModule(
         # Build engine with SHM hooks installed.
         engine_assets: dict[str, bytes] | None = None
         if self.config.inject_legacy_assets:
-            # Lazy import: get_assets pulls in mujoco_playground (heavy,
-            # optional) and is only needed when injecting bundled meshes.
+            # Lazy import: model.py pulls in the ONNX policy stack and is only
+            # needed when injecting bundled meshes.
             from dimos.simulation.mujoco.model import get_assets
 
             engine_assets = get_assets()
@@ -1002,6 +1010,35 @@ class MujocoSimModule(
                 ),
             )
         )
+        bodies = self._body_transforms()
+        if bodies:
+            self.body_poses.publish(TFMessage(*bodies))
+
+    def _body_transforms(self) -> list[Transform]:
+        """World poses of ``tracked_bodies``; a name missing from the model is skipped after one warning."""
+        engine = self._engine
+        if engine is None or not self.config.tracked_bodies:
+            return []
+        ts = time.time()
+        transforms: list[Transform] = []
+        for name in self.config.tracked_bodies:
+            pose = engine.get_body_pose(name)
+            if pose is None:
+                if name not in self._missing_bodies:
+                    self._missing_bodies.add(name)
+                    logger.warning("MujocoSimModule: tracked body not in model", body=name)
+                continue
+            position, (qx, qy, qz, qw) = pose
+            transforms.append(
+                Transform(
+                    translation=Vector3(float(position[0]), float(position[1]), float(position[2])),
+                    rotation=Quaternion(float(qx), float(qy), float(qz), float(qw)),
+                    frame_id="world",
+                    child_frame_id=name,
+                    ts=ts,
+                )
+            )
+        return transforms
 
     def _generate_pointcloud(self) -> None:
         if self._engine is None:

@@ -13,10 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dimos.agents.skills.visual_servoing.bbox_navigation import BBoxNavigationModule
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.global_config import global_config
 from dimos.experimental.security_demo.security_module import SecurityModule
-from dimos.navigation.bbox_navigation import BBoxNavigationModule
 from dimos.perception.detection.door.door_spatial_memory_module import SpatialLandmarkMemoryModule
 from dimos.perception.experimental.object_tracker_2d import ObjectTracker2D
 from dimos.perception.experimental.perceive_loop_skill import PerceiveLoopSkill
@@ -27,7 +26,7 @@ from dimos.robot.unitree.go2.connection import GO2Connection
 unitree_go2_spatial = (
     autoconnect(
         unitree_go2,
-        SpatialMemory.blueprint(new_memory=global_config.new_memory),
+        SpatialMemory.blueprint(),
         SpatialLandmarkMemoryModule.blueprint(),
         ObjectTracker2D.blueprint(frame_id="camera_link"),
         BBoxNavigationModule.blueprint(),

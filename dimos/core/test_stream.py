@@ -21,7 +21,7 @@ import pytest
 
 from dimos.core.core import rpc
 from dimos.core.module import Module
-from dimos.core.stream import In
+from dimos.core.stream import In, Out
 from dimos.core.testing import MockRobotClient
 from dimos.core.transport import LCMTransport, pLCMTransport
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -169,7 +169,6 @@ class SpyLCMTransport(LCMTransport):
 
 
 @pytest.mark.self_hosted
-@pytest.mark.skipif_macos_bug
 @pytest.mark.parametrize("subscriber_class", [ClassicSubscriber, RXPYSubscriber])
 def test_subscription(dimos, subscriber_class) -> None:
     robot = dimos.deploy(MockRobotClient)
@@ -212,7 +211,6 @@ def test_subscription(dimos, subscriber_class) -> None:
 
 
 @pytest.mark.self_hosted
-@pytest.mark.skipif_macos_bug
 def test_get_next(dimos) -> None:
     robot = dimos.deploy(MockRobotClient)
 
@@ -245,7 +243,6 @@ def test_get_next(dimos) -> None:
 
 
 @pytest.mark.self_hosted
-@pytest.mark.skipif_macos_bug
 def test_hot_getter(dimos) -> None:
     robot = dimos.deploy(MockRobotClient)
 
@@ -282,3 +279,19 @@ def test_hot_getter(dimos) -> None:
     robot.stop()
     subscriber.stop_rpc_client()
     robot.stop_rpc_client()
+
+
+def test_out_publish_reaches_subscribers_after_one_unsubscribes_mid_publish() -> None:
+    out: Out[int] = Out(int, "numbers")
+    received: list[int] = []
+
+    def unsubscribe_on_first(_: int) -> None:
+        unsubscribe()
+
+    unsubscribe = out.subscribe(unsubscribe_on_first)
+    out.subscribe(received.append)
+
+    out.publish(1)
+    out.publish(2)
+
+    assert received == [1, 2]

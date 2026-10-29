@@ -49,14 +49,6 @@ print(CameraModule.io())
  ├─ color_image: Image
  ├─ camera_info: CameraInfo
  ├─ tf: TFMessage
- │
- ├─ RPC build() -> None
- ├─ RPC get_skills() -> list
- ├─ RPC peek_stream(stream_name: str, timeout: float) -> Any
- ├─ RPC set_module_ref(name: str, module_ref: RPCClient) -> None
- ├─ RPC set_transport(stream_name: str, transport: Transport) -> bool
- ├─ RPC start() -> None
- ├─ RPC stop() -> None
 ```
 
 We can see that the camera module outputs two streams:
@@ -64,7 +56,7 @@ We can see that the camera module outputs two streams:
 - `color_image` with [sensor_msgs.Image](https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/Image.html) type
 - `camera_info` with [sensor_msgs.CameraInfo](https://docs.ros.org/en/melodic/api/sensor_msgs/html/msg/CameraInfo.html) type
 
-It offers two RPC calls: `start()` and `stop()` (lifecycle methods).
+Every module also has the lifecycle RPCs `start()` and `stop()`; `io()` leaves those out.
 
 Camera observation as an agentic [skill](/docs/usage/blueprints.md#defining-skills) is provided separately by the reusable `ObserveSkill` container (`dimos/agents/skills/observe_skill.py`), which subscribes to `color_image` and can be added to any blueprint (more on skills in the Blueprints guide).
 
@@ -117,13 +109,6 @@ print(Detection2DModule.io())
  ├─ detected_image_0: Image
  ├─ detected_image_1: Image
  ├─ detected_image_2: Image
- │
- ├─ RPC build() -> None
- ├─ RPC get_skills() -> list
- ├─ RPC set_module_ref(name: str, module_ref: RPCClient) -> None
- ├─ RPC set_transport(stream_name: str, transport: Transport) -> bool
- ├─ RPC start() -> None
- ├─ RPC stop() -> None
 ```
 
 {/* TODO: add easy way to print config */}
@@ -515,7 +500,7 @@ detector.stop()
 
 Run each in its own terminal and detections start printing as soon as both are up. The channel name and message type must match on both sides `LCMTransport("/camera/rgb", Image)` maps to the typed channel `/camera/rgb#sensor_msgs.Image`, which you can watch with `dimos spy` or `dimos topic echo /camera/rgb`.
 
-Available transports live in `dimos.core.transport` (`LCMTransport`, `ZenohTransport`, `SHMTransport`, ...); see [Transports](/docs/usage/transports/index.md) for choosing between them.
+Available transports live in `dimos.core.transport` (`ZenohTransport`, `LCMTransport`, `ROSTransport`, ...); see [Transports](/docs/usage/transports/index.md) for choosing between them.
 
 ### Raw transports (no modules)
 

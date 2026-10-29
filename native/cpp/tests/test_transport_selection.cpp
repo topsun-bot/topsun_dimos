@@ -11,19 +11,11 @@
 using namespace dimos::native;
 
 TEST_CASE("lcm is a supported transport") {
-    require_supported_transport("lcm");  // must not throw
-    CHECK(true);
+    CHECK_NOTHROW(require_supported_transport("lcm"));
 }
 
-TEST_CASE("zenoh is rejected with a clear, actionable message") {
-    try {
-        require_supported_transport("zenoh");
-        FAIL("expected require_supported_transport(\"zenoh\") to throw");
-    } catch (const std::runtime_error& e) {
-        const std::string msg = e.what();
-        CHECK(msg.find("zenoh") != std::string::npos);
-        CHECK(msg.find("LCM only") != std::string::npos);
-    }
+TEST_CASE("zenoh is a supported transport") {
+    CHECK_NOTHROW(require_supported_transport("zenoh"));
 }
 
 TEST_CASE("an unknown transport is rejected and names the offending value") {

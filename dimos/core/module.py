@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from functools import partial
 import inspect
 import json
+import pickle
 import sys
 import threading
 from typing import (
@@ -32,15 +33,19 @@ from typing import (
 )
 
 from pydantic import Field
+import reactivex as rx
+from reactivex import operators as ops
 from reactivex.disposable import CompositeDisposable, Disposable
+from reactivex.scheduler import TimeoutScheduler
 
 from dimos.core.core import T, rpc
 from dimos.core.global_config import GlobalConfig, global_config
-from dimos.core.introspection.module.info import extract_module_info
+from dimos.core.introspection.module.info import StreamDescriptor, extract_module_info
 from dimos.core.introspection.module.render import render_module_io
 from dimos.core.resource import CompositeResource
 from dimos.core.rpc_client import RpcCall
 from dimos.core.stream import IO, In, Out, RemoteOut, Transport
+from dimos.core.transport import PubSubTransport
 from dimos.core.transport_factory import rpc_backend
 from dimos.protocol.rpc.spec import DEFAULT_RPC_TIMEOUT, DEFAULT_RPC_TIMEOUTS, RPCSpec
 from dimos.protocol.service.spec import BaseConfig, Configurable
@@ -72,6 +77,12 @@ class SkillInfo:
     args_schema: str
     uses: tuple[str, ...] = ()
     lifecycle: str = "instant"
+
+
+# Skill metadata derives from the class, so one build serves every instance.
+# The lock makes a worker's deploy warm-up and McpServer's later request share it.
+_skills_by_class: dict[type, list[SkillInfo]] = {}
+_skills_lock = threading.Lock()
 
 
 class PeekNotFound:
@@ -113,6 +124,9 @@ class ModuleConfig(BaseConfig):
     # once (see BlueprintAtom.instance_name). Changes the RPC topic prefix
     # from the class name to this name.
     instance_name: str | None = None
+    # Optional RPC-only address. Unlike instance_name, this does not change the
+    # module's Blueprint identity, configuration key, or stream namespace.
+    rpc_name: str | None = None
     g: GlobalConfig = global_config
 
 
@@ -135,6 +149,12 @@ class ModuleBase(Configurable, CompositeResource):
     # each other for CPU and the GIL.
     dedicated_worker: ClassVar[bool] = False
 
+    # When True, the worker imports the input types' decode dependencies right
+    # after construction (see python_worker._start_warm_up). Set False where
+    # Python never decodes the inputs, e.g. native modules, or when a heavy
+    # input is optional.
+    warm_up_inputs: ClassVar[bool] = True
+
     _rpc: RPCSpec | None = None
     _tf: TF | None = None
     _loop: asyncio.AbstractEventLoop | None = None
@@ -142,6 +162,7 @@ class ModuleBase(Configurable, CompositeResource):
     _bound_rpc_calls: dict[str, RpcCall] = {}
     _module_closed: bool = False
     _module_closed_lock: threading.Lock
+    _loop_lock: threading.Lock
     _loop_thread_timeout: float = 2.0
     _main_gen: AsyncGenerator[None, None] | None = None
     _tools: dict[str, Any]
@@ -150,6 +171,7 @@ class ModuleBase(Configurable, CompositeResource):
     def __init__(self, config_args: dict[str, Any]) -> None:
         super().__init__(**config_args)
         self._module_closed_lock = threading.Lock()
+        self._loop_lock = threading.Lock()
         self._tools = {}
         self._tools_lock = threading.Lock()
         self._loop, self._loop_thread = get_loop()
@@ -161,7 +183,10 @@ class ModuleBase(Configurable, CompositeResource):
             # start() before serve_module_rpc(): Zenoh's subscribe needs an open
             # session (acquired in start()), whereas LCM tolerates either order.
             self.rpc.start()  # type: ignore[attr-defined]
-            self.rpc.serve_module_rpc(self, name=self.config.instance_name)
+            self.rpc.serve_module_rpc(
+                self,
+                name=self.config.rpc_name or self.config.instance_name,
+            )
         except ValueError:
             ...
 
@@ -208,16 +233,17 @@ class ModuleBase(Configurable, CompositeResource):
 
         # Save into local variables to avoid race when stopping concurrently
         # (from RPC and worker shutdown)
-        loop_thread = getattr(self, "_loop_thread", None)
-        loop = getattr(self, "_loop", None)
+        with self._loop_lock:
+            loop_thread = getattr(self, "_loop_thread", None)
+            loop = getattr(self, "_loop", None)
 
-        if loop_thread:
-            if loop_thread.is_alive():
-                if loop:
-                    loop.call_soon_threadsafe(loop.stop)
-                loop_thread.join(timeout=self._loop_thread_timeout)
-            self._loop = None
-            self._loop_thread = None
+            if loop_thread:
+                if loop_thread.is_alive():
+                    if loop:
+                        loop.call_soon_threadsafe(loop.stop)
+                    loop_thread.join(timeout=self._loop_thread_timeout)
+                self._loop = None
+                self._loop_thread = None
 
         if self._tf is not None:
             self._tf.dispose()
@@ -250,6 +276,7 @@ class ModuleBase(Configurable, CompositeResource):
         # Remove unpicklable attributes
         state.pop("_disposables", None)
         state.pop("_module_closed_lock", None)
+        state.pop("_loop_lock", None)
         state.pop("_loop", None)
         state.pop("_loop_thread", None)
         state.pop("_rpc", None)
@@ -264,6 +291,7 @@ class ModuleBase(Configurable, CompositeResource):
         self.__dict__.update(state)
         # Reinitialize runtime attributes
         self._module_closed_lock = threading.Lock()
+        self._loop_lock = threading.Lock()
         self._loop = None
         self._loop_thread = None
         self._rpc = None
@@ -339,6 +367,37 @@ class ModuleBase(Configurable, CompositeResource):
             rpcs=self.rpcs,
             color=color,
         )
+
+    @rpc
+    def get_stream_descriptors(self) -> list[StreamDescriptor]:
+        """Describe current instance wiring, including transports set after deployment."""
+        descriptors = []
+        streams: dict[str, In[Any] | Out[Any] | IO[Any]] = {
+            **self.inputs,
+            **self.outputs,
+            **self.ios,
+        }
+        for stream in streams.values():
+            transport = stream.transport
+            if transport is None:
+                continue
+            descriptors.append(
+                StreamDescriptor(
+                    module=self.config.instance_name or type(self).__name__,
+                    name=stream.name,
+                    direction="inout"
+                    if isinstance(stream, IO)
+                    else "in"
+                    if isinstance(stream, In)
+                    else "out",
+                    type_name=f"{stream.type.__module__}.{stream.type.__qualname__}",
+                    channel=transport.channel
+                    if isinstance(transport, PubSubTransport)
+                    else type(transport).__name__,
+                    transport=pickle.dumps((stream.type, transport)),
+                )
+            )
+        return descriptors
 
     @classmethod
     def _io_class(cls, color: bool = True) -> str:
@@ -460,29 +519,41 @@ class ModuleBase(Configurable, CompositeResource):
 
     @rpc
     def get_skills(self) -> list[SkillInfo]:
+        cls = type(self)
+        with _skills_lock:
+            if cls not in _skills_by_class:
+                _skills_by_class[cls] = self._build_skills()
+            return _skills_by_class[cls]
+
+    def _build_skills(self) -> list[SkillInfo]:
+        cls = type(self)
+        # Static lookup on the class: getattr on the instance would evaluate
+        # properties, and those may raise when unconfigured (tfbuffer without
+        # a tf port) or block on a lazy load.
+        names = [
+            name
+            for name in dir(cls)
+            if hasattr(inspect.getattr_static(cls, name, None), "__skill__")
+        ]
+        if not names:
+            return []
         from langchain_core.tools import tool  # ~170ms: deferred to avoid CLI startup cost
 
         skills: list[SkillInfo] = []
-        for name in dir(self):
-            try:
-                attr = getattr(self, name)
-            except Exception:
-                # Properties may legitimately raise when unconfigured (e.g.
-                # tfbuffer without a tf port); they are not skills.
-                continue
-            if callable(attr) and hasattr(attr, "__skill__"):
-                schema = json.dumps(tool(attr).args_schema.model_json_schema())
-                uses = tuple(getattr(attr, "__skill_uses__", ()) or ())
-                lifecycle = getattr(attr, "__skill_lifecycle__", "instant")
-                skills.append(
-                    SkillInfo(
-                        class_name=self.__class__.__name__,
-                        func_name=name,
-                        args_schema=schema,
-                        uses=uses,
-                        lifecycle=lifecycle,
-                    )
+        for name in names:
+            attr = getattr(self, name)
+            schema = json.dumps(tool(attr).args_schema.model_json_schema())
+            uses = tuple(getattr(attr, "__skill_uses__", ()) or ())
+            lifecycle = getattr(attr, "__skill_lifecycle__", "instant")
+            skills.append(
+                SkillInfo(
+                    class_name=cls.__name__,
+                    func_name=name,
+                    args_schema=schema,
+                    uses=uses,
+                    lifecycle=lifecycle,
                 )
+            )
         return skills
 
     def spawn(self, coro: Any) -> Any:
@@ -607,29 +678,30 @@ class ModuleBase(Configurable, CompositeResource):
 
     def _stop_main(self) -> None:
         """Resume `main` past its yield so the teardown section runs."""
-        gen = self._main_gen
-        if gen is None:
-            return
-        self._main_gen = None
-        loop = self._loop
-        if loop is None or not loop.is_running():
-            return
-        try:
-            asyncio.run_coroutine_threadsafe(gen.__anext__(), loop).result()
-        except StopAsyncIteration:
-            return
-        except BaseException as e:
-            # Do not fail teardown if main raises. Log and continue with best
-            # effort to close the module.
-            logger.exception(
-                f"Error during {type(self).__name__}.main teardown: {type(e).__name__}: {e}"
-            )
-            return
-        # No StopAsyncIteration means main yielded a second time.
-        try:
-            asyncio.run_coroutine_threadsafe(gen.aclose(), loop).result()
-        except BaseException:
-            pass
+        with self._loop_lock:
+            gen = self._main_gen
+            if gen is None:
+                return
+            self._main_gen = None
+            loop = self._loop
+            if loop is None or not loop.is_running():
+                return
+            try:
+                asyncio.run_coroutine_threadsafe(gen.__anext__(), loop).result()
+            except StopAsyncIteration:
+                return
+            except BaseException as e:
+                # Do not fail teardown if main raises. Log and continue with best
+                # effort to close the module.
+                logger.exception(
+                    f"Error during {type(self).__name__}.main teardown: {type(e).__name__}: {e}"
+                )
+                return
+            # No StopAsyncIteration means main yielded a second time.
+            try:
+                asyncio.run_coroutine_threadsafe(gen.aclose(), loop).result()
+            except BaseException:
+                pass
         logger.error(
             f"{type(self).__name__}.main yielded more than once; "
             "expected exactly one yield (setup, then teardown)"
@@ -836,6 +908,14 @@ class Module(ModuleBase):
         if stream is None:
             return PeekNotFound()
         try:
+            if isinstance(stream, Out) and stream.transport is not None:
+                # External sources such as DimSim publish straight to the bus.
+                # Keep local emissions too: send-only transports do not loop back.
+                return (
+                    rx.merge(stream.pure_observable(), stream.transport.pure_observable())
+                    .pipe(ops.first(), ops.timeout(timeout, scheduler=TimeoutScheduler.singleton()))
+                    .run()
+                )
             return stream.get_next(timeout)
         except Exception:
             return None

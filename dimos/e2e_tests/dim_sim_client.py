@@ -19,9 +19,12 @@ from dimos.simulation.dimsim.scene_client import SceneClient
 
 
 class DimSimClient:
+    """Scene commands for the DimSim a launched dimos runs; ``port`` is the one it was given."""
+
     _client: SceneClient | None = None
 
-    def __init__(self) -> None:
+    def __init__(self, port: int) -> None:
+        self._port = port
         self._client = None
         self._goal_request: PubSubTransport[PoseStamped] = make_transport(
             "/goal_request", PoseStamped
@@ -33,13 +36,16 @@ class DimSimClient:
         self._goal_request.start()
 
     def stop(self) -> None:
-        self.client.stop()
+        # Only close a scene connection that was actually opened; going through
+        # `self.client` here would dial the bridge just to hang up.
+        if self._client is not None:
+            self._client.stop()
         self._goal_request.stop()
 
     @property
     def client(self) -> SceneClient:
         if self._client is None:
-            self._client = SceneClient()
+            self._client = SceneClient(port=self._port)
             self._client.start()
         return self._client
 

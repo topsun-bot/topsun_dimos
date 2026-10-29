@@ -16,10 +16,25 @@ from __future__ import annotations
 
 from functools import lru_cache
 import importlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dimos.msgs.protocol import DimosMsg
+
+
+def lcm_msg_type(msg_name: str) -> type[Any]:
+    """The generated dimos_lcm class of a '<package>.<Type>' name. ImportError
+    when the wheel has no such message."""
+    package, name = msg_name.split(".")
+    # Generated classes live on the package module (`from dimos_lcm.geometry_msgs
+    # import Pose`), not as independently importable `dimos_lcm.<pkg>.<Type>`
+    # submodules on every wheel.
+    module = importlib.import_module(f"dimos_lcm.{package}")
+    try:
+        lcm_type: type[Any] = getattr(module, name)
+    except AttributeError as exc:
+        raise ImportError(f"dimos_lcm.{package} has no message class {name!r}") from exc
+    return lcm_type
 
 
 @lru_cache(maxsize=256)

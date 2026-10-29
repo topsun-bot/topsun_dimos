@@ -63,6 +63,7 @@ import torch
 
 from dimos.agents.agent_spec import AgentSpec
 from dimos.agents.annotation import skill
+from dimos.agents.skills.visual_servoing.visual_servoing_2d import VisualServoing2D
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -75,7 +76,6 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
-from dimos.navigation.visual_servoing.visual_servoing_2d import VisualServoing2D
 from dimos.perception.detection.detectors.person.yolo import YoloPersonDetector
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.utils.logging_config import setup_logger
@@ -1762,7 +1762,7 @@ class FollowMeSkillContainer(Module):
         """从所有 person 候选里选锚点：有描述用 VL 匹配，没描述选最居中+最大。"""
         if description.strip():
             try:
-                from dimos.navigation.visual.query import get_object_bbox_from_image
+                from dimos.agents.skills.visual_servoing.query import get_object_bbox_from_image
 
                 assert self._vl is not None
                 bbox = get_object_bbox_from_image(self._vl, image, description)

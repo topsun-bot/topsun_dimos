@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Literal
 import typer
 
 if TYPE_CHECKING:
-    from dimos.imitation.dataprep.core import DataPrepConfig
+    from dimos.imitation.dataprep.schema import DataPrepConfig
 
 
 def _load_config(
@@ -42,7 +42,7 @@ def _load_config(
     output_format: Literal["lerobot", "hdf5"] | None,
 ) -> DataPrepConfig:
     """Build a DataPrepConfig from an optional JSON file + flag overrides."""
-    from dimos.imitation.dataprep.core import DataPrepConfig, OutputConfig
+    from dimos.imitation.dataprep.schema import DataPrepConfig, OutputConfig
 
     if config_path is not None:
         cfg = DataPrepConfig.model_validate_json(Path(config_path).read_text())
@@ -73,7 +73,7 @@ def build(
     if not cfg.source:
         typer.echo("error: no source given (use --source or set it in --config)", err=True)
         raise typer.Exit(2)
-    if not cfg.observation and not cfg.action:
+    if not cfg.recording_schema.observation and not cfg.recording_schema.action:
         typer.echo(
             "error: no observation/action streams configured; pass --config with the "
             "stream maps (see dimos/imitation/dataprep/example_config.json)",
@@ -82,7 +82,12 @@ def build(
         raise typer.Exit(2)
 
     try:
-        path = run_dataprep(cfg)
+        if cfg.output.format == "lerobot":
+            from dimos.imitation.dataprep.formats.lerobot.adapter import run_lerobot_dataprep
+
+            path = run_lerobot_dataprep(cfg)
+        else:
+            path = run_dataprep(cfg)
     except Exception as e:
         # CLI boundary: any failure becomes a clean message + non-zero exit
         # instead of a traceback. run_dataprep raises specific errors internally.
@@ -102,7 +107,12 @@ def inspect(dataset: Path | None, output_format: Literal["lerobot", "hdf5"] | No
         raise typer.Exit(2)
 
     try:
-        info = inspect_dataset(dataset, output_format)
+        if output_format is None:
+            info = inspect_dataset(dataset)
+        else:
+            from dimos.imitation.dataprep.core import get_inspector
+
+            info = get_inspector(output_format)(dataset)
     except Exception as e:
         # CLI boundary: surface failures as a message + non-zero exit, not a traceback.
         typer.echo(f"dataprep inspect failed: {e}", err=True)

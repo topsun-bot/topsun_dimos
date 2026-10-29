@@ -31,6 +31,7 @@ import numpy as np
 
 from dimos.manipulation.planning.groups.models import PlanningGroup
 from dimos.manipulation.planning.kinematics.utils import (
+    finite_retry_limits as _finite_retry_limits,
     resolve_single_pose_target_request as _resolve_single_pose_target_request,
 )
 from dimos.manipulation.planning.spec.enums import IKStatus
@@ -128,7 +129,8 @@ class JacobianIK:
         if not world.is_finalized:
             return _create_failure_result(IKStatus.NO_SOLUTION, "World must be finalized before IK")
 
-        lower_limits, upper_limits = world.get_joint_limits()
+        joint_space = world.get_prepared_model().joint_space
+        lower_limits, upper_limits = joint_space.position_limits()
 
         # Get seed from current state if not provided
         if seed is None:
@@ -137,6 +139,7 @@ class JacobianIK:
 
         # Extract joint names for creating random seeds
         joint_names = seed.name
+        seed_positions = np.array(seed.position, dtype=np.float64)
 
         best_result: IKResult | None = None
         best_error = float("inf")
@@ -146,8 +149,15 @@ class JacobianIK:
             if attempt == 0:
                 current_seed = seed
             else:
-                # Random seed within joint limits
-                random_positions = np.random.uniform(lower_limits, upper_limits)
+                retry_lower, retry_upper = _finite_retry_limits(
+                    joint_space,
+                    seed_positions,
+                    lower_limits,
+                    upper_limits,
+                    range(len(seed_positions)),
+                    attempt,
+                )
+                random_positions = np.random.uniform(retry_lower, retry_upper)
                 current_seed = JointState(
                     {"name": joint_names, "position": random_positions.tolist()}
                 )
@@ -281,7 +291,7 @@ class JacobianIK:
         result_joint_names = list(group.joint_names) if group is not None else joint_names
 
         max_iterations = max_iterations or self._max_iterations
-        lower_limits, upper_limits = world.get_joint_limits()
+        lower_limits, upper_limits = world.get_prepared_model().joint_space.position_limits()
 
         for iteration in range(max_iterations):
             with world.scratch_context() as ctx:
@@ -409,16 +419,12 @@ class JacobianIK:
         # Compute joint velocities
         q_dot = J_pinv @ twist_array
 
-        # Apply velocity limits if available
-        config = world.get_model_config()
-        if config.velocity_limits is not None:
-            velocity_limits = np.array(config.velocity_limits)
-            # Only consider joints with non-zero velocity limits
-            nonzero_mask = velocity_limits > 0
-            if np.any(nonzero_mask):
-                max_ratio = np.max(np.abs(q_dot[nonzero_mask]) / velocity_limits[nonzero_mask])
-                if max_ratio > 1.0:
-                    q_dot = q_dot / max_ratio
+        velocity_limits = np.asarray(
+            world.get_prepared_model().joint_space.velocity_limits, dtype=np.float64
+        )
+        max_ratio = np.max(np.abs(q_dot) / velocity_limits)
+        if max_ratio > 1.0:
+            q_dot = q_dot / max_ratio
 
         return JointState({"name": joint_names, "velocity": q_dot.tolist()})
 

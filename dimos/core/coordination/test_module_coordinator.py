@@ -13,7 +13,9 @@
 # limitations under the License.
 
 from collections.abc import Callable
+import importlib
 import pickle
+import sys
 import threading
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -38,13 +40,14 @@ from dimos.core.coordination.module_coordinator import (
     _deploy_all_modules,
     _materialize_transports,
     _verify_no_conflicts_with_existing,
-    _verify_no_name_conflicts,
     stream_name_types,
+    verify_no_name_conflicts,
 )
 from dimos.core.coordination.worker_manager_python import WorkerManagerPython
 from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig
 from dimos.core.module import Module
+from dimos.core.rpc_client import RPCClient
 from dimos.core.stream import IO, In, Out, Stream
 from dimos.core.transport import CloudflareTransport, PubSubTransport
 from dimos.core.transport_factory import transport_topic
@@ -86,6 +89,10 @@ class ModuleB(Module):
     @rpc
     def what_is_as_name(self) -> str:
         return self.module_a.get_name()
+
+    @rpc
+    def module_a_rpc_name(self) -> str:
+        return self.module_a.get_name.remote_name
 
 
 class ModuleC(Module):
@@ -271,7 +278,7 @@ def test_build_does_not_mutate_parsed_config(mocker) -> None:
     mocker.patch.object(ModuleCoordinator, "_connect_streams")
     mocker.patch("dimos.core.coordination.module_coordinator._connect_module_refs")
     mocker.patch.object(ModuleCoordinator, "build_all_modules")
-    mocker.patch.object(ModuleCoordinator, "start_all_modules")
+    mocker.patch.object(ModuleCoordinator, "start_all_modules", return_value={})
     mocker.patch("dimos.core.coordination.module_coordinator._log_blueprint_graph")
 
     coordinator = ModuleCoordinator.build(blueprint, parsed)
@@ -364,7 +371,7 @@ def test_name_conflicts_are_reported() -> None:
     blueprint_set = autoconnect(ModuleA.blueprint(), ModuleB.blueprint())
 
     try:
-        _verify_no_name_conflicts(blueprint_set)
+        verify_no_name_conflicts(blueprint_set)
         pytest.fail("Expected ValueError to be raised")
     except ValueError as e:
         error_message = str(e)
@@ -386,7 +393,7 @@ def test_multiple_name_conflicts_are_reported() -> None:
     blueprint_set = autoconnect(Module1.blueprint(), Module2.blueprint())
 
     try:
-        _verify_no_name_conflicts(blueprint_set)
+        verify_no_name_conflicts(blueprint_set)
         pytest.fail("Expected ValueError to be raised")
     except ValueError as e:
         error_message = str(e)
@@ -410,7 +417,7 @@ def test_that_remapping_can_resolve_conflicts() -> None:
     blueprint_set = autoconnect(Module1.blueprint(), Module2.blueprint(), Module3.blueprint())
 
     try:
-        _verify_no_name_conflicts(blueprint_set)
+        verify_no_name_conflicts(blueprint_set)
         pytest.fail("Expected ValueError due to conflict")
     except ValueError as e:
         assert "'data' has conflicting types" in str(e)
@@ -426,7 +433,7 @@ def test_that_remapping_can_resolve_conflicts() -> None:
     )
 
     # Should not raise any exception after remapping
-    _verify_no_name_conflicts(blueprint_set_remapped)
+    verify_no_name_conflicts(blueprint_set_remapped)
 
 
 def test_remapping() -> None:
@@ -658,6 +665,20 @@ def test_load_blueprint_twice(dynamic_coordinator) -> None:
     assert b.data3.transport.topic == c.data3.transport.topic
 
 
+def test_transport_observer_visits_existing_and_new_streams_once(dynamic_coordinator) -> None:
+    dynamic_coordinator.load_module(ModuleA)
+    seen: list[str] = []
+    with pytest.raises(RuntimeError, match="leave recording"):
+        with dynamic_coordinator.observe_transports(
+            lambda name, stream_type, transport: seen.append(name)
+        ):
+            dynamic_coordinator.load_module(ModuleB)
+            raise RuntimeError("leave recording")
+
+    dynamic_coordinator.load_module(SourceModule)
+    assert sorted(seen) == ["data1", "data2", "data3"]
+
+
 def test_load_module_convenience(dynamic_coordinator) -> None:
     """load_module is a shorthand for load_blueprint(cls.blueprint())."""
     dynamic_coordinator.load_module(ModuleA)
@@ -770,6 +791,36 @@ def test_build_with_explicit_instance_name(build_coordinator) -> None:
     assert module_b.what_is_as_name() == "A, Module A"
 
 
+def test_build_calls_remote_module_reference_over_zenoh() -> None:
+    rpc_name = "runs/run-1/hosts/host-a/modules/modulea"
+    provider_blueprint = ModuleA.blueprint(rpc_name=rpc_name)
+    provider_config = BlueprintConfigParser(provider_blueprint).parse(
+        environ={},
+        overrides={"g": {"n_workers": 1, "transport": "zenoh", "viewer": "none"}},
+    )
+    consumer_blueprint = ModuleB.blueprint()
+    consumer_config = BlueprintConfigParser(consumer_blueprint).parse(
+        environ={},
+        overrides={"g": {"n_workers": 1, "transport": "zenoh", "viewer": "none"}},
+    )
+
+    provider = ModuleCoordinator.build(provider_blueprint, provider_config)
+    consumer = ModuleCoordinator.build(
+        consumer_blueprint,
+        consumer_config,
+        remote_module_refs={("moduleb", "module_a"): (ModuleA, rpc_name)},
+    )
+
+    try:
+        module_b = consumer.get_instance(ModuleB)
+        assert module_b is not None
+        assert module_b.module_a_rpc_name() == rpc_name
+        assert module_b.what_is_as_name() == "A, Module A"
+    finally:
+        consumer.stop()
+        provider.stop()
+
+
 def test_load_blueprint_auto_scales_empty_pool(dynamic_coordinator) -> None:
     """A coordinator with 0 initial workers auto-adds workers on load_blueprint."""
     dynamic_coordinator.load_blueprint(ModuleA.blueprint())
@@ -785,6 +836,37 @@ def test_check_requirements_failure(mocker) -> None:
 
     with pytest.raises(SystemExit):
         _check_requirements(bp)
+
+
+@pytest.mark.parametrize("dedicated", [False, True], ids=["pool-worker", "dedicated-worker"])
+def test_module_saved_in_modules_dir_after_start_loads(
+    dedicated: bool, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("dimos.core.coordination.module_coordinator.RUNTIME_MODULES_DIR", tmp_path)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    coordinator = ModuleCoordinator(g=GlobalConfig(n_workers=1, viewer="none"))
+    coordinator.start()
+    try:
+        package = f"saved_after_start_{'dedicated' if dedicated else 'pool'}"
+        (tmp_path / package).mkdir()
+        (tmp_path / package / "__init__.py").write_text("")
+        (tmp_path / package / "greeter.py").write_text(
+            "from dimos.core.core import rpc\n"
+            "from dimos.core.module import Module\n\n\n"
+            "class Greeter(Module):\n"
+            f"    dedicated_worker = {dedicated}\n\n"
+            "    @rpc\n"
+            "    def greet(self) -> str:\n"
+            "        return 'hello from RUNTIME_MODULES_DIR'\n"
+        )
+        importlib.invalidate_caches()
+        greeter = importlib.import_module(f"{package}.greeter").Greeter
+
+        coordinator.load_module(greeter)
+
+        assert coordinator.get_instance(greeter).greet() == "hello from RUNTIME_MODULES_DIR"
+    finally:
+        coordinator.stop()
 
 
 def test_restart_module_basic(dynamic_coordinator) -> None:
@@ -949,6 +1031,45 @@ def test_unload_after_reload_restart(dynamic_coordinator, mocker) -> None:
     assert dynamic_coordinator.get_instance(ModuleA) is None
 
 
+class SystemModulesRecorder(Module):
+    """Records each module list that the coordinator sends to `on_system_modules`."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._lists: list[list[str]] = []
+
+    @rpc
+    def on_system_modules(self, modules: list[RPCClient]) -> None:
+        self._lists.append(sorted(module.remote_name for module in modules))
+
+    @rpc
+    def module_lists(self) -> list[list[str]]:
+        return self._lists
+
+
+def test_unload_module_sends_the_remaining_modules(dynamic_coordinator) -> None:
+    """Modules that track the system, such as McpServer, stop seeing an unloaded module."""
+    dynamic_coordinator.load_module(SystemModulesRecorder)
+    dynamic_coordinator.load_module(ModuleA)
+    recorder = dynamic_coordinator.get_instance(SystemModulesRecorder)
+    assert recorder.module_lists()[-1] == ["ModuleA", "SystemModulesRecorder"]
+
+    dynamic_coordinator.unload_module(ModuleA)
+
+    assert recorder.module_lists()[-1] == ["SystemModulesRecorder"]
+
+
+def test_restart_sends_the_module_list_once_the_module_is_back(dynamic_coordinator) -> None:
+    dynamic_coordinator.load_module(SystemModulesRecorder)
+    dynamic_coordinator.load_module(ModuleA)
+    recorder = dynamic_coordinator.get_instance(SystemModulesRecorder)
+    sent = len(recorder.module_lists())
+
+    dynamic_coordinator.restart_module(ModuleA, reload_source=False)
+
+    assert recorder.module_lists()[sent:] == [["ModuleA", "SystemModulesRecorder"]]
+
+
 def test_restart_preserves_remapped_streams(dynamic_coordinator) -> None:
     """Restart reconnects streams that were remapped during initial load."""
     bp = autoconnect(
@@ -989,16 +1110,23 @@ def test_start_rpc_service_is_idempotent(dynamic_coordinator) -> None:
     assert dynamic_coordinator._coordinator_rpc is first_service
 
 
+def test_start_rpc_service_rejects_a_different_name_after_start(dynamic_coordinator) -> None:
+    dynamic_coordinator.start_rpc_service(name="test-coordinator")
+
+    with pytest.raises(RuntimeError, match="already running as 'test-coordinator'"):
+        dynamic_coordinator.start_rpc_service(name="another-coordinator")
+
+
 def test_loop_starts_rpc_service_and_stops_on_interrupt(dynamic_coordinator, mocker) -> None:
     start_rpc = mocker.patch.object(dynamic_coordinator, "start_rpc_service")
     stop = mocker.patch.object(dynamic_coordinator, "stop")
-    event = mocker.patch("dimos.core.coordination.module_coordinator.threading.Event")
-    event.return_value.wait.side_effect = KeyboardInterrupt
+    wait = mocker.patch.object(dynamic_coordinator._shutdown_event, "wait")
+    wait.side_effect = KeyboardInterrupt
 
     dynamic_coordinator.loop()
 
     start_rpc.assert_called_once_with()
-    event.return_value.wait.assert_called_once_with()
+    wait.assert_called_once_with()
     stop.assert_called_once_with()
 
 
@@ -1192,3 +1320,20 @@ def test_io_port_autoconnects_and_flows_both_ways(wait_until) -> None:
         wait_until(lambda: "from_echo" in echo.seen(), timeout=10.0)
     finally:
         coordinator.stop()
+
+
+def test_shutdown_unblocks_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """shutdown() (the RPC handler) releases loop(), which stops everything."""
+    coordinator = ModuleCoordinator(g=GlobalConfig())
+    monkeypatch.setattr(coordinator, "start_rpc_service", lambda: None)
+    stopped = threading.Event()
+    monkeypatch.setattr(coordinator, "stop", stopped.set)
+
+    looper = threading.Thread(target=coordinator.loop, daemon=True)
+    looper.start()
+    assert not stopped.wait(0.1)
+
+    coordinator.shutdown()
+    looper.join(timeout=5)
+    assert not looper.is_alive()
+    assert stopped.is_set()

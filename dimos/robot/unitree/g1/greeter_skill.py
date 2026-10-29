@@ -30,6 +30,7 @@ from dimos.agents.annotation import skill
 from dimos.agents.skills.speak_skill_spec import SpeakSkillSpec
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
+from dimos.robot.unitree.config import connection_type
 from dimos.robot.unitree.g1.connection_spec import G1ConnectionSpec
 from dimos.robot.unitree.g1.effectors.high_level.commands import (
     ARM_API_ID,
@@ -252,7 +253,7 @@ class GreeterSkillContainer(Module):
     def _resolved_dance_style(self) -> Literal["webrtc_arms", "onboard_random"]:
         return resolve_dance_style(
             self.config.dance_style,
-            self.config.g.unitree_connection_type,
+            connection_type(replay=self.config.g.replay, simulation=self.config.g.simulation),
             is_onboard_compute(),
         )
 

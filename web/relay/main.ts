@@ -3,20 +3,43 @@
 // everything else logs to stderr-adjacent console lines prefixed [relay].
 import { parseArgs } from "@std/cli";
 import { PROTOCOL_VERSION } from "@dimos/shared";
-import { startRelay } from "./server.ts";
+import { loadAuthFile } from "./auth.ts";
+import { loadRtcFile } from "./cloudflare.ts";
+import { CERT_KEY_PAIR_ERROR, startRelay } from "./server.ts";
 
 const args = parseArgs(Deno.args, {
-  string: ["host", "cockpit-dir", "sdk-dir", "serve-dir"],
-  // Non-loopback binds need this explicit acknowledgment: the local relay
-  // trusts every origin that can reach it (see RelayOptions.unsafeNonLoopback).
+  string: [
+    "host",
+    "cockpit-dir",
+    "sdk-dir",
+    "serve-dir",
+    "cert",
+    "key",
+    "auth-file",
+    "rtc-file",
+    "congestion",
+  ],
+  // Non-loopback binds without --cert, --key and --auth-file need this
+  // explicit acknowledgment (see RelayOptions.unsafeNonLoopback).
   boolean: ["unsafe-non-loopback"],
   default: { port: 7780, host: "127.0.0.1" },
 });
 
+if ((args.cert === undefined) !== (args.key === undefined)) {
+  throw new Error(CERT_KEY_PAIR_ERROR);
+}
+const congestion = args.congestion;
+if (congestion !== undefined && congestion !== "throughput" && congestion !== "low-latency") {
+  throw new Error(
+    `--congestion must be throughput (Cubic) or low-latency (BBR), got ${congestion}`,
+  );
+}
 const host = args.host as string;
-if (host !== "127.0.0.1" && host !== "localhost") {
+const tls = args.cert !== undefined;
+if (host !== "127.0.0.1" && host !== "localhost" && !tls) {
   // serverCertificateHashes only works from secure contexts; http://<lan-ip>
-  // pages are not one. Remote access needs the cloud relay + real TLS (T12).
+  // pages are not one. A real certificate (--cert/--key) makes https://<host>
+  // one, and the browser then verifies it instead of pinning a hash.
   console.log(
     `[relay] warning: binding ${host} - browsers will not treat http://${host} as a ` +
       "secure context, so WebTransport will be unavailable there; this is only useful " +
@@ -31,6 +54,11 @@ const relay = await startRelay({
   sdkDir: args["sdk-dir"],
   serveDir: args["serve-dir"],
   unsafeNonLoopback: args["unsafe-non-loopback"],
+  cert: args.cert === undefined ? undefined : await Deno.readTextFile(args.cert),
+  key: args.key === undefined ? undefined : await Deno.readTextFile(args.key),
+  auth: args["auth-file"] === undefined ? undefined : await loadAuthFile(args["auth-file"]),
+  rtc: args["rtc-file"] === undefined ? undefined : await loadRtcFile(args["rtc-file"]),
+  congestionControl: congestion,
 });
 
 console.log(JSON.stringify({
@@ -41,17 +69,23 @@ console.log(JSON.stringify({
   v: PROTOCOL_VERSION,
 }));
 const pageHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+const pageBase = `${tls ? "https" : "http"}://${pageHost}:${relay.httpPort}/`;
 if (args["serve-dir"] !== undefined) {
-  console.log(`[relay] serving ${args["serve-dir"]}: http://${pageHost}:${relay.httpPort}/`);
+  console.log(`[relay] serving ${args["serve-dir"]}: ${pageBase}`);
 } else if (args["cockpit-dir"] !== undefined) {
-  console.log(`[relay] cockpit: http://${pageHost}:${relay.httpPort}/`);
+  console.log(`[relay] cockpit: ${pageBase}`);
 } else {
   console.log("[relay] no cockpit dist configured; serving /api only");
 }
 if (args["sdk-dir"] !== undefined) {
-  console.log(`[relay] sdk: http://${pageHost}:${relay.httpPort}/sdk.js`);
+  console.log(`[relay] sdk: ${pageBase}sdk.js`);
 }
-
+if (args["rtc-file"] !== undefined) {
+  console.log("[relay] WebRTC video through the Cloudflare Realtime SFU: on");
+}
+if (congestion !== undefined) {
+  console.log(`[relay] congestion control: ${congestion === "low-latency" ? "BBR" : "Cubic"}`);
+}
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   try {
     Deno.addSignalListener(signal, async () => {

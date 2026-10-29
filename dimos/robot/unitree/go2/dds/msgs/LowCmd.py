@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from dimos.robot.unitree.go2.dds.cdr import OptionalPrim
 from dimos.robot.unitree.go2.dds.msgs.base import PrettyMsg
 from dimos.robot.unitree.go2.dds.msgs.BmsCmd import BmsCmd
 from dimos.robot.unitree.go2.dds.msgs.MotorCmd import MotorCmd
@@ -44,9 +45,8 @@ class LowCmd(PrettyMsg):
     fan: np.ndarray  # u8[2]
     gpio: int
     reserve: int
-    # NOTE: the SDK's trailing `crc` (uint32) is absent on this Go2's firmware
-    # wire format — verified against the recording (body ends after `reserve`),
-    # matching the same omission in LowState.
+    # SDK CRC. Older firmware / china-office MCAPs end after reserve; then 0.
+    crc: int
 
     __cdr_fields__ = [
         ("head", ("array", "u8", 2)),
@@ -62,4 +62,5 @@ class LowCmd(PrettyMsg):
         ("fan", ("array", "u8", 2)),
         ("gpio", "u8"),
         ("reserve", "u32"),
+        ("crc", OptionalPrim("u32")),
     ]

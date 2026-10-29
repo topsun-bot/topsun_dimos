@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from engine.nomad.config import NoMaDConfig
 from engine.nomad.local_planner_module import NoMaDTrajectoryLocalPlannerModule
-from go2_nomad_nav import NAV_GO2_MODES, _build_blueprint, parse_nav_go2_config
+from go2_nomad_nav import NAV_GO2_MODES, NavGo2Viewer, _build_blueprint, parse_nav_go2_config
 from record_image_module import RecordImageConfig, RecordImageModule, save_record_image
 from trajectory_inference import TrajectoryInferenceResult
 from trajectory_local_planner_module import (
@@ -31,8 +31,11 @@ from trajectory_local_planner_module import (
     TrajectoryLocalPlannerModule,
 )
 
+from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
+from dimos.core.global_config import global_config
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 
 class DummyTrajectoryEngine:
@@ -112,6 +115,33 @@ def test_nomad_config_resolves_relative_goal_image_path(tmp_path: Path) -> None:
 
     assert cfg.goal_image_path == str(goal_path)
     assert cfg.resolved_goal_image() == goal_path
+
+
+def _rerun_bridge(blueprint: Blueprint) -> BlueprintAtom:
+    (bridge,) = (atom for atom in blueprint.active_blueprints if atom.module is RerunBridgeModule)
+    return bridge
+
+
+def test_rerun_web_viewer_enables_composed_bridge_web() -> None:
+    cfg = parse_nav_go2_config(["--viewer", "rerun-web"])
+    assert cfg.viewer == "rerun-web"
+    bridge = _rerun_bridge(_build_blueprint(cfg))
+    assert bridge.kwargs["rerun_web"] is True
+    assert "world/camera_info" in bridge.kwargs["visual_override"]
+
+
+def test_rerun_viewer_does_not_force_bridge_web() -> None:
+    cfg = parse_nav_go2_config(["--viewer", "rerun"])
+    bridge = _rerun_bridge(_build_blueprint(cfg))
+    assert bridge.kwargs.get("rerun_web") is not True
+
+
+def test_rerun_web_viewer_maps_global_config_to_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(global_config, "viewer", "none")
+    NavGo2Viewer.apply_global("rerun-web")
+    assert global_config.viewer == "rerun"
 
 
 def test_record_mode_blueprint_uses_image_recorder(tmp_path: Path) -> None:

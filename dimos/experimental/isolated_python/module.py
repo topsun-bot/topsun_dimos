@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run a concrete Module subclass in an isolated sibling Python project."""
+"""Run a concrete Module subclass in an isolated repository Python project."""
 
 from __future__ import annotations
 
-import inspect
+from hashlib import sha256
 import os
 from pathlib import Path
 import pickle
@@ -26,40 +26,64 @@ import threading
 import time
 from typing import Any, ClassVar
 
-from dimos.constants import DIMOS_PROJECT_ROOT
+from dimos.constants import CACHE_DIR
 from dimos.core.core import rpc
 from dimos.core.module import Module
-from dimos.core.native_module import NativeModule, NativeModuleConfig
+from dimos.core.native_module import (
+    NativeModule,
+    NativeModuleConfig,
+    _set_process_to_die_when_parent_dies,
+)
 from dimos.core.rpc_client import RPCClient
+from dimos.utils.data import get_project_root
 from dimos.utils.generic import short_id
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
 
-def isolated_python_run_command(project: Path, *command: str) -> list[str]:
-    """Run a command with the host DimOS available in an isolated project."""
+def isolated_python_run_command(project: Path, *command: str, sync: bool = True) -> list[str]:
+    """Run a project with dimOS from the shared source checkout.
+
+    ``sync=False`` is for launch after :meth:`IsolatedPythonModule._run_prepare`
+    has already built the cached overlay. A second ``uv run --with-editable``
+    otherwise re-resolves the host DimOS tree (and can wait on a leftover
+    overlay lock) inside the READY deadline.
+    """
     args = ["uv", "run"]
     if (project / "uv.lock").is_file():
         args.append("--frozen")
-    if (DIMOS_PROJECT_ROOT / "pyproject.toml").is_file():
-        args.extend(("--with-editable", str(DIMOS_PROJECT_ROOT)))
-    else:
-        # Installed hosts intentionally accept the newest compatible DimOS.
-        args.extend(("--with", "dimos"))
+    if not sync:
+        args.append("--no-sync")
+    args.extend(("--with-editable", str(get_project_root())))
     args.extend(command)
     if (project / "pixi.toml").is_file():
         return ["pixi", "run", "--executable", *args]
     return args
 
 
+def isolated_python_environment(project: Path) -> dict[str, str]:
+    """Use a cached project environment without inheriting host interpreter pins."""
+    env = dict(os.environ)
+    # The isolated project picks its own interpreter and venv; host pins
+    # (e.g. setup-uv exporting UV_PYTHON on CI matrix legs) must not leak in.
+    env.pop("VIRTUAL_ENV", None)
+    env.pop("UV_PYTHON", None)
+    env.pop("UV_PROJECT_ENVIRONMENT", None)
+    project_key = sha256(str(project).encode()).hexdigest()[:16]
+    env["UV_PROJECT_ENVIRONMENT"] = str(CACHE_DIR / "isolated-python" / project_key / ".venv")
+    return env
+
+
 class IsolatedPythonModuleConfig(NativeModuleConfig):
     """Process settings for an isolated Python module."""
 
-    # Isolated Python modules resolve their real command from the sibling project.
+    # Isolated Python modules resolve their real command from the repository project.
     executable: str = "uv"
     # Cold `uv run --with-editable` on ubuntu CI downloads the host DimOS
     # tree (opencv, scipy, …) before READY. 30s expired mid-import there.
+    # Launch uses ``--no-sync`` so this budget is for interpreter start +
+    # handshake, not a second overlay download.
     startup_timeout: float = 180.0
     output_limit: int = 64 * 1024
 
@@ -75,13 +99,14 @@ class IsolatedPythonModule(NativeModule):
     """A host RPC contract implemented by an isolated Python subclass.
 
     Contract classes set :attr:`implementation` to an import reference in a
-    sibling ``python/`` project. Calls to RPCs introduced by the contract are
+    repository project selected by :attr:`project_dir`. Contract RPCs are
     forwarded to the concrete runtime subclass. Framework and lifecycle RPCs
     remain on the host facade.
     """
 
     config: IsolatedPythonModuleConfig
     implementation: ClassVar[str]
+    project_dir: ClassVar[str]
 
     _isolated_python_runtime: bool
     _runtime_client: RPCClient | None
@@ -111,12 +136,11 @@ class IsolatedPythonModule(NativeModule):
 
     @property
     def runtime_project(self) -> Path:
-        source = Path(inspect.getfile(type(self))).resolve()
-        project = source.parent / "python"
+        project = get_project_root() / self.project_dir
         if not project.is_dir():
             raise FileNotFoundError(
                 f"Isolated Python runtime project is missing: {project}; "
-                "create a sibling 'python/' directory"
+                "ensure the shared dimOS checkout contains this project"
             )
         if not (project / "pyproject.toml").is_file():
             raise FileNotFoundError(
@@ -124,17 +148,11 @@ class IsolatedPythonModule(NativeModule):
             )
         return project
 
-    def _uv_command(self, *args: str) -> list[str]:
-        command = ["uv", *args]
-        if (self.runtime_project / "pixi.toml").is_file():
-            return ["pixi", "run", "--executable", *command]
-        return command
-
     def _prepare_command(self) -> list[str]:
-        args = ["sync"]
-        if (self.runtime_project / "uv.lock").is_file():
-            args.append("--frozen")
-        return self._uv_command(*args)
+        # `uv run` syncs the declared project and builds the cached overlay that
+        # holds the shared checkout’s dimOS with its dependencies. Doing it here keeps the
+        # first install, which can take minutes, out of the startup timeout.
+        return isolated_python_run_command(self.runtime_project, "python", "-c", "pass")
 
     def _launch_command(self, handshake_fd: int) -> list[str]:
         return isolated_python_run_command(
@@ -150,6 +168,7 @@ class IsolatedPythonModule(NativeModule):
             self._new_runtime_name(),
             "--handshake-fd",
             str(handshake_fd),
+            sync=False,
         )
 
     def _new_runtime_name(self) -> str:
@@ -158,15 +177,13 @@ class IsolatedPythonModule(NativeModule):
         return self._runtime_name
 
     def _runtime_env(self) -> dict[str, str]:
-        env = dict(os.environ)
-        env.pop("VIRTUAL_ENV", None)
+        env = isolated_python_environment(self.runtime_project)
         env.update(self.config.extra_env)
         return env
 
     def _run_prepare(self) -> None:
-        command = self._prepare_command()
         result = subprocess.run(
-            command,
+            self._prepare_command(),
             cwd=self.runtime_project,
             env=self._runtime_env(),
             capture_output=True,
@@ -199,6 +216,7 @@ class IsolatedPythonModule(NativeModule):
                 stderr=subprocess.PIPE,
                 pass_fds=(child_write,),
                 start_new_session=True,
+                preexec_fn=_set_process_to_die_when_parent_dies,
             )
             os.close(child_write)
             child_write = -1
@@ -233,9 +251,10 @@ class IsolatedPythonModule(NativeModule):
                             "Isolated Python runtime exited before becoming ready "
                             f"(returncode={self._process.returncode})"
                         )
+            pid = self._process.pid if self._process is not None else None
             raise RuntimeError(
                 "Isolated Python runtime did not become ready within "
-                f"{self.config.startup_timeout:.0f}s"
+                f"{self.config.startup_timeout:.0f}s (pid={pid})"
             )
         except BaseException:
             if self._process is not None:
@@ -300,6 +319,14 @@ class IsolatedPythonModule(NativeModule):
         if self._runtime_client is not None:
             self._runtime_client.set_module_ref(name, module_ref)
 
+    def _stop_runtime_client(self, client: RPCClient) -> None:
+        try:
+            client.stop()
+        except Exception:
+            logger.exception("Failed to stop isolated Python runtime module")
+        finally:
+            client.stop_rpc_client()
+
     @rpc
     def stop(self) -> None:
         if self._isolated_python_runtime:
@@ -308,10 +335,21 @@ class IsolatedPythonModule(NativeModule):
         client = self._runtime_client
         self._runtime_client = None
         if client is not None:
-            try:
-                client.stop()
-            except Exception:
-                logger.exception("Failed to stop isolated Python runtime module")
-            finally:
-                client.stop_rpc_client()
+            # Default RPC stop can wait 120s. A wedged runtime LCM shutdown
+            # (or leftover uv overlay lock) must not delay killpg that long —
+            # the next spawn's READY wait starts only after this returns.
+            rpc_stop = threading.Thread(
+                target=self._stop_runtime_client,
+                args=(client,),
+                daemon=True,
+                name=f"isolated-python-rpc-stop-{type(self).__name__}",
+            )
+            rpc_stop.start()
+            rpc_stop.join(timeout=self.config.shutdown_timeout)
+            if rpc_stop.is_alive():
+                logger.warning(
+                    "Isolated Python runtime RPC stop exceeded "
+                    f"{self.config.shutdown_timeout:.1f}s; killing process",
+                    module=type(self).__name__,
+                )
         NativeModule.stop(self)

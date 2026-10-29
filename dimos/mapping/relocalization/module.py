@@ -14,31 +14,16 @@
 
 """Relocalization: place the live ``world`` frame inside a prior map's ``map`` frame.
 
-This file is the contract: every relocalizer, whatever it matches, loads a
-prior map and answers with a ``world -> map`` transform, so it publishes the
-same two things - that transform on ``tf`` and the placed prior map on
-``loaded_map``. All of that lives here: ``map_file`` is read into
-``self.premap``, republished on ``loaded_map`` once a fix can resolve its
-frame, and :meth:`RelocalizationModule.submit` takes the transform.
-
-An implementation reads ``self.premap`` in its own ``start()`` (after
-``super().start()``, and ``None`` means no map was configured), builds
-whatever it matches against, and drives itself from its own inputs. It owns
-what the base cannot know: which ports it listens on, when to attempt a fix,
-and how good a fix must be. Matching lidar against the premap's points,
-apriltags against tag poses baked into it and GPS against a datum share none
-of that. See ``lidar/module.py``, the pointcloud runtime.
-
-Whether a fix is good enough is the implementation's call, made against its
-own config. A second threshold here would be a second place to configure one
-decision, and the two would drift.
-
-A dual strategy is a subclass of two implementations: ports merge across the
-MRO and ``start()`` chains through ``super()``.
+The base loads ``map_file`` into ``self.premap``, publishes accepted
+``world -> map`` fixes on ``tf`` and the premap on ``loaded_map`` once a fix lands.
+An implementation reads ``self.premap`` after ``super().start()`` (``None`` when
+no map is configured), picks its inputs, decides when a fix is good enough, and
+hands it to :meth:`RelocalizationModule.submit`. See ``lidar/module.py``.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import reactivex as rx
@@ -50,12 +35,22 @@ from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.utils.data import get_data
+from dimos.utils.data import resolve_named_path
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
 MAP_SUFFIX = ".pc2.lcm"
+
+
+def yaw_deg(tf: Transform) -> float:
+    return math.degrees(tf.rotation.euler.z)
+
+
+def fix_error(fix: Transform, recorded: Transform) -> tuple[float, float]:
+    """Yaw in degrees and translation in meters between two fixes of the same frame pair."""
+    dyaw = (yaw_deg(fix) - yaw_deg(recorded) + 180.0) % 360.0 - 180.0
+    return dyaw, (fix.translation - recorded.translation).length()
 
 
 def fix_stream(fixes: Observable[Transform], interval: float) -> Observable[Transform]:
@@ -69,20 +64,15 @@ def fix_stream(fixes: Observable[Transform], interval: float) -> Observable[Tran
 
 
 class Config(ModuleConfig):
-    # Premap stem or path, e.g. `--map-file=go2_hongkong_office_twopass_map`;
-    # `.pc2.lcm` is appended if absent. Without one the module runs but never
-    # attempts a fix.
+    # Premap stem or path (`.pc2.lcm` appended if absent); None never attempts a fix
     map_file: str | None = None
-    # What the live fixed frame is called, whatever the odometry is in
+    # Live fixed frame
     world_frame: str = "world"
-    # frame for a loaded premap
+    # Frame for the loaded premap
     map_frame: str = "map"
-    # Seconds between tf republishes of the accepted fix. The fix itself does
-    # not change but tf is not latched,
+    # Seconds between tf republishes of the accepted fix (tf is not latched)
     tf_interval: float = 10.0
-    # Seconds between `loaded_map` republishes. A premap does not change, so
-    # one publish is all the information there is - but the topic is not
-    # latched. Zero for the one publish.
+    # Seconds between `loaded_map` republishes; 0 publishes once per fix
     republish_loaded_map: float = 0.0
     # Stop attempting once a fix is accepted.
     relocalize_once: bool = True
@@ -115,10 +105,8 @@ class RelocalizationModule(Module):
         logger.info(f"Relocalization module started: map_file={self.config.map_file!r}")
 
     def _load_premap(self, map_file: str) -> None:
-        # get_data, so a premap that is only in LFS is pulled and decompressed
-        # rather than reported missing.
-        name = map_file if map_file.endswith(MAP_SUFFIX) else map_file + MAP_SUFFIX
-        premap = PointCloud2.lcm_decode(get_data(name).read_bytes())
+        path = resolve_named_path(map_file, MAP_SUFFIX)
+        premap = PointCloud2.lcm_decode(path.read_bytes())
 
         premap.frame_id = self.config.map_frame
         self.premap = premap
@@ -145,7 +133,14 @@ class RelocalizationModule(Module):
             f"relocalize {source}: expected {world!r} -> {map_frame!r}, "
             f"got {tf.frame_id!r} -> {tf.child_frame_id!r}"
         )
-        logger.info(f"relocalize {source}: TF {world!r} -> {map_frame!r} t={tf.translation}")
+        logger.info(
+            "relocalize fix",
+            source=source,
+            world=world,
+            map_frame=map_frame,
+            translation=str(tf.translation),
+            yaw_deg=round(yaw_deg(tf), 1),
+        )
         self.fixes.on_next(tf)
         if not self._placed and self.config.relocalize_once:
             logger.info(f"relocalize {source}: placed, no further attempts (relocalize_once)")
