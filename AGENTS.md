@@ -397,3 +397,7 @@ CI asserts the file is current — if it's stale, CI fails. Externally packaged 
 - CLI / dimos run: `docs/usage/cli.md`
 - LFS data: `docs/development/large_file_management.md`
 - Agent system: `docs/capabilities/agents/`
+
+## CI incidents → `docs/ci-oncall/`
+
+For GitHub Actions failures and CI on-call triage, read `docs/ci-oncall/` first (`ONCALL.md`, `STACK.md`, `lessons.md`, `TRIAGE.md`). Agent is read-only: diagnose and propose; never merge, never push Cachix/GHCR, never deploy. Adapted from [anthropics/oncall-kit](https://github.com/anthropics/oncall-kit).
